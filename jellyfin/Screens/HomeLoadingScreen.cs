@@ -1,0 +1,327 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Tizen.NUI;
+using Tizen.NUI.BaseComponents;
+using JellyfinTizen.Core;
+
+using ThreadingTimer = System.Threading.Timer;
+
+namespace JellyfinTizen.Screens
+{
+    public class HomeLoadingScreen : ScreenBase
+    {
+        private bool _navigated;
+        private ThreadingTimer _fallbackTimer;
+        private TextLabel _status;
+
+        public HomeLoadingScreen()
+        {
+            Load();
+        }
+
+        private async void Load()
+        {
+            var label = new TextLabel("Loading libraries...")
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                PointSize = 44,
+                TextColor = Color.White
+            };
+
+            _status = new TextLabel("")
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 50,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                PointSize = 20,
+                TextColor = new Color(1, 1, 1, 0.6f),
+                PositionY = Window.Default.Size.Height - 120
+            };
+
+            Add(label);
+            Add(_status);
+
+            UpdateStatus("HomeLoad: init");
+
+            _fallbackTimer = new ThreadingTimer(_ =>
+            {
+                if (_navigated)
+                    return;
+
+                _navigated = true;
+                AppState.ClearSession(clearServer: false);
+                try
+                {
+                    Tizen.Applications.CoreApplication.Post(() =>
+                    {
+                        UpdateStatus("HomeLoad: fallback -> ServerSetup");
+                        NavigationService.Navigate(
+                            new ServerSetupScreen(),
+                            addToStack: false
+                        );
+                    });
+                }
+                catch
+                {
+                    NavigationService.Navigate(
+                        new ServerSetupScreen(),
+                        addToStack: false
+                    );
+                }
+            }, null, 12000, Timeout.Infinite);
+
+            try
+            {
+                var libs = await WithTimeout(
+                    AppState.Jellyfin.GetLibrariesAsync(AppState.UserId),
+                    10000
+                );
+
+                var rows = await BuildHomeRowsAsync(libs);
+
+                if (!_navigated)
+                {
+                    _navigated = true;
+                    _fallbackTimer?.Dispose();
+                    UpdateStatus("HomeLoad: rows ok -> Home");
+                    NavigationService.ClearStack();
+                    NavigationService.Navigate(
+                        new HomeScreen(rows),
+                        addToStack: false
+                    );
+                }
+            }
+            catch
+            {
+                if (_navigated)
+                    return;
+
+                _navigated = true;
+                _fallbackTimer?.Dispose();
+                AppState.ClearSession(clearServer: false);
+                UpdateStatus("HomeLoad: libs failed -> UserSelect");
+                NavigationService.Navigate(
+                    new LoadingScreen("Session expired. Please sign in."),
+                    addToStack: false
+                );
+
+                try
+                {
+                    var users = await WithTimeout(
+                        AppState.Jellyfin.GetPublicUsersAsync(),
+                        10000
+                    );
+                    UpdateStatus("HomeLoad: users ok -> UserSelect");
+                    NavigationService.Navigate(
+                        new UserSelectScreen(users),
+                        addToStack: false
+                    );
+                }
+                catch
+                {
+                    UpdateStatus("HomeLoad: users failed -> ServerSetup");
+                    NavigationService.Navigate(
+                        new ServerSetupScreen(),
+                        addToStack: false
+                    );
+                }
+            }
+        }
+
+        private async Task<List<JellyfinTizen.Models.HomeRowData>> BuildHomeRowsAsync(List<JellyfinTizen.Models.JellyfinLibrary> libs)
+        {
+            var rows = new List<JellyfinTizen.Models.HomeRowData>();
+
+            var apiKey = Uri.EscapeDataString(AppState.AccessToken);
+            var serverUrl = AppState.Jellyfin.ServerUrl;
+
+            var librariesRow = new JellyfinTizen.Models.HomeRowData
+            {
+                Title = "Libraries",
+                Kind = JellyfinTizen.Models.HomeRowKind.Libraries
+            };
+
+            foreach (var lib in libs)
+            {
+                var includeTypes = lib.CollectionType == "tvshows"
+                    ? "Series"
+                    : "Movie";
+
+                var randomId = await WithTimeout(
+                    AppState.Jellyfin.GetRandomItemWithBackdropIdAsync(lib.Id, includeTypes),
+                    10000
+                );
+
+                var imageUrl = string.IsNullOrEmpty(randomId)
+                    ? null
+                    : $"{serverUrl}/Items/{randomId}/Images/Backdrop/0?maxWidth=900&quality=85&api_key={apiKey}";
+                
+                if (string.IsNullOrEmpty(imageUrl) && lib.HasPrimaryImage)
+                {
+                    imageUrl = $"{serverUrl}/Items/{lib.Id}/Images/Primary?maxWidth=900&quality=85&api_key={apiKey}";
+                }
+
+                librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                {
+                    Title = lib.Name,
+                    ImageUrl = imageUrl,
+                    Library = lib
+                });
+            }
+
+            if (librariesRow.Items.Count > 0)
+                rows.Add(librariesRow);
+
+            var tvLib = libs.Find(l => l.CollectionType == "tvshows");
+            if (tvLib != null)
+            {
+                var nextUp = await WithTimeout(
+                    AppState.Jellyfin.GetNextUpAsync(tvLib.Id, 20),
+                    10000
+                );
+
+                if (nextUp.Count > 0)
+                {
+                    var nextUpRow = new JellyfinTizen.Models.HomeRowData
+                    {
+                        Title = "Next Up",
+                        Kind = JellyfinTizen.Models.HomeRowKind.NextUp
+                    };
+
+                    foreach (var item in nextUp)
+                    {
+                        var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 420);
+
+                        nextUpRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                        {
+                            Title = item.Name,
+                            Subtitle = item.SeriesName,
+                            ImageUrl = imageUrl,
+                            Media = item
+                        });
+                    }
+
+                    rows.Add(nextUpRow);
+                }
+            }
+
+            var continueWatching = await WithTimeout(
+                AppState.Jellyfin.GetContinueWatchingAsync(20),
+                10000
+            );
+
+            if (continueWatching.Count > 0)
+            {
+                var continueRow = new JellyfinTizen.Models.HomeRowData
+                {
+                    Title = "Continue Watching",
+                    Kind = JellyfinTizen.Models.HomeRowKind.ContinueWatching
+                };
+
+                foreach (var item in continueWatching)
+                {
+                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 420);
+
+                    continueRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                    {
+                        Title = item.Name,
+                        Subtitle = item.SeriesName,
+                        ImageUrl = imageUrl,
+                        Media = item
+                    });
+                }
+
+                rows.Add(continueRow);
+            }
+
+            foreach (var lib in libs)
+            {
+                var includeTypes = lib.CollectionType == "tvshows"
+                    ? "Series"
+                    : "Movie";
+
+                var recent = await WithTimeout(
+                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, includeTypes, 20),
+                    10000
+                );
+
+                if (recent.Count == 0)
+                    continue;
+
+                var recentRow = new JellyfinTizen.Models.HomeRowData
+                {
+                    Title = $"Recently Added - {lib.Name}",
+                    Kind = JellyfinTizen.Models.HomeRowKind.RecentlyAdded
+                };
+
+                foreach (var item in recent)
+                {
+                    var imageUrl =
+                        $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=320&quality=90&api_key={apiKey}";
+
+                    recentRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                    {
+                        Title = item.Name,
+                        Subtitle = item.SeriesName,
+                        ImageUrl = imageUrl,
+                        Media = item
+                    });
+                }
+
+                rows.Add(recentRow);
+            }
+
+            return rows;
+        }
+
+        private static string GetThumbOrBackdropUrl(
+            JellyfinTizen.Models.JellyfinMovie item,
+            string serverUrl,
+            string apiKey,
+            int maxWidth)
+        {
+            if (item.HasThumb)
+                return $"{serverUrl}/Items/{item.Id}/Images/Thumb/0?maxWidth={maxWidth}&quality=90&api_key={apiKey}";
+
+            if (item.HasBackdrop)
+                return $"{serverUrl}/Items/{item.Id}/Images/Backdrop/0?maxWidth={maxWidth}&quality=85&api_key={apiKey}";
+
+            if (item.HasPrimary)
+                return $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=90&api_key={apiKey}";
+
+            return null;
+        }
+
+        private static async Task<T> WithTimeout<T>(Task<T> task, int timeoutMs)
+        {
+            var completed = await Task.WhenAny(task, Task.Delay(timeoutMs));
+            if (completed != task)
+                throw new TimeoutException("Home load network request timed out.");
+
+            return await task;
+        }
+
+        private void UpdateStatus(string text)
+        {
+            try
+            {
+                Tizen.Applications.CoreApplication.Post(() =>
+                {
+                    if (_status != null)
+                        _status.Text = text;
+                });
+            }
+            catch
+            {
+                if (_status != null)
+                    _status.Text = text;
+            }
+        }
+    }
+}

@@ -1,0 +1,135 @@
+namespace JellyfinTizen.Core
+{
+    public static class AppState
+    {
+        private const string KeyServerUrl = "jf_server_url";
+        private const string KeyAccessToken = "jf_access_token";
+        private const string KeyUserId = "jf_user_id";
+        private const string KeyUsername = "jf_username";
+
+        public static string ServerUrl { get; set; }
+        public static string AccessToken { get; set; }
+        public static string UserId { get; set; }
+        public static string Username { get; set; }
+
+        public static JellyfinService Jellyfin { get; private set; }
+
+        public static void Init()
+        {
+            Jellyfin = new JellyfinService();
+        }
+
+        public static bool TryRestoreFullSession()
+        {
+            try
+            {
+                if (!Tizen.Applications.Preference.Contains(KeyServerUrl) ||
+                    !Tizen.Applications.Preference.Contains(KeyAccessToken) ||
+                    !Tizen.Applications.Preference.Contains(KeyUserId))
+                {
+                    return false;
+                }
+
+                var serverUrl = Tizen.Applications.Preference.Get<string>(KeyServerUrl);
+                var accessToken = Tizen.Applications.Preference.Get<string>(KeyAccessToken);
+                var userId = Tizen.Applications.Preference.Get<string>(KeyUserId);
+                var username = Tizen.Applications.Preference.Contains(KeyUsername)
+                    ? Tizen.Applications.Preference.Get<string>(KeyUsername)
+                    : string.Empty;
+
+                if (string.IsNullOrWhiteSpace(serverUrl) ||
+                    string.IsNullOrWhiteSpace(accessToken) ||
+                    string.IsNullOrWhiteSpace(userId))
+                {
+                    return false;
+                }
+
+                ServerUrl = serverUrl;
+                AccessToken = accessToken;
+                UserId = userId;
+                Username = username;
+
+                Jellyfin.Connect(serverUrl);
+                Jellyfin.SetAuthToken(accessToken);
+                Jellyfin.SetUserId(userId);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool TryRestoreServer()
+        {
+            try
+            {
+                if (!Tizen.Applications.Preference.Contains(KeyServerUrl))
+                    return false;
+
+                var serverUrl = Tizen.Applications.Preference.Get<string>(KeyServerUrl);
+                if (string.IsNullOrWhiteSpace(serverUrl))
+                    return false;
+
+                ServerUrl = serverUrl;
+                Jellyfin.Connect(serverUrl);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void SaveServer(string serverUrl)
+        {
+            if (string.IsNullOrWhiteSpace(serverUrl))
+                return;
+
+            ServerUrl = serverUrl;
+            Tizen.Applications.Preference.Set(KeyServerUrl, serverUrl);
+        }
+
+        public static void SaveSession(string serverUrl, string accessToken, string userId, string username)
+        {
+            if (string.IsNullOrWhiteSpace(serverUrl) ||
+                string.IsNullOrWhiteSpace(accessToken) ||
+                string.IsNullOrWhiteSpace(userId))
+            {
+                return;
+            }
+
+            SaveServer(serverUrl);
+            AccessToken = accessToken;
+            UserId = userId;
+            Username = username;
+
+            Tizen.Applications.Preference.Set(KeyAccessToken, accessToken);
+            Tizen.Applications.Preference.Set(KeyUserId, userId);
+
+            if (!string.IsNullOrWhiteSpace(username))
+                Tizen.Applications.Preference.Set(KeyUsername, username);
+        }
+
+        public static void ClearSession(bool clearServer)
+        {
+            AccessToken = null;
+            UserId = null;
+            Username = null;
+
+            Jellyfin?.ClearAuthToken();
+            Jellyfin?.SetUserId(null);
+
+            Tizen.Applications.Preference.Remove(KeyAccessToken);
+            Tizen.Applications.Preference.Remove(KeyUserId);
+            Tizen.Applications.Preference.Remove(KeyUsername);
+
+            if (clearServer)
+            {
+                ServerUrl = null;
+                Tizen.Applications.Preference.Remove(KeyServerUrl);
+            }
+        }
+    }
+}
