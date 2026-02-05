@@ -16,6 +16,7 @@ namespace JellyfinTizen.Screens
         private int _startPositionMs;
         private bool _initialSeekDone = false;
         private View _osd;
+        private View _topOsd;
         private TextLabel _playPauseText;
         private bool _osdVisible;
         private bool _isSeeking;
@@ -127,15 +128,44 @@ private void CreateOSD()
     int sidePadding = 60;    
     int labelWidth = 140;    
     int labelGap = 20;       
-    int osdHeight = 220;
+    int bottomHeight = 140;
+    int topHeight = 100;
     int screenWidth = Window.Default.Size.Width;
 
+    // --- TOP OSD ---
+    _topOsd = new View
+    {
+        WidthResizePolicy = ResizePolicyType.FillToParent,
+        HeightSpecification = topHeight,
+        BackgroundColor = new Color(0, 0, 0, 0.1f),
+        PositionY = 0
+    };
+    _topOsd.Hide();
+
+    string titleText = _movie.ItemType == "Episode"
+        ? $"{_movie.SeriesName} S{_movie.ParentIndexNumber}:E{_movie.IndexNumber} - {_movie.Name}"
+        : _movie.Name;
+
+    var titleLabel = new TextLabel(titleText)
+    {
+        PositionX = sidePadding,
+        WidthResizePolicy = ResizePolicyType.FillToParent,
+        HeightResizePolicy = ResizePolicyType.FillToParent,
+        PointSize = 34,
+        TextColor = Color.White,
+        HorizontalAlignment = HorizontalAlignment.Begin,
+        VerticalAlignment = VerticalAlignment.Center
+    };
+    _topOsd.Add(titleLabel);
+    Add(_topOsd);
+
+    // --- BOTTOM OSD ---
     _osd = new View
     {
         WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = osdHeight,
-        BackgroundColor = new Color(0, 0, 0, 0.6f),
-        PositionY = Window.Default.Size.Height - osdHeight
+        HeightSpecification = bottomHeight,
+        BackgroundColor = new Color(0, 0, 0, 0.1f),
+        PositionY = Window.Default.Size.Height - bottomHeight
     };
     _osd.Hide();
 
@@ -143,8 +173,8 @@ private void CreateOSD()
     var progressRow = new View
     {
         WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = 60,
-        PositionY = 30, 
+        HeightSpecification = 50,
+        PositionY = 10, 
     };
 
     // Current Time (Left)
@@ -188,7 +218,7 @@ private void CreateOSD()
         WidthSpecification = trackWidth, 
         HeightSpecification = 6,
         BackgroundColor = new Color(1, 1, 1, 0.3f),
-        PositionY = 27, 
+        PositionY = 22, 
         CornerRadius = 3.0f
     };
 
@@ -206,8 +236,8 @@ private void CreateOSD()
     _controlsContainer = new View
     {
         WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = 100,
-        PositionY = 110,
+        HeightSpecification = 80,
+        PositionY = 60,
         Layout = new LinearLayout
         {
             LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -816,6 +846,11 @@ private void UpdateProgress()
 
             _osd.Show();
             _osd.Opacity = 1;
+            if (_topOsd != null)
+            {
+                _topOsd.Show();
+                _topOsd.Opacity = 1;
+            }
             _osdVisible = true;
 
             UpdateOsdFocus();
@@ -857,6 +892,11 @@ private void UpdateProgress()
         {
             _osd.Hide();
             _osd.Opacity = 0;
+            if (_topOsd != null)
+            {
+                _topOsd.Hide();
+                _topOsd.Opacity = 0;
+            }
             _osdVisible = false;
 
             _osdTimer.Stop();
@@ -1021,13 +1061,24 @@ private void UpdateProgress()
                         SelectAudioTrack();
                     else if (_subtitleOverlayVisible)
                         SelectSubtitle();
-                    else if (_osdVisible && _osdFocusRow == 1)
-                        ActivateOsdButton();
                     else if (_isSeeking)
                         CommitSeek();
+                    else if (_osdVisible)
+                    {
+                        if (_osdFocusRow == 1)
+                            ActivateOsdButton();
+                        else
+                        {
+                            TogglePause();
+                            // Keep OSD visible and reset timer
+                            _osdTimer.Stop();
+                            _osdTimer.Start();
+                        }
+                    }
                     else
-                        TogglePause();
+                    {
                         ShowOSD();
+                    }
                     break;
 
                 case AppKey.Left:
