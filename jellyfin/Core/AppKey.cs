@@ -8,6 +8,14 @@ namespace JellyfinTizen.Core
         Left,
         Right,
         Enter,
-        Back
+        Back,
+        MediaPlayPause,
+        MediaPlay,
+        MediaPause,
+        MediaStop,
+        MediaNext,
+        MediaPrevious,
+        MediaRewind,
+        MediaFastForward
     }
 }

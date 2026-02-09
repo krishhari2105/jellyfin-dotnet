@@ -3,9 +3,14 @@ using System.Collections.Generic;
 using Tizen.Multimedia;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using Tizen.NUI.Components;
 using Tizen.Applications;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using System.Threading.Tasks;
+using System.IO;
+using System.Net.Http;
+using System.Linq;
 
 namespace JellyfinTizen.Screens
 {
@@ -15,9 +20,10 @@ namespace JellyfinTizen.Screens
         private JellyfinMovie _movie;
         private int _startPositionMs;
         private bool _initialSeekDone = false;
+        private View _debugOverlay;
+        private TextLabel _debugText;
         private View _osd;
         private View _topOsd;
-        private TextLabel _playPauseText;
         private bool _osdVisible;
         private bool _isSeeking;
         private int _seekPreviewMs;
@@ -36,37 +42,104 @@ namespace JellyfinTizen.Screens
         private PlayerTrackInfo _subtitleTrackInfo;
         private int _subtitleIndex;
         private bool _subtitleOverlayVisible;
-        private bool _subtitleEnabled = true;
+        private bool _subtitleEnabled;
         private TextLabel _subtitleText;
         private Timer _subtitleHideTimer;
         private Timer _reportProgressTimer;
         private bool _isFinished;
+        private View _progressThumb;
+        private View _subtitleListContainer;
+        private ScrollableBase _subtitleScrollView;
+        private View _audioListContainer;
+        private ScrollableBase _audioScrollView;
+        private string _playMethod = "DirectPlay";
+        private string _playSessionId;
+        private int? _initialSubtitleIndex;
+        private bool _burnIn;
+        
+        // Track if we have external subtitles
+        private bool _hasExternalSubtitle = false;
+        private string _externalSubtitlePath = null;
+        private string _externalSubtitleLanguage = "EXTERNAL"; 
+        private int? _externalSubtitleIndex = null;
+        private string _externalSubtitleMediaSourceId = null;
+        private string _externalSubtitleCodec = null;
 
-        // New OSD Controls
+        // OSD Controls
         private View _controlsContainer;
         private View _prevButton;
         private View _nextButton;
         private int _osdFocusRow = 0; // 0 = Seekbar, 1 = Buttons
-        private int _buttonFocusIndex = 1; // 0 = Prev, 1 = Next (Default to Next)
-        private bool _showRemaining = false;
+        private int _buttonFocusIndex = 1; 
 
-        public VideoPlayerScreen(JellyfinMovie movie, int startPositionMs = 0)
+        // --- NEW: Store MediaSource and Override Audio ---
+        private MediaSourceInfo _currentMediaSource;
+        private int? _overrideAudioIndex = null;
+
+        public VideoPlayerScreen(JellyfinMovie movie, int startPositionMs = 0, int? subtitleStreamIndex = null, bool burnIn = false)
         {
             _movie = movie;
             _startPositionMs = startPositionMs;
+            _initialSubtitleIndex = subtitleStreamIndex;
+            _burnIn = burnIn;
 
-            // Required for Tizen.Multimedia.Display with NUI Window.
+            // CRITICAL: Ensure the window is transparent so the video plane is visible.
             Window.Default.BackgroundColor = Color.Transparent;
             BackgroundColor = Color.Transparent;
         }
 
+        private void CreateDebugOverlay()
+        {
+            if (_debugOverlay != null) return;
+
+            _debugOverlay = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 500,
+                BackgroundColor = new Color(0, 0, 0, 0.7f),
+                Position = new Position(0, 0),
+                ParentOrigin = Tizen.NUI.ParentOrigin.TopLeft,
+                PivotPoint = Tizen.NUI.PivotPoint.TopLeft,
+            };
+
+            _debugText = new TextLabel
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                TextColor = Color.Yellow,
+                PointSize = 14,
+                MultiLine = true,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Top,
+                Text = "Initializing Debug Log..."
+            };
+
+            _debugText.Padding = new Extents(20, 20, 20, 20);
+            _debugOverlay.Add(_debugText);
+            Add(_debugOverlay);
+        }
+
+        public void Log(string message)
+        {
+            Console.WriteLine($"[JELLYFIN_PLAYER] {message}");
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                if (_debugText != null)
+                {
+                    string current = _debugText.Text;
+                    var lines = current.Split('\n');
+                    if (lines.Length > 15) current = string.Join("\n", lines, 0, 15);
+                    _debugText.Text = $"[{DateTime.Now:HH:mm:ss}] {message}\n" + current;
+                }
+            });
+        }
+
         public override void OnShow()
         {
-            if (_osd == null)
-                CreateOSD();
+            if (_osd == null) CreateOSD();
 
             _isFinished = false;
-            _reportProgressTimer = new Timer(5000); // 5 seconds
+            _reportProgressTimer = new Timer(5000);
             _reportProgressTimer.Tick += OnReportProgressTick;
             _reportProgressTimer.Start();
 
@@ -77,811 +150,806 @@ namespace JellyfinTizen.Screens
         {
             _reportProgressTimer?.Stop();
             _reportProgressTimer = null;
-
-            // Final progress report
             ReportProgressToServer();
-
             StopPlayback();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
         }
 
         private async void StartPlayback()
-{
-    try
-    {
-        _player = new Player();
-        
-        // FIX 1: Subscribe to the native Completion Event
-        _player.PlaybackCompleted += OnPlaybackCompleted;
-        _player.SubtitleUpdated += OnSubtitleUpdated;
-
-        // ... (Keep existing Display/Source/Prepare logic) ...
-        _player.Display = new Display(Window.Default);
-        _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
-        _player.DisplaySettings.IsVisible = true;
-
-        var apiKey = Uri.EscapeDataString(AppState.AccessToken);
-        var serverUrl = AppState.Jellyfin.ServerUrl;
-        var streamUrl = $"{serverUrl}/Videos/{_movie.Id}/stream?static=true&api_key={apiKey}";
-
-        _player.SetSource(new MediaUriSource(streamUrl));
-        await _player.PrepareAsync();
-
-        if (_startPositionMs > 0)
         {
-            await _player.SetPlayPositionAsync(_startPositionMs, false);
+            try
+            {
+                if (_debugOverlay == null) CreateDebugOverlay();
+                Log($"Initializing Player for: {_movie.Name}");
+
+                _subtitleEnabled = _initialSubtitleIndex.HasValue;
+                _player = new Player();
+                
+                _player.ErrorOccurred += (s, e) => Log($"!!! PLAYER ERROR !!!: {e.Error}");
+                _player.BufferingProgressChanged += (s, e) => { if (e.Percent % 20 == 0) Log($"Buffering: {e.Percent}%"); };
+                _player.PlaybackCompleted += OnPlaybackCompleted;
+                _player.SubtitleUpdated += OnSubtitleUpdated;
+
+                _player.Display = new Display(Window.Default);
+                _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
+                _player.DisplaySettings.IsVisible = true;
+
+                Log("Fetching PlaybackInfo...");
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_movie.Id, _initialSubtitleIndex, _burnIn);
+                
+                if (playbackInfo.MediaSources == null || playbackInfo.MediaSources.Count == 0)
+                {
+                    Log("Error: No MediaSources found.");
+                    return;
+                }
+
+                var mediaSource = playbackInfo.MediaSources[0];
+                _currentMediaSource = mediaSource; 
+                _playSessionId = playbackInfo.PlaySessionId;
+                
+                // Log Streams
+                foreach (var stream in mediaSource.MediaStreams)
+                {
+                     Log($"Stream: Type={stream.Type}, Index={stream.Index}, Codec={stream.Codec}, External={stream.IsExternal}");
+                }
+                
+                Log($"Supports DirectPlay: {mediaSource.SupportsDirectPlay}");
+                Log($"Supports Transcoding: {mediaSource.SupportsTranscoding}");
+                Log($"Transcoding URL: {mediaSource.TranscodingUrl}");
+
+                string streamUrl = "";
+                var apiKey = AppState.AccessToken;
+                var serverUrl = AppState.Jellyfin.ServerUrl;
+
+                // --- ROBUST PLAYBACK SELECTION LOGIC ---
+                
+                bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
+                bool supportsTranscoding = mediaSource.SupportsTranscoding;
+                bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
+                
+                // Reasons to force transcoding:
+                // 1. Audio Override is active (e.g. DTS selected via UI)
+                // 2. Burn-In is requested for subtitles
+                bool forceTranscode = _overrideAudioIndex.HasValue || (_burnIn && _initialSubtitleIndex.HasValue);
+
+                // --- DIRECT PLAY LOGIC ---
+                if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
+                {
+                    _playMethod = "DirectPlay";
+                    streamUrl = $"{serverUrl}/Videos/{_movie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
+                    
+                    if (forceTranscode) Log("WARNING: Forced Transcode requested but not available. Falling back to DirectPlay.");
+                    Log("Mode: DirectPlay");
+                }
+                // --- TRANSCODE / DIRECT STREAM LOGIC ---
+                else if (supportsTranscoding || forceTranscode)
+                {
+                    _playMethod = "Transcode";
+
+                    // SMART CONTAINER SELECTION:
+                    var videoStream = mediaSource.MediaStreams.FirstOrDefault(s => s.Type == "Video");
+                    string vidCodec = videoStream?.Codec?.ToLower() ?? "unknown";
+                    
+                    // Native Video Codecs for Tizen
+                    bool isVideoNative = vidCodec.Contains("h264") || vidCodec.Contains("hevc") || 
+                                         vidCodec.Contains("vp9") || vidCodec.Contains("av1");
+
+                    // 1. Direct Stream (Video is Native + No Burn-in) -> MP4 (Lighter, better scrubbing)
+                    // 2. Full Transcode / Burn-in -> TS (Better stability for heavy processing)
+                    string container = (isVideoNative && !_burnIn) ? "mp4" : "ts";
+                    
+                    // Audio Priority: AC3 > EAC3 > AAC > MP3
+                    string audioPriority = "ac3,eac3,aac,mp3";
+                    
+                    // FIX: If server didn't provide a URL (because it thought DP was fine), we must build one manually.
+                    if (!hasTranscodeUrl)
+                    {
+                        Log($"Constructing Manual URL (Container: {container}, Audio: AC3+)...");
+                        streamUrl = $"{serverUrl}/Videos/{_movie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
+                        
+                        streamUrl += "&VideoCodec=h264,hevc,vp9,av1";
+                        streamUrl += $"&AudioCodec={audioPriority}"; 
+                        streamUrl += $"&SegmentContainer={container}"; 
+                        streamUrl += "&TranscodingMaxAudioChannels=6";
+                        streamUrl += "&MinSegments=1";
+                        streamUrl += "&BreakOnNonKeyFrames=True";
+                    }
+                    else
+                    {
+                        streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
+                        
+                        // Inject preferences into existing URL if we are overriding
+                        if (_overrideAudioIndex.HasValue)
+                        {
+                            if (!streamUrl.Contains("SegmentContainer=")) streamUrl += $"&SegmentContainer={container}";
+                            if (!streamUrl.Contains("AudioCodec=")) streamUrl += $"&AudioCodec={audioPriority}";
+                        }
+                    }
+
+                    string AppendParam(string url, string param) 
+                    {
+                        if (url.Contains("?")) { if (url.EndsWith("?") || url.EndsWith("&")) return $"{url}{param}"; return $"{url}&{param}"; }
+                        return $"{url}?{param}";
+                    }
+
+                    if (!streamUrl.Contains("api_key=") && !streamUrl.Contains("Token=")) streamUrl = AppendParam(streamUrl, $"api_key={apiKey}");
+                    if (!streamUrl.Contains("PlaySessionId=") && !string.IsNullOrEmpty(_playSessionId)) streamUrl = AppendParam(streamUrl, $"PlaySessionId={_playSessionId}");
+                    
+                    // Apply Audio Override
+                    if (_overrideAudioIndex.HasValue)
+                    {
+                        Log($"Applying Audio Override Index: {_overrideAudioIndex.Value}");
+                        streamUrl = AppendParam(streamUrl, $"AudioStreamIndex={_overrideAudioIndex.Value}");
+                    }
+
+                    // Apply Subtitles
+                    if (_initialSubtitleIndex.HasValue)
+                    {
+                        if (!streamUrl.Contains("SubtitleStreamIndex=")) streamUrl = AppendParam(streamUrl, $"SubtitleStreamIndex={_initialSubtitleIndex}");
+                        if (_burnIn && !streamUrl.Contains("SubtitleMethod=")) streamUrl = AppendParam(streamUrl, "SubtitleMethod=Encode");
+                    }
+                    
+                    streamUrl = streamUrl.Replace("?&", "?").Replace("&&", "&").Replace(" ", "%20").Replace("\n", "").Replace("\r", "");
+                    
+                    Log($"Mode: Transcode/DirectStream (Config: {container})");
+                }
+                else
+                {
+                    Log("Error: Format not supported by Server.");
+                    return;
+                }
+
+                // --- SUBTITLE TRACKING & EXTRACTION ---
+                if (!_burnIn)
+                {
+                    var externalSubStreams = mediaSource.MediaStreams?.Where(s => s.Type == "Subtitle" && s.IsExternal).ToList();
+                    if (externalSubStreams != null && externalSubStreams.Count > 0)
+                    {
+                        var subStream = externalSubStreams.First();
+                        _hasExternalSubtitle = true;
+                        _externalSubtitleIndex = subStream.Index;
+                        _externalSubtitleMediaSourceId = mediaSource.Id;
+                        _externalSubtitleCodec = subStream.Codec;
+                        _externalSubtitleLanguage = !string.IsNullOrEmpty(subStream.Language) ? subStream.Language.ToUpper() : "EXTERNAL";
+                        Log($"Found external subtitle stream: {_externalSubtitleLanguage}");
+                    }
+                    else
+                    {
+                        var internalSubStreams = mediaSource.MediaStreams?.Where(s => s.Type == "Subtitle" && !s.IsExternal).ToList();
+                        if (internalSubStreams != null && internalSubStreams.Count > 0)
+                        {
+                            // For HLS transcodes, internal subtitles often fail to load in Tizen.
+                            // We track them so we can extract them as sidecar files if needed.
+                            if (_playMethod == "Transcode")
+                            {
+                                var subStream = internalSubStreams.First();
+                                _hasExternalSubtitle = true;
+                                _externalSubtitleIndex = subStream.Index;
+                                _externalSubtitleMediaSourceId = mediaSource.Id;
+                                _externalSubtitleCodec = subStream.Codec;
+                                _externalSubtitleLanguage = !string.IsNullOrEmpty(subStream.Language) ? subStream.Language.ToUpper() : "EXTERNAL";
+                                Log($"Found internal subtitle (treated as external for HLS): {_externalSubtitleLanguage}");
+                            }
+                            else
+                            {
+                                Log($"Found internal subtitle streams: Count = {internalSubStreams.Count}");
+                            }
+                        }
+                    }
+                    
+                    if (_initialSubtitleIndex.HasValue)
+                    {
+                        var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
+                        if (subStream != null)
+                        {
+                            _hasExternalSubtitle = true;
+                            _externalSubtitleIndex = _initialSubtitleIndex.Value;
+                            _externalSubtitleMediaSourceId = mediaSource.Id;
+                            _externalSubtitleCodec = subStream.Codec;
+                            _externalSubtitleLanguage = !string.IsNullOrEmpty(subStream.Language) ? subStream.Language.ToUpper() : "EXTERNAL";
+                        }
+                    }
+                }
+
+                Log($"URL: {streamUrl}");
+
+                var source = new MediaUriSource(streamUrl);
+                _player.SetSource(source);
+
+                // --- DOWNLOAD SUBTITLE IF NEEDED ---
+                if (!_burnIn && _initialSubtitleIndex.HasValue)
+                {
+                    try 
+                    {
+                        var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
+                        // If External OR Transcoding (Extract Internal), download it.
+                        if (subStream != null && (subStream.IsExternal || _playMethod == "Transcode"))
+                        {
+                            await DownloadAndSetSubtitle(mediaSource.Id, _initialSubtitleIndex.Value, subStream.Codec);
+                        }
+                    }
+                    catch (Exception subEx) { Log($"Subtitle Error: {subEx.Message}"); }
+                }
+
+                Log("Calling PrepareAsync...");
+                await _player.PrepareAsync();
+                Log("PrepareAsync Success.");
+
+                // Check Track Detection
+                try { var v = _player.StreamInfo.GetVideoProperties(); Log($"Video: {v.Size.Width}x{v.Size.Height}"); } catch {}
+                try { Log($"Audio Tracks: {_player.AudioTrackInfo.GetCount()}"); } catch {}
+                try 
+                {
+                    int subCount = _player.SubtitleTrackInfo.GetCount();
+                    Log($"Subtitle Tracks: {subCount}");
+
+                    // Map Jellyfin Index to Tizen Index (for DirectPlay)
+                    if (_initialSubtitleIndex.HasValue && subCount > 0)
+                    {
+                        var embeddedSubs = mediaSource.MediaStreams?
+                            .Where(s => s.Type == "Subtitle" && !s.IsExternal)
+                            .OrderBy(s => s.Index)
+                            .ToList();
+
+                        if (embeddedSubs != null)
+                        {
+                            int tizenIndex = embeddedSubs.FindIndex(s => s.Index == _initialSubtitleIndex.Value);
+                            if (tizenIndex != -1 && tizenIndex < subCount)
+                            {
+                                Log($"Mapping StreamIndex {_initialSubtitleIndex} to Tizen Track {tizenIndex}");
+                                _player.SubtitleTrackInfo.Selected = tizenIndex;
+                                _subtitleIndex = tizenIndex + 1;
+                                _subtitleEnabled = true;
+                            }
+                        }
+                    }
+                } catch {}
+
+                if (_startPositionMs > 0)
+                {
+                    Log($"Resuming at {_startPositionMs}ms");
+                    await _player.SetPlayPositionAsync(_startPositionMs, false);
+                }
+
+                _player.Start();
+                Log("Playback Started.");
+
+                var info = new PlaybackProgressInfo
+                {
+                    ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = mediaSource.Id,
+                    PositionTicks = _startPositionMs * 10000, IsPaused = false, PlayMethod = _playMethod, EventName = "TimeUpdate"
+                };
+                _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
+            }
+            catch (Exception ex)
+            {
+                Log($"CRITICAL START EXCEPTION: {ex.Message}");
+            }
         }
 
-        _player.Start();
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine("PLAYER ERROR: " + ex);
-    }
-}
-
-
-private void CreateOSD()
-{
-    // DEFINITIONS: Tune these to your liking
-    int sidePadding = 60;    
-    int labelWidth = 140;    
-    int labelGap = 20;       
-    int bottomHeight = 140;
-    int topHeight = 100;
-    int screenWidth = Window.Default.Size.Width;
-
-    // --- TOP OSD ---
-    _topOsd = new View
-    {
-        WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = topHeight,
-        BackgroundColor = new Color(0, 0, 0, 0.1f),
-        PositionY = 0
-    };
-    _topOsd.Hide();
-
-    string titleText = _movie.ItemType == "Episode"
-        ? $"{_movie.SeriesName} S{_movie.ParentIndexNumber}:E{_movie.IndexNumber} - {_movie.Name}"
-        : _movie.Name;
-
-    var titleLabel = new TextLabel(titleText)
-    {
-        PositionX = sidePadding,
-        WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightResizePolicy = ResizePolicyType.FillToParent,
-        PointSize = 34,
-        TextColor = Color.White,
-        HorizontalAlignment = HorizontalAlignment.Begin,
-        VerticalAlignment = VerticalAlignment.Center
-    };
-    _topOsd.Add(titleLabel);
-    Add(_topOsd);
-
-    // --- BOTTOM OSD ---
-    _osd = new View
-    {
-        WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = bottomHeight,
-        BackgroundColor = new Color(0, 0, 0, 0.1f),
-        PositionY = Window.Default.Size.Height - bottomHeight
-    };
-    _osd.Hide();
-
-    // --- 1. PROGRESS ROW (Manual Positioning) ---
-    var progressRow = new View
-    {
-        WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = 50,
-        PositionY = 10, 
-    };
-
-    // Current Time (Left)
-    _currentTimeLabel = new TextLabel("00:00")
-    {
-        PositionX = sidePadding,
-        WidthSpecification = labelWidth,
-        HeightResizePolicy = ResizePolicyType.FillToParent,
-        PointSize = 24,
-        TextColor = Color.White,
-        VerticalAlignment = VerticalAlignment.Center,
-        HorizontalAlignment = HorizontalAlignment.Begin
-    };
-
-    // Total Duration (Right) - Pinned exactly to the right side
-    _durationLabel = new TextLabel("00:00")
-    {
-        PositionX = screenWidth - sidePadding - labelWidth,
-        WidthSpecification = labelWidth,
-        HeightResizePolicy = ResizePolicyType.FillToParent,
-        PointSize = 24,
-        TextColor = Color.White,
-        VerticalAlignment = VerticalAlignment.Center,
-        HorizontalAlignment = HorizontalAlignment.End
-    };
-
-    _durationLabel.TouchEvent += (o, e) => 
-    {
-        if (e.Touch.GetState(0) == PointStateType.Up) { _showRemaining = !_showRemaining; UpdateProgress(); }
-        return true; 
-    };
-
-    // The Track (Middle) - Calculated exactly
-    int trackStartX = sidePadding + labelWidth + labelGap;
-    // We calculate width manually so it NEVER changes during layout updates
-    int trackWidth = screenWidth - (2 * trackStartX);
-
-    _progressTrack = new View
-    {
-        PositionX = trackStartX,
-        WidthSpecification = trackWidth, 
-        HeightSpecification = 6,
-        BackgroundColor = new Color(1, 1, 1, 0.3f),
-        PositionY = 22, 
-        CornerRadius = 3.0f
-    };
-
-    _progressFill = new View { HeightSpecification = 6, BackgroundColor = new Color(0, 164f/255f, 220f/255f, 1f), WidthSpecification = 0, CornerRadius = 3.0f }; 
-    _previewFill = new View { HeightSpecification = 6, BackgroundColor = new Color(1, 1, 1, 0.6f), WidthSpecification = 0, CornerRadius = 3.0f };
-
-    _progressTrack.Add(_progressFill);
-    _progressTrack.Add(_previewFill);
-
-    progressRow.Add(_currentTimeLabel);
-    progressRow.Add(_progressTrack);
-    progressRow.Add(_durationLabel);
-
-    // --- 2. CONTROLS ROW ---
-    _controlsContainer = new View
-    {
-        WidthResizePolicy = ResizePolicyType.FillToParent,
-        HeightSpecification = 80,
-        PositionY = 60,
-        Layout = new LinearLayout
+        private async Task DownloadAndSetSubtitle(string mediaSourceId, int subtitleIndex, string codec)
         {
-            LinearOrientation = LinearLayout.Orientation.Horizontal,
-            HorizontalAlignment = HorizontalAlignment.Center,
-            CellPadding = new Size2D(50, 0)
+            try
+            {
+                string ext = "vtt"; 
+                if (!string.IsNullOrEmpty(codec))
+                {
+                    var c = codec.ToLowerInvariant();
+                    if (c.Contains("srt") || c.Contains("subrip")) ext = "srt";
+                    else if (c.Contains("ass") || c.Contains("ssa")) ext = "ssa";
+                }
+
+                var apiKey = AppState.AccessToken;
+                var serverUrl = AppState.Jellyfin.ServerUrl;
+                
+                // /Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/0/Stream.{Format}
+                var downloadUrl = $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}?api_key={apiKey}";
+                Log($"Downloading Subtitle: {downloadUrl}");
+
+                var localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{ext}");
+
+                using (var client = new HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("X-Emby-Authorization", $"MediaBrowser Client=\"JellyfinTizen\", Device=\"SamsungTV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{apiKey}\"");
+                    var response = await client.GetAsync(downloadUrl);
+                    response.EnsureSuccessStatusCode();
+                    var data = await response.Content.ReadAsByteArrayAsync();
+                    await File.WriteAllBytesAsync(localPath, data);
+                }
+
+                Log($"Setting Subtitle Path: {localPath}");
+                _player.SetSubtitle(localPath);
+                
+                _hasExternalSubtitle = true;
+                _externalSubtitlePath = localPath;
+            }
+            catch (Exception ex)
+            {
+                Log($"Failed to set subtitle: {ex.Message}");
+            }
         }
-    };
 
-    _prevButton = CreateOsdButton("Prev");
-    _nextButton = CreateOsdButton("Next");
+        private void CreateOSD()
+        {
+            int sidePadding = 60; int labelWidth = 140; int labelGap = 20; int bottomHeight = 260; int topHeight = 160; int screenWidth = Window.Default.Size.Width;
 
-    if (_movie.ItemType == "Episode")
-    {
-        _controlsContainer.Add(_prevButton);
-        _controlsContainer.Add(_nextButton);
-    }
+            _topOsd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = topHeight, PositionY = 0 };
+            var topGradient = new PropertyMap();
+            topGradient.Add(Visual.Property.Type, new PropertyValue((int)Visual.Type.Gradient));
+            topGradient.Add(GradientVisualProperty.StartPosition, new PropertyValue(new Vector2(0.0f, -0.5f)));
+            topGradient.Add(GradientVisualProperty.EndPosition, new PropertyValue(new Vector2(0.0f, 0.5f)));
+            var topOffsets = new PropertyArray();
+            topOffsets.Add(new PropertyValue(0.0f));
+            topOffsets.Add(new PropertyValue(1.0f));
+            topGradient.Add(GradientVisualProperty.StopOffset, new PropertyValue(topOffsets));
+            var topColors = new PropertyArray();
+            topColors.Add(new PropertyValue(new Color(0, 0, 0, 0.9f)));
+            topColors.Add(new PropertyValue(new Color(0, 0, 0, 0.0f)));
+            topGradient.Add(GradientVisualProperty.StopColor, new PropertyValue(topColors));
+            _topOsd.Background = topGradient;
+            _topOsd.Hide();
 
-    _osd.Add(progressRow);
-    _osd.Add(_controlsContainer);
-    Add(_osd);
+            string titleText = _movie.ItemType == "Episode" ? $"{_movie.SeriesName} S{_movie.ParentIndexNumber}:E{_movie.IndexNumber} - {_movie.Name}" : _movie.Name;
+            var titleLabel = new TextLabel(titleText) { PositionX = sidePadding, PositionY = 40, WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Top };
+            _topOsd.Add(titleLabel);
+            Add(_topOsd);
 
-    // ... (Keep your existing overlay/timer setup) ...
-    CreateAudioOverlay();
-    CreateSubtitleOverlay();
-    CreateSubtitleText();
-    
-    _osdTimer = new Timer(5000);
-    _osdTimer.Tick += (_, __) => { HideOSD(); return false; };
-    _progressTimer = new Timer(500);
-    _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
-}
+            _osd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = bottomHeight, PositionY = Window.Default.Size.Height - bottomHeight };
+            var bottomGradient = new PropertyMap();
+            bottomGradient.Add(Visual.Property.Type, new PropertyValue((int)Visual.Type.Gradient));
+            bottomGradient.Add(GradientVisualProperty.StartPosition, new PropertyValue(new Vector2(0.0f, -0.5f)));
+            bottomGradient.Add(GradientVisualProperty.EndPosition, new PropertyValue(new Vector2(0.0f, 0.5f)));
+            var bottomOffsets = new PropertyArray();
+            bottomOffsets.Add(new PropertyValue(0.0f));
+            bottomOffsets.Add(new PropertyValue(1.0f));
+            bottomGradient.Add(GradientVisualProperty.StopOffset, new PropertyValue(bottomOffsets));
+            var bottomColors = new PropertyArray();
+            bottomColors.Add(new PropertyValue(new Color(0, 0, 0, 0.0f)));
+            bottomColors.Add(new PropertyValue(new Color(0, 0, 0, 0.95f)));
+            bottomGradient.Add(GradientVisualProperty.StopColor, new PropertyValue(bottomColors));
+            _osd.Background = bottomGradient;
+            _osd.Hide();
+
+            var progressRow = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 50, PositionY = 110 };
+            _currentTimeLabel = new TextLabel("00:00") { PositionX = sidePadding, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 24, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Begin };
+            _durationLabel = new TextLabel("00:00") { PositionX = screenWidth - sidePadding - labelWidth, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 24, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.End };
+
+            int trackStartX = sidePadding + labelWidth + labelGap;
+            int trackWidth = screenWidth - (2 * trackStartX);
+
+            _progressTrack = new View { PositionX = trackStartX, WidthSpecification = trackWidth, HeightSpecification = 6, BackgroundColor = new Color(1, 1, 1, 0.3f), PositionY = 22, CornerRadius = 3.0f };
+            _progressFill = new View { HeightSpecification = 6, BackgroundColor = new Color(0, 164f/255f, 220f/255f, 1f), WidthSpecification = 0, CornerRadius = 3.0f }; 
+            _previewFill = new View { HeightSpecification = 6, BackgroundColor = new Color(1, 1, 1, 0.6f), WidthSpecification = 0, CornerRadius = 3.0f };
+            _progressTrack.Add(_progressFill);
+            _progressTrack.Add(_previewFill);
+
+            _progressThumb = new View { WidthSpecification = 24, HeightSpecification = 24, BackgroundColor = Color.White, CornerRadius = 12.0f, PositionY = 13, PositionX = trackStartX };
+
+            progressRow.Add(_currentTimeLabel);
+            progressRow.Add(_progressTrack);
+            progressRow.Add(_durationLabel);
+            progressRow.Add(_progressThumb);
+
+            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 170, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(50, 0) } };
+            _prevButton = CreateOsdButton("Prev");
+            _nextButton = CreateOsdButton("Next");
+
+            if (_movie.ItemType == "Episode") { _controlsContainer.Add(_prevButton); _controlsContainer.Add(_nextButton); }
+
+            _osd.Add(progressRow);
+            _osd.Add(_controlsContainer);
+            Add(_osd);
+
+            CreateAudioOverlay();
+            CreateSubtitleOverlay();
+            CreateSubtitleText();
+            
+            _osdTimer = new Timer(5000);
+            _osdTimer.Tick += (_, __) => { HideOSD(); return false; };
+            _progressTimer = new Timer(500);
+            _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
+        }
 
         private View CreateOsdButton(string text)
         {
-            var btn = new View
-            {
-                WidthSpecification = 160,
-                HeightSpecification = 60,
-                BackgroundColor = new Color(1, 1, 1, 0.15f),
-                CornerRadius = 30.0f
-            };
-            var label = new TextLabel(text)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                TextColor = Color.White,
-                PointSize = 24
-            };
+            var btn = new View { WidthSpecification = 160, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
+            var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 24 };
             btn.Add(label);
             return btn;
         }
 
-private void UpdateProgress()
-{
-    if (_player == null || _progressTrack == null) return;
-
-    int duration = GetDuration();
-    if (duration <= 0) return;
-
-    // FIX: Stabilize Startup
-    // If we have a start position (resume), and the player is still near 0,
-    // force the UI to show the Resume position. This stops the "0 -> Resume" visual jump.
-    int rawPos = _isSeeking ? _seekPreviewMs : GetPlayPositionMs();
-    
-    if (!_isSeeking && !_initialSeekDone && _startPositionMs > 0)
-    {
-        // If rawPos is still small (buffering), keep showing _startPositionMs
-        if (Math.Abs(rawPos - _startPositionMs) > 2000 && rawPos < 2000)
+        private void UpdateProgress()
         {
-            rawPos = _startPositionMs;
+            if (_player == null || _progressTrack == null) return;
+
+            int duration = GetDuration();
+            if (duration <= 0) return;
+
+            int rawPos = _isSeeking ? _seekPreviewMs : GetPlayPositionMs();
+            if (!_isSeeking && !_initialSeekDone && _startPositionMs > 0)
+            {
+                if (Math.Abs(rawPos - _startPositionMs) > 2000 && rawPos < 2000) rawPos = _startPositionMs;
+                else _initialSeekDone = true;
+            }
+
+            int position = Math.Clamp(rawPos, 0, duration);
+            float ratio = (float)position / duration;
+            int trackStartX = 60 + 140 + 20;
+            int totalTrackWidth = Window.Default.Size.Width - (2 * trackStartX);
+            int fillWidth = (int)(totalTrackWidth * ratio);
+
+            if (_isSeeking) {
+                _previewFill.WidthSpecification = fillWidth;
+                _progressFill.WidthSpecification = 0;
+                if (_progressThumb != null) _progressThumb.PositionX = trackStartX + fillWidth - 12;
+            } else {
+                _progressFill.WidthSpecification = fillWidth;
+                _previewFill.WidthSpecification = 0;
+                if (_progressThumb != null) _progressThumb.PositionX = trackStartX + fillWidth - 12;
+            }
+
+            _currentTimeLabel.Text = FormatTime(position);
+            _durationLabel.Text = FormatTime(duration);
         }
-        else
-        {
-            // Player has caught up or moved past it
-            _initialSeekDone = true;
-        }
-    }
-
-    int position = Math.Clamp(rawPos, 0, duration);
-
-    // 1. Calculate Ratio
-    float ratio = (float)position / duration;
-
-    // 2. Use FIXED Width Math (Matches CreateOSD)
-    int sidePadding = 60;
-    int labelWidth = 140;
-    int labelGap = 20;
-    int trackStartX = sidePadding + labelWidth + labelGap;
-    int totalTrackWidth = Window.Default.Size.Width - (2 * trackStartX);
-
-    int fillWidth = (int)(totalTrackWidth * ratio);
-
-    if (_isSeeking) {
-        _previewFill.WidthSpecification = fillWidth;
-        _progressFill.WidthSpecification = 0;
-    } else {
-        _progressFill.WidthSpecification = fillWidth;
-        _previewFill.WidthSpecification = 0;
-    }
-
-    _currentTimeLabel.Text = FormatTime(position);
-    
-    if (_showRemaining)
-        _durationLabel.Text = "-" + FormatTime(Math.Max(0, duration - position));
-    else
-        _durationLabel.Text = FormatTime(duration);
-}
 
         private string FormatTime(int ms)
         {
             var t = TimeSpan.FromMilliseconds(ms);
-            return t.Hours > 0
-                ? $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}"
-                : $"{t.Minutes:D2}:{t.Seconds:D2}";
+            return t.Hours > 0 ? $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes:D2}:{t.Seconds:D2}";
         }
 
-        private void BeginSeek()
-        {
-            if (_player == null)
-                return;
-
-            _isSeeking = true;
-            _seekPreviewMs = GetPlayPositionMs();
-        }
+        private void BeginSeek() { if (_player != null) { _isSeeking = true; _seekPreviewMs = GetPlayPositionMs(); } }
 
         private void Scrub(int seconds)
         {
-            if (!_isSeeking)
-                BeginSeek();
-
+            if (!_isSeeking) BeginSeek();
             _seekPreviewMs += seconds * 1000;
             _seekPreviewMs = Math.Clamp(_seekPreviewMs, 0, GetDuration());
-
             UpdatePreviewBar();
             ShowOSD();
         }
 
-        private void CommitSeek()
+        private async void CommitSeek()
         {
-            if (!_isSeeking)
-                return;
-
-            _ = _player.SetPlayPositionAsync(_seekPreviewMs, false);
-            _isSeeking = false;
+            if (!_isSeeking || _player == null) return;
+            try
+            {
+                var seekTask = _player.SetPlayPositionAsync(_seekPreviewMs, false);
+                await Task.WhenAny(seekTask, Task.Delay(3000));
+            }
+            catch {}
+            finally { _isSeeking = false; }
         }
 
         private int GetDuration()
         {
-            if (_movie != null && _movie.RunTimeTicks > 0)
-            {
-                return (int)(_movie.RunTimeTicks / 10000);
-            }
-
-            if (_player == null)
-                return 0;
-
-            try
-            {
-                if (_player.StreamInfo == null)
-                    return 0;
-
-                int raw = _player.StreamInfo.GetDuration();
-
-                // Heuristic: Some Tizen versions return seconds, others milliseconds.
-                // A 38.56 min video is 2313 seconds. If raw is < 36000 (10 hours in seconds),
-                // and we're not expecting an extremely short clip, it's likely seconds.
-                // We increase the threshold significantly.
-                if (raw > 0 && raw < 86400) // 24 hours in seconds
-                {
-                    // If it were milliseconds, 86400 is only 86 seconds.
-                    // This heuristic assumes any video > 86 seconds will be > 86400 if in MS.
-                    // But wait, if a video is 1 minute, raw = 60 (sec) or 60000 (ms).
-                    // Let's use a more robust check:
-                    if (raw < 100000) // Less than 100 seconds if it were MS
-                    {
-                        // If it's less than 100, it's almost certainly seconds (unless it's a very tiny clip)
-                        int ms = raw * 1000;
-                        return ms;
-                    }
-                }
-
-                return raw;
-            }
-            catch (InvalidOperationException)
-            {
-                // Player not ready (Preparing) — treat as unknown duration for now
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("GetDuration error: " + ex);
-                return 0;
-            }
+            if (_movie != null && _movie.RunTimeTicks > 0) return (int)(_movie.RunTimeTicks / 10000);
+            if (_player == null) return 0;
+            try { return _player.StreamInfo.GetDuration(); } catch { return 0; }
         }
 
         private int GetPlayPositionMs()
         {
-            if (_player == null)
-                return 0;
-
-            try
-            {
-                int rawPos = _player.GetPlayPosition();
-
-                return rawPos;
-            }
-            catch (InvalidOperationException)
-            {
-                return 0;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("GetPlayPositionMs error: " + ex);
-                return 0;
-            }
+            if (_player == null) return 0;
+            try { return _player.GetPlayPosition(); } catch { return 0; }
         }
 
         private void UpdatePreviewBar()
         {
-            if (_progressTrack == null)
-                return;
-
+            if (_progressTrack == null) return;
             int dur = GetDuration();
-            if (dur <= 0)
-                return;
-
-            float ratio = (float)_seekPreviewMs / dur;
-            ratio = Math.Clamp(ratio, 0f, 1f);
-
-            _previewFill.WidthSpecification =
-                (int)Math.Floor(_progressTrack.Size.Width * ratio);
+            if (dur <= 0) return;
+            float ratio = Math.Clamp((float)_seekPreviewMs / dur, 0f, 1f);
+            _previewFill.WidthSpecification = (int)Math.Floor(_progressTrack.Size.Width * ratio);
         }
 
         private void CreateSubtitleOverlay()
         {
-            _subtitleOverlay = new View
-            {
-                WidthSpecification = (int)(Window.Default.Size.Width * 0.4f),
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = new Color(0, 0, 0, 0.85f),
-                PositionX = Window.Default.Size.Width * 0.6f,
-                PositionY = 0
-            };
-
+            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 25.0f, ClippingMode = ClippingModeType.ClipChildren };
             _subtitleOverlay.Hide();
             Add(_subtitleOverlay);
         }
 
         private void CreateSubtitleText()
         {
-            _subtitleText = new TextLabel("")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 120,
-                PointSize = 32,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                BackgroundColor = new Color(0, 0, 0, 0.45f),
-                PositionY = Window.Default.Size.Height - 300
-            };
-
+            _subtitleText = new TextLabel("") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 200, PointSize = 46, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, BackgroundColor = Color.Transparent, PositionY = Window.Default.Size.Height - 200, MultiLine = true, LineWrapMode = LineWrapMode.Word, Padding = new Extents(150, 150, 0, 0), EnableMarkup = true };
+            var shadow = new PropertyMap(); shadow.Add("offset", new PropertyValue(new Vector2(2, 2))); shadow.Add("color", new PropertyValue(new Color(0, 0, 0, 1.0f)));
+            _subtitleText.Shadow = shadow;
             _subtitleText.Hide();
             Add(_subtitleText);
         }
 
         private void ShowSubtitleOverlay()
         {
-            if (_player == null)
-                return;
-
-            if (_subtitleOverlay == null)
-                CreateSubtitleOverlay();
-
+            if (_player == null) return;
+            if (_subtitleOverlay == null) CreateSubtitleOverlay();
             HideAudioOverlay();
-            ClearChildren(_subtitleOverlay);
 
-            _subtitleTrackInfo = _player.SubtitleTrackInfo;
-            if (_subtitleTrackInfo == null)
-                return;
+            // 1. Use Jellyfin Metadata to list ALL tracks (fixes Tizen HLS limitation)
+            var subtitleStreams = _currentMediaSource?.MediaStreams?
+                .Where(s => s.Type == "Subtitle")
+                .OrderBy(s => s.Index)
+                .ToList();
 
-            int count = _subtitleTrackInfo.GetCount();
-
-            // +1 for "Off"
-            if (!_subtitleOverlayVisible)
+            if (_subtitleOverlay.ChildCount == 0)
             {
-                try
-                {
-                    _subtitleIndex = _subtitleTrackInfo.Selected + 1;
-                }
-                catch (InvalidOperationException)
-                {
-                    _subtitleIndex = 0; // Default to "Off"
-                }
-            }
+                _subtitleOverlay.Add(new TextLabel("Subtitles") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                _subtitleScrollView = new ScrollableBase { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PositionY = 80, HeightSpecification = 420, ScrollingDirection = ScrollableBase.Direction.Vertical };
+                _subtitleListContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FitToChildren, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Vertical, CellPadding = new Size2D(0, 5) } };
+                _subtitleScrollView.Add(_subtitleListContainer);
+                _subtitleOverlay.Add(_subtitleScrollView);
+                
+                // --- OFF OPTION ---
+                var offRow = CreateSubtitleRow("OFF", "OFF_INDEX");
+                _subtitleListContainer.Add(offRow);
 
-            var listContainer = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = 200,
-                Layout = new LinearLayout
+                // --- POPULATE TRACKS ---
+                if (subtitleStreams != null)
                 {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Tizen.NUI.Size(0, 10)
-                }
-            };
-
-            // OFF option
-            AddSubtitleRow(listContainer, "OFF", 0 == _subtitleIndex);
-
-            if (count == 0)
-            {
-                AddSubtitleRow(listContainer, "NO SUBTITLES", false);
-            }
-            else
-            {
-                for (int i = 0; i < count; i++)
-                {
-                    var lang = _subtitleTrackInfo.GetLanguageCode(i);
-                    var label = string.IsNullOrWhiteSpace(lang)
-                        ? $"SUB {i + 1}"
-                        : lang.ToUpper();
-
-                    AddSubtitleRow(listContainer, label, (i + 1) == _subtitleIndex);
+                    foreach (var stream in subtitleStreams)
+                    {
+                        var lang = !string.IsNullOrEmpty(stream.Language) ? stream.Language.ToUpper() : "UNKNOWN";
+                        var title = !string.IsNullOrEmpty(stream.DisplayTitle) ? stream.DisplayTitle : $"Sub {stream.Index}";
+                        var labelText = $"{lang} | {title}";
+                        if (stream.IsExternal) labelText += " (Ext)";
+                        
+                        var row = CreateSubtitleRow(labelText, stream.Index.ToString());
+                        _subtitleListContainer.Add(row);
+                    }
                 }
             }
 
-            _subtitleOverlay.Add(listContainer);
+            UpdateSubtitleVisuals();
             _subtitleOverlay.Show();
             _subtitleOverlayVisible = true;
         }
 
-        private void AddSubtitleRow(View parent, string text, bool selected)
+        private View CreateSubtitleRow(string text, string indexId)
         {
-            var row = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                BackgroundColor = selected
-                    ? new Color(1, 1, 1, 0.18f)
-                    : Color.Transparent
-            };
-
-            var label = new TextLabel(text)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 32,
-                TextColor = selected
-                    ? Color.White
-                    : new Color(1, 1, 1, 0.6f),
-                HorizontalAlignment = HorizontalAlignment.Begin,
-                VerticalAlignment = VerticalAlignment.Center,
-                Padding = new Extents(48, 48, 0, 0)
-            };
-
+            var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 12.0f, Margin = new Extents(20, 20, 5, 5) };
+            row.Name = indexId; 
+            var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 28, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
             row.Add(label);
-            parent.Add(row);
+            return row;
+        }
+
+        private void UpdateSubtitleVisuals()
+        {
+            if (_subtitleListContainer == null) return;
+            int count = (int)_subtitleListContainer.ChildCount;
+            for (int i = 0; i < count; i++)
+            {
+                var row = _subtitleListContainer.GetChildAt((uint)i);
+                bool selected = (i == _subtitleIndex);
+                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.2f) : Color.Transparent;
+                var label = row.GetChildAt(0) as TextLabel;
+                if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+            }
         }
 
         private void MoveSubtitleSelection(int delta)
         {
-            if (!_subtitleOverlayVisible || _subtitleTrackInfo == null)
-                return;
-
-            int max = _subtitleTrackInfo.GetCount();
-            _subtitleIndex = Math.Clamp(_subtitleIndex + delta, 0, max);
-
+            if (!_subtitleOverlayVisible || _subtitleListContainer == null) return;
+            int count = (int)_subtitleListContainer.ChildCount;
+            if (count == 0) return;
+            _subtitleIndex = Math.Clamp(_subtitleIndex + delta, 0, count - 1);
             ShowSubtitleOverlay();
         }
 
-        private void SelectSubtitle()
+        private async void SelectSubtitle()
         {
-            if (_subtitleTrackInfo == null)
-                return;
+            if (_subtitleListContainer == null) return;
+            if (_subtitleIndex < 0 || _subtitleIndex >= _subtitleListContainer.ChildCount) return;
+            var selectedRow = _subtitleListContainer.GetChildAt((uint)_subtitleIndex);
+            string selectedName = selectedRow.Name;
+            
+            HideSubtitleOverlay();
 
-            if (_subtitleIndex == 0)
+            if (selectedName == "OFF_INDEX")
             {
                 _subtitleEnabled = false;
-                try
-                {
-                    _player?.ClearSubtitle();
-                }
-                catch
-                {
-                    // Some platforms don't allow clearing embedded subtitle tracks.
-                }
-
-                RunOnUiThread(() =>
-                {
-                    _subtitleHideTimer?.Stop();
-                    _subtitleText?.Hide();
-                });
+                Log("Subtitles: Disabled");
+                try { _player?.ClearSubtitle(); } catch { }
+                RunOnUiThread(() => { _subtitleHideTimer?.Stop(); _subtitleText?.Hide(); });
+                return;
             }
-            else
+
+            if (!int.TryParse(selectedName, out int jellyfinStreamIndex)) return;
+            Log($"User selected Subtitle Stream Index: {jellyfinStreamIndex}");
+            _subtitleEnabled = true;
+
+            var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
+            if (subStream == null) return;
+
+            // Try Native Switch if DirectPlay + Internal
+            bool tryNative = _playMethod == "DirectPlay" && !subStream.IsExternal;
+
+            if (tryNative)
             {
-                _subtitleEnabled = true;
-                _subtitleTrackInfo.Selected = _subtitleIndex - 1;
+                try 
+                {
+                    var embeddedSubs = _currentMediaSource.MediaStreams.Where(s => s.Type == "Subtitle" && !s.IsExternal).OrderBy(s => s.Index).ToList();
+                    int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
+                    if (tizenIndex != -1 && tizenIndex < _player.SubtitleTrackInfo.GetCount())
+                    {
+                        Log($"Native Switch to Tizen Subtitle Track {tizenIndex}");
+                        _player.SubtitleTrackInfo.Selected = tizenIndex;
+                        return; 
+                    }
+                }
+                catch {}
             }
 
-            HideSubtitleOverlay();
+            // Fallback: Download and set as sidecar (Works for HLS and External)
+            Log("Setting subtitle via Extraction/Download...");
+            await DownloadAndSetSubtitle(_currentMediaSource.Id, jellyfinStreamIndex, subStream.Codec);
         }
 
         private void CreateAudioOverlay()
         {
-            _audioOverlay = new View
-            {
-                WidthSpecification = (int)(Window.Default.Size.Width * 0.4f),
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = new Color(0, 0, 0, 0.85f),
-
-                // RIGHT-SIDE PANEL
-                PositionX = Window.Default.Size.Width * 0.6f,
-                PositionY = 0
-            };
-
+            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 25.0f, ClippingMode = ClippingModeType.ClipChildren };
             _audioOverlay.Hide();
             Add(_audioOverlay);
         }
 
         private void ShowAudioOverlay()
         {
-            if (_player == null)
-                return;
-
-            if (_audioOverlay == null)
-                CreateAudioOverlay();
-
+            if (_player == null) return;
+            if (_audioOverlay == null) CreateAudioOverlay();
             HideSubtitleOverlay();
-            ClearChildren(_audioOverlay);
 
-            _audioTrackInfo = _player.AudioTrackInfo;
-            if (_audioTrackInfo == null)
-                return;
+            var audioStreams = _currentMediaSource?.MediaStreams?
+                .Where(s => s.Type == "Audio")
+                .OrderBy(s => s.Index)
+                .ToList();
 
-            int count = _audioTrackInfo.GetCount();
-            if (count <= 0)
-                return;
-
-            if (!_audioOverlayVisible)
-                _audioIndex = Math.Clamp(_audioTrackInfo.Selected, 0, count - 1);
-
-            var listContainer = new View
+            if (audioStreams == null || audioStreams.Count == 0) return;
+            
+            if (_audioOverlay.ChildCount == 0)
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = 200
-            };
-            listContainer.Layout = new LinearLayout
-            {
-                LinearOrientation = LinearLayout.Orientation.Vertical,
-                CellPadding = new Tizen.NUI.Size(0, 10)
-            };
+                _audioOverlay.Add(new TextLabel("Audio Tracks") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                _audioScrollView = new ScrollableBase { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PositionY = 80, HeightSpecification = 420, ScrollingDirection = ScrollableBase.Direction.Vertical };
+                _audioListContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FitToChildren, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Vertical, CellPadding = new Size2D(0, 5) } };
+                _audioScrollView.Add(_audioListContainer);
+                _audioOverlay.Add(_audioScrollView);
 
-            for (int i = 0; i < count; i++)
-            {
-                var lang = _audioTrackInfo.GetLanguageCode(i);
-                var langLabel = string.IsNullOrWhiteSpace(lang)
-                    ? "UNKNOWN"
-                    : lang.ToUpper();
-
-                var row = new View
+                foreach (var stream in audioStreams)
                 {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = 90,
-                    BackgroundColor = (i == _audioIndex)
-                        ? new Color(1, 1, 1, 0.18f)
-                        : Color.Transparent
-                };
+                    var lang = !string.IsNullOrEmpty(stream.Language) ? stream.Language.ToUpper() : "UNKNOWN";
+                    var codec = !string.IsNullOrEmpty(stream.Codec) ? stream.Codec.ToUpper() : "AUDIO";
+                    var displayText = $"{lang} | {codec}";
 
-                var label = new TextLabel($"{langLabel}  *  Track {i + 1}")
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FillToParent,
-                    PointSize = 32,
-                    TextColor = (i == _audioIndex)
-                        ? Color.White
-                        : new Color(1, 1, 1, 0.6f),
-                    HorizontalAlignment = HorizontalAlignment.Begin,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Padding = new Extents(48, 48, 0, 0)
-                };
+                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 12.0f, Margin = new Extents(20, 20, 5, 5) };
+                    row.Name = stream.Index.ToString();
 
-                row.Add(label);
-                listContainer.Add(row);
+                    var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
+                    row.Add(label);
+                    _audioListContainer.Add(row);
+                }
             }
-
-            _audioOverlay.Add(listContainer);
+            UpdateAudioVisuals();
             _audioOverlay.Show();
             _audioOverlayVisible = true;
         }
 
-        private void HideAudioOverlay()
+        private void UpdateAudioVisuals()
         {
-            if (_audioOverlay == null)
-                return;
-
-            _audioOverlay.Hide();
-            _audioOverlayVisible = false;
+            if (_audioListContainer == null) return;
+            int count = (int)_audioListContainer.ChildCount;
+            for (int i = 0; i < count; i++)
+            {
+                var row = _audioListContainer.GetChildAt((uint)i);
+                bool selected = (i == _audioIndex);
+                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.2f) : Color.Transparent;
+                var label = row.GetChildAt(0) as TextLabel;
+                if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+            }
         }
 
-        private void HideSubtitleOverlay()
-        {
-            if (_subtitleOverlay == null)
-                return;
-
-            _subtitleOverlay.Hide();
-            _subtitleOverlayVisible = false;
-        }
+        private void HideAudioOverlay() { if (_audioOverlay != null) { _audioOverlay.Hide(); _audioOverlayVisible = false; } }
+        private void HideSubtitleOverlay() { if (_subtitleOverlay != null) { _subtitleOverlay.Hide(); _subtitleOverlayVisible = false; } }
 
         private void OnSubtitleUpdated(object sender, SubtitleUpdatedEventArgs e)
         {
             RunOnUiThread(() =>
             {
-                if (_subtitleText == null)
-                    return;
-
-                if (!_subtitleEnabled)
-                {
-                    _subtitleText.Hide();
-                    return;
-                }
-
-                if (string.IsNullOrWhiteSpace(e.Text))
-                {
-                    _subtitleText.Hide();
-                    return;
-                }
-
-                _subtitleText.Text = e.Text;
+                string text = e.Text;
+                if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(text)) { _subtitleText?.Hide(); return; }
+                _subtitleText.Text = text;
                 _subtitleText.Show();
-
                 _subtitleHideTimer?.Stop();
                 _subtitleHideTimer = new Timer(Math.Max(500, e.Duration));
-                _subtitleHideTimer.Tick += (_, __) =>
-                {
-                    _subtitleText.Hide();
-                    return false;
-                };
+                _subtitleHideTimer.Tick += (_, __) => { _subtitleText.Hide(); return false; };
                 _subtitleHideTimer.Start();
             });
         }
 
-        private void RunOnUiThread(Action action)
-        {
-            try
-            {
-                CoreApplication.Post(action);
-            }
-            catch
-            {
-                action();
-            }
+        private void RunOnUiThread(Action action) { try { CoreApplication.Post(action); } catch { action(); } }
+        
+        private void MoveAudioSelection(int delta) 
+        { 
+            if (_audioOverlay == null || !_audioOverlayVisible || _audioListContainer == null) return; 
+            int count = (int)_audioListContainer.ChildCount;
+            if (count <= 0) return; 
+            _audioIndex = Math.Clamp(_audioIndex + delta, 0, count - 1); 
+            ShowAudioOverlay(); 
         }
 
-        private void ClearChildren(View view)
-        {
-            if (view == null)
-                return;
+        private async void SelectAudioTrack() 
+        { 
+            if (_audioListContainer == null) return; 
+            if (_audioIndex < 0 || _audioIndex >= _audioListContainer.ChildCount) return;
+            var selectedRow = _audioListContainer.GetChildAt((uint)_audioIndex);
+            
+            if (!int.TryParse(selectedRow.Name, out int jellyfinStreamIndex)) return;
 
-            while (view.ChildCount > 0)
-            {
-                var child = view.GetChildAt(0);
-                view.Remove(child);
-                child.Dispose();
-            }
-        }
-
-        private void MoveAudioSelection(int delta)
-        {
-            if (_audioOverlay == null || !_audioOverlayVisible || _audioTrackInfo == null)
-                return;
-
-            int count = _audioTrackInfo.GetCount();
-            if (count <= 0)
-                return;
-
-            _audioIndex = Math.Clamp(_audioIndex + delta, 0, count - 1);
-            ShowAudioOverlay();
-        }
-
-        private void SelectAudioTrack()
-        {
-            if (_audioTrackInfo == null)
-                return;
-
-            int count = _audioTrackInfo.GetCount();
-            if (count <= 0)
-                return;
-
-            _audioTrackInfo.Selected = _audioIndex;
             HideAudioOverlay();
+            Log($"User selected Audio Stream Index: {jellyfinStreamIndex}");
+
+            var selectedStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
+            string codec = selectedStream?.Codec?.ToLower() ?? "";
+            
+            bool isLikelyNative = _playMethod == "DirectPlay" && 
+                                  (codec.Contains("aac") || codec.Contains("ac3") || codec.Contains("eac3") || codec.Contains("mp3"));
+
+            if (isLikelyNative)
+            {
+                try
+                {
+                    var supportedTracks = _currentMediaSource.MediaStreams
+                        .Where(s => s.Type == "Audio" && 
+                               (s.Codec.ToLower().Contains("aac") || s.Codec.ToLower().Contains("ac3") || 
+                                s.Codec.ToLower().Contains("eac3") || s.Codec.ToLower().Contains("mp3")))
+                        .OrderBy(s => s.Index)
+                        .ToList();
+
+                    int tizenIndex = supportedTracks.FindIndex(s => s.Index == jellyfinStreamIndex);
+                    if (tizenIndex != -1 && tizenIndex < _player.AudioTrackInfo.GetCount())
+                    {
+                        Log($"Native Switch to Tizen Track {tizenIndex}");
+                        _player.AudioTrackInfo.Selected = tizenIndex;
+                        return;
+                    }
+                }
+                catch {}
+            }
+
+            Log("Native switch not possible (Unsupported Codec or mismatch). Reloading via Server...");
+            long currentPos = GetPlayPositionMs();
+            StopPlayback();
+            _overrideAudioIndex = jellyfinStreamIndex;
+            _startPositionMs = (int)currentPos;
+            StartPlayback();
         }
-
-
 
         private void ShowOSD()
         {
-            if (!_osdVisible)
-            {
-                _osdFocusRow = 0;
-            }
-
-            _osd.Show();
-            _osd.Opacity = 1;
-            if (_topOsd != null)
-            {
-                _topOsd.Show();
-                _topOsd.Opacity = 1;
-            }
+            if (!_osdVisible) _osdFocusRow = 0;
+            _osd.Show(); _osd.Opacity = 1;
+            if (_topOsd != null) { _topOsd.Show(); _topOsd.Opacity = 1; }
             _osdVisible = true;
-
+            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 330;
             UpdateOsdFocus();
             UpdateProgress();
-
-            _osdTimer.Stop();
-            _osdTimer.Start();
-
+            _osdTimer.Stop(); _osdTimer.Start();
             _progressTimer.Start();
         }
 
         private void UpdateOsdFocus()
         {
-            // Row 0: Seekbar
             if (_osdFocusRow == 0)
             {
-                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.4f); // Highlight track
-                _prevButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
-                _nextButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
-                _prevButton.Scale = Vector3.One;
-                _nextButton.Scale = Vector3.One;
+                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.4f);
+                _prevButton.BackgroundColor = new Color(1, 1, 1, 0.15f); _nextButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
+                _prevButton.Scale = Vector3.One; _nextButton.Scale = Vector3.One;
             }
-            // Row 1: Buttons
             else
             {
-                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.25f); // Dim track
-
+                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.25f);
                 bool prevFocused = _buttonFocusIndex == 0;
                 _prevButton.BackgroundColor = prevFocused ? new Color(0.85f, 0.11f, 0.11f, 1f) : new Color(1, 1, 1, 0.15f);
                 _prevButton.Scale = prevFocused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
-
                 bool nextFocused = _buttonFocusIndex == 1;
                 _nextButton.BackgroundColor = nextFocused ? new Color(0.85f, 0.11f, 0.11f, 1f) : new Color(1, 1, 1, 0.15f);
                 _nextButton.Scale = nextFocused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
@@ -890,478 +958,187 @@ private void UpdateProgress()
 
         private void HideOSD()
         {
-            _osd.Hide();
-            _osd.Opacity = 0;
-            if (_topOsd != null)
-            {
-                _topOsd.Hide();
-                _topOsd.Opacity = 0;
-            }
+            _osd.Hide(); _osd.Opacity = 0;
+            if (_topOsd != null) { _topOsd.Hide(); _topOsd.Opacity = 0; }
             _osdVisible = false;
-
+            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 180;
             _osdTimer.Stop();
             _progressTimer.Stop();
-
-            // RESET SEEK STATE (CRITICAL FIX)
-            if (_isSeeking && _player != null)
-            {
-                _isSeeking = false;
-                _seekPreviewMs = GetPlayPositionMs();
-                UpdateProgress();
-            }
+            if (_isSeeking && _player != null) { _isSeeking = false; _seekPreviewMs = GetPlayPositionMs(); UpdateProgress(); }
         }
 
+        private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
 
-        private void UpdatePlayPauseText()
+        private void ReportProgressToServer(bool force = false)
         {
-            if (_player.State == PlayerState.Playing)
-                _playPauseText.Text = "Pause";
-            else
-                _playPauseText.Text = "Play";
-        }
+            if (_player == null || _isSeeking || _isFinished) return;
+            if (!force && _player.State != PlayerState.Playing) return;
 
-        private async void SeekBy(int seconds)
-        {
-            if (_player == null)
-                return;
+            var positionMs = GetPlayPositionMs();
+            var durationMs = GetDuration();
+            if (durationMs <= 0) return;
 
-            var state = _player.State;
-            if (state != PlayerState.Playing && state != PlayerState.Paused)
-                return;
-
-            try
+            var info = new PlaybackProgressInfo
             {
-                int pos = 0;
-                try
-                {
-                    pos = GetPlayPositionMs();
-                }
-                catch
-                {
-                    // Player may be preparing; fallback to 0
-                    pos = 0;
-                }
+                ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = _movie.Id,
+                PositionTicks = (long)positionMs * 10000, IsPaused = _player.State == PlayerState.Paused,
+                PlayMethod = _playMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate"
+            };
+            _ = AppState.Jellyfin.ReportPlaybackProgressAsync(info);
 
-                var newPos = pos + (seconds * 1000);
-
-                var duration = GetDuration();
-
-                if (newPos < 0)
-                    newPos = 0;
-                if (duration > 0 && newPos > duration)
-                    newPos = duration;
-
-                await _player.SetPlayPositionAsync(newPos, false);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("SEEK ERROR: " + ex.Message);
-            }
+            if (((double)positionMs / durationMs) > 0.95 && !_isFinished) { _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id); }
+            else { _ = AppState.Jellyfin.UpdatePlaybackPositionAsync(_movie.Id, (long)positionMs * 10000); }
         }
-
-        private void DumpAudioTracks()
-        {
-            var track = _player.AudioTrackInfo;
-            if (track == null)
-            {
-                Console.WriteLine("Audio track info not available.");
-                return;
-            }
-
-            var count = track.GetCount();
-            Console.WriteLine($"Audio tracks found: {count}");
-
-            for (int i = 0; i < count; i++)
-            {
-                var lang = track.GetLanguageCode(i);
-                Console.WriteLine($"AudioTrack index={i}, lang={lang}");
-            }
-        }
-
-        private bool OnReportProgressTick(object sender, Timer.TickEventArgs e)
-        {
-           ReportProgressToServer();
-           return !_isFinished;
-        }
-
-        private void ReportProgressToServer()
-{
-    if (_player == null || _isSeeking || _isFinished) return;
-    if (_player.State != PlayerState.Playing) return;
-
-    var positionMs = GetPlayPositionMs();
-    var durationMs = GetDuration();
-    if (durationMs <= 0) return;
-
-    // Just MARK as watched, do NOT stop playback
-    if (((double)positionMs / durationMs) > 0.95)
-    {
-        if (!_isFinished) // Only mark once
-        {
-            _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
-            // _isFinished = true;  <-- REMOVE THIS. Let it keep reporting until the end.
-        }
-    }
-    else
-    {
-        var positionTicks = (long)positionMs * 10000;
-        _ = AppState.Jellyfin.UpdatePlaybackPositionAsync(_movie.Id, positionTicks);
-    }
-}
 
         private void OnPlaybackCompleted(object sender, EventArgs e)
-{
-    // This fires ONLY when the video naturally ends (100%)
-    _isFinished = true;
-    _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
-
-    RunOnUiThread(() =>
-    {
-        // Auto-play next episode logic
-        if (_movie.ItemType == "Episode")
         {
-            PlayNextEpisode();
+            Log("Playback Completed.");
+            _isFinished = true;
+            _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
+            RunOnUiThread(() => { if (_movie.ItemType == "Episode") PlayNextEpisode(); else NavigationService.NavigateBack(); });
         }
-        else
-        {
-            NavigationService.NavigateBack();
-        }
-    });
-}
 
         private void StopPlayback()
         {
+            try 
+            {
+                if (_player != null) {
+                    var info = new PlaybackProgressInfo { ItemId = _movie.Id, PlaySessionId = _playSessionId, PositionTicks = GetPlayPositionMs() * 10000, EventName = "Stop" };
+                    _ = AppState.Jellyfin.ReportPlaybackStoppedAsync(info);
+                }
+            } catch {}
+            
             try
             {
-                if (_player == null)
-                    return;
-
-                // Stop timers to prevent UpdateProgress from accessing player during teardown
+                if (_player == null) return;
                 try { _progressTimer?.Stop(); } catch { }
                 try { _osdTimer?.Stop(); } catch { }
-
                 _player.SubtitleUpdated -= OnSubtitleUpdated;
                 _subtitleHideTimer?.Stop();
                 _subtitleText?.Hide();
-
                 try { _player.Stop(); } catch { }
                 try { _player.Unprepare(); } catch { }
                 try { _player.Dispose(); } catch { }
                 _player = null;
-            }
-            catch { }
+            } catch { }
         }
 
         public void HandleKey(AppKey key)
         {
+            if (key != AppKey.Unknown) Log($"Key: {key}");
             switch (key)
             {
+                case AppKey.MediaPlayPause: TogglePause(); ShowOSD(); break;
+                case AppKey.MediaPlay: if (_player != null && _player.State == PlayerState.Paused) { TogglePause(); ShowOSD(); } break;
+                case AppKey.MediaPause: if (_player != null && _player.State == PlayerState.Playing) { TogglePause(); ShowOSD(); } break;
+                case AppKey.MediaStop: NavigationService.NavigateBack(); break;
+                case AppKey.MediaNext: PlayNextEpisode(); break;
+                case AppKey.MediaPrevious: PlayPreviousEpisode(); break;
+                case AppKey.MediaRewind: Scrub(-10); break;
+                case AppKey.MediaFastForward: Scrub(30); break;
                 case AppKey.Enter:
-                    if (_audioOverlayVisible)
-                        SelectAudioTrack();
-                    else if (_subtitleOverlayVisible)
-                        SelectSubtitle();
-                    else if (_isSeeking)
-                        CommitSeek();
-                    else if (_osdVisible)
-                    {
-                        if (_osdFocusRow == 1)
-                            ActivateOsdButton();
-                        else
-                        {
-                            TogglePause();
-                            // Keep OSD visible and reset timer
-                            _osdTimer.Stop();
-                            _osdTimer.Start();
-                        }
-                    }
-                    else
-                    {
-                        ShowOSD();
-                    }
+                    if (_audioOverlayVisible) SelectAudioTrack();
+                    else if (_subtitleOverlayVisible) SelectSubtitle();
+                    else if (_isSeeking) CommitSeek();
+                    else if (_osdVisible) { if (_osdFocusRow == 1) ActivateOsdButton(); else { TogglePause(); _osdTimer.Stop(); _osdTimer.Start(); } }
+                    else ShowOSD();
                     break;
-
                 case AppKey.Left:
-                    if (_audioOverlayVisible)
-                        MoveAudioSelection(-1);
-                    else if (_osdVisible && _osdFocusRow == 1)
-                        MoveButtonFocus(-1);
-                    else
-                        Scrub(-30);
+                    if (_audioOverlayVisible) MoveAudioSelection(-1);
+                    else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(-1);
+                    else Scrub(-30);
                     break;
-
                 case AppKey.Right:
-                    if (_audioOverlayVisible)
-                        MoveAudioSelection(1);
-                    else if (_osdVisible && _osdFocusRow == 1)
-                        MoveButtonFocus(1);
-                    else
-                        Scrub(30);
+                    if (_audioOverlayVisible) MoveAudioSelection(1);
+                    else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(1);
+                    else Scrub(30);
                     break;
-
                 case AppKey.Up:
-                    if (_audioOverlayVisible)
-                       MoveAudioSelection(-1);
-                    else if (_subtitleOverlayVisible)
-                       MoveSubtitleSelection(-1);
-                    else if (_osdVisible)
-                       MoveOsdRow(-1);
-                    else
-                       ShowAudioOverlay(); // later we can cycle menus
+                    if (_audioOverlayVisible) MoveAudioSelection(-1);
+                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1);
+                    else if (_osdVisible) MoveOsdRow(-1);
+                    else ShowAudioOverlay();
                     break;
-
                 case AppKey.Down:
-                    if (_audioOverlayVisible)
-                       MoveAudioSelection(1);
-                    else if (_subtitleOverlayVisible)
-                       MoveSubtitleSelection(1);
-                    else if (_osdVisible)
-                       MoveOsdRow(1);
-                    else
-                       ShowSubtitleOverlay();
-                       break;
-
+                    if (_audioOverlayVisible) MoveAudioSelection(1);
+                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(1);
+                    else if (_osdVisible) MoveOsdRow(1);
+                    else ShowSubtitleOverlay();
+                    break;
                 case AppKey.Back:
-                    if (_subtitleOverlayVisible)
-                        HideSubtitleOverlay();
-                    else if (_audioOverlayVisible)
-                        HideAudioOverlay();
-                    else if (_isSeeking)
-                        _isSeeking = false;
-                    else if (_osdVisible)
-                        HideOSD();
-                    else
-                        NavigationService.NavigateBack();
+                    if (_subtitleOverlayVisible) HideSubtitleOverlay();
+                    else if (_audioOverlayVisible) HideAudioOverlay();
+                    else if (_isSeeking) { _isSeeking = false; UpdateProgress(); }
+                    else if (_osdVisible) HideOSD();
+                    else NavigationService.NavigateBack();
                     break;
             }
         }
 
-        private void MoveOsdRow(int delta)
-        {
-            // 0 = Seek, 1 = Buttons
-            int newRow = Math.Clamp(_osdFocusRow + delta, 0, 1);
-            if (newRow != _osdFocusRow)
-            {
-                _osdFocusRow = newRow;
-                UpdateOsdFocus();
-                _osdTimer.Stop(); // Reset hide timer
-                _osdTimer.Start();
-            }
-        }
-
-        private void MoveButtonFocus(int delta)
-        {
-            int newIndex = Math.Clamp(_buttonFocusIndex + delta, 0, 1);
-            if (newIndex != _buttonFocusIndex)
-            {
-                _buttonFocusIndex = newIndex;
-                UpdateOsdFocus();
-                _osdTimer.Stop();
-                _osdTimer.Start();
-            }
-        }
-
-        private void ActivateOsdButton()
-        {
-            if (_buttonFocusIndex == 0)
-                PlayPreviousEpisode();
-            else
-                PlayNextEpisode();
-        }
-
-        private async void PlayNextEpisode()
-        {
-            await SwitchEpisode(1);
-        }
-
+        private void MoveOsdRow(int delta) { int newRow = Math.Clamp(_osdFocusRow + delta, 0, 1); if (newRow != _osdFocusRow) { _osdFocusRow = newRow; UpdateOsdFocus(); _osdTimer.Stop(); _osdTimer.Start(); } }
+        private void MoveButtonFocus(int delta) { int newIndex = Math.Clamp(_buttonFocusIndex + delta, 0, 1); if (newIndex != _buttonFocusIndex) { _buttonFocusIndex = newIndex; UpdateOsdFocus(); _osdTimer.Stop(); _osdTimer.Start(); } }
+        private void ActivateOsdButton() { if (_buttonFocusIndex == 0) PlayPreviousEpisode(); else PlayNextEpisode(); }
+        
+        private async void PlayNextEpisode() { await SwitchEpisode(1); }
         private async void PlayPreviousEpisode()
         {
-            // Typical UX: if playback has progressed beyond a short threshold,
-            // pressing "Prev" restarts the current episode; otherwise it goes to previous episode.
-            const int restartThresholdMs = 30 * 1000; // 30 seconds
-
-            if (_player != null)
-            {
-                int pos = 0;
-                try
-                {
-                    pos = _player.GetPlayPosition();
-                }
-                catch
-                {
-                    pos = 0;
-                }
-
-                if (pos > restartThresholdMs)
-                {
-                    try
-                    {
-                        await _player.SetPlayPositionAsync(0, false);
-                        _isSeeking = false;
-                        _seekPreviewMs = 0;
-                        UpdateProgress();
-                    }
-                    catch { }
-                    return;
-                }
-            }
-
+            if (_player != null && GetPlayPositionMs() > 30000) { await _player.SetPlayPositionAsync(0, false); _isSeeking = false; _seekPreviewMs = 0; UpdateProgress(); return; }
             await SwitchEpisode(-1);
         }
 
-        private async System.Threading.Tasks.Task SwitchEpisode(int offset)
+        private async Task SwitchEpisode(int offset)
         {
-            if (_movie.ItemType != "Episode")
-                return;
-
+            if (_movie.ItemType != "Episode") return;
             try
             {
-                // Show loading indicator or status
-                if (_playPauseText != null) _playPauseText.Text = "Loading...";
+                Log("Switching Episode...");
                 StopPlayback();
-
-                // 1. Get Seasons for this Series
                 var seasons = await AppState.Jellyfin.GetSeasonsAsync(_movie.SeriesId);
-                if (seasons == null || seasons.Count == 0)
-                {
-                    Console.WriteLine("No seasons found for series.");
-                    NavigationService.NavigateBack();
-                    return;
-                }
-
-                // Ensure seasons are ordered by IndexNumber
+                if (seasons == null || seasons.Count == 0) { NavigationService.NavigateBack(); return; }
                 seasons.Sort((a, b) => a.IndexNumber.CompareTo(b.IndexNumber));
-
-                // Find current season
-                var currentSeason = seasons.Find(s => s.IndexNumber == _movie.ParentIndexNumber);
-                if (currentSeason == null)
-                {
-                    // Fallback: use first season if index-based lookup fails
-                    currentSeason = seasons[0];
-                }
-
-                if (currentSeason == null)
-                {
-                    Console.WriteLine("Could not find current season.");
-                    NavigationService.NavigateBack();
-                    return;
-                }
-
-                // 2. Get Episodes for the current Season
+                var currentSeason = seasons.Find(s => s.IndexNumber == _movie.ParentIndexNumber) ?? seasons[0];
                 var episodes = await AppState.Jellyfin.GetEpisodesAsync(currentSeason.Id) ?? new List<JellyfinMovie>();
                 var currentIndex = episodes.FindIndex(e => e.Id == _movie.Id);
 
-                // If current episode not found in this season, try to locate across seasons
-                if (currentIndex == -1)
+                if (currentIndex == -1) 
                 {
-                    for (int si = 0; si < seasons.Count; si++)
-                    {
-                        var eps = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id) ?? new List<JellyfinMovie>();
-                        var idx = eps.FindIndex(e => e.Id == _movie.Id);
-                        if (idx != -1)
-                        {
-                            currentSeason = seasons[si];
-                            episodes = eps;
-                            currentIndex = idx;
-                            break;
-                        }
-                    }
-
-                    if (currentIndex == -1)
-                    {
-                        Console.WriteLine("Current episode not found in any season.");
-                        NavigationService.NavigateBack();
-                        return;
-                    }
+                    foreach(var s in seasons) { var eps = await AppState.Jellyfin.GetEpisodesAsync(s.Id); var idx = eps.FindIndex(e => e.Id == _movie.Id); if (idx != -1) { currentSeason = s; episodes = eps; currentIndex = idx; break; } }
                 }
+                
+                int nextIndex = currentIndex + offset;
+                if (nextIndex >= 0 && nextIndex < episodes.Count) { LoadNewMedia(episodes[nextIndex]); return; }
 
-                var nextIndex = currentIndex + offset;
-
-                // If within same season
-                if (nextIndex >= 0 && nextIndex < episodes.Count)
-                {
-                    var nextEpisode = episodes[nextIndex];
-                    LoadNewMedia(nextEpisode);
-                    return;
+                int seasonPos = seasons.FindIndex(s => s.Id == currentSeason.Id);
+                if (offset > 0) {
+                    for (int si = seasonPos + 1; si < seasons.Count; si++) { var eps = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id); if (eps.Count > 0) { LoadNewMedia(eps[0]); return; } }
+                } else {
+                    for (int si = seasonPos - 1; si >= 0; si--) { var eps = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id); if (eps.Count > 0) { LoadNewMedia(eps[eps.Count-1]); return; } }
                 }
-
-                // Cross-season navigation
-                int currentSeasonPos = seasons.FindIndex(s => s.Id == currentSeason.Id);
-                if (offset > 0)
-                {
-                    // Moving forward: find next season with episodes
-                    for (int si = currentSeasonPos + 1; si < seasons.Count; si++)
-                    {
-                        var nextSeasonEpisodes = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id) ?? new List<JellyfinMovie>();
-                        if (nextSeasonEpisodes.Count > 0)
-                        {
-                            LoadNewMedia(nextSeasonEpisodes[0]); // first episode of next season
-                            return;
-                        }
-                    }
-                }
-                else
-                {
-                    // Moving backward: find previous season with episodes
-                    for (int si = currentSeasonPos - 1; si >= 0; si--)
-                    {
-                        var prevSeasonEpisodes = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id) ?? new List<JellyfinMovie>();
-                        if (prevSeasonEpisodes.Count > 0)
-                        {
-                            LoadNewMedia(prevSeasonEpisodes[prevSeasonEpisodes.Count - 1]); // last episode of previous season
-                            return;
-                        }
-                    }
-                }
-
-                // No more episodes in requested direction
-                Console.WriteLine("No more episodes in this direction.");
                 NavigationService.NavigateBack();
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error switching episode: {ex.Message}");
-                NavigationService.NavigateBack();
-            }
+            catch (Exception ex) { Log($"Ep Switch Error: {ex.Message}"); NavigationService.NavigateBack(); }
         }
 
         private void LoadNewMedia(JellyfinMovie newMovie)
-{
-    _movie = newMovie;
-    _isFinished = false;
-    _isSeeking = false;
-    _seekPreviewMs = 0;
-    
-    // FIX: Use resume position if available
-    if (newMovie.PlaybackPositionTicks > 0)
-        _startPositionMs = (int)(newMovie.PlaybackPositionTicks / 10000);
-    else
-        _startPositionMs = 0;
-
-    _initialSeekDone = false;
-
-    // Reset UI
-    _progressFill.WidthSpecification = 0;
-    _currentTimeLabel.Text = "00:00";
-    _durationLabel.Text = "00:00";
-
-    _osdFocusRow = 0;
-    _buttonFocusIndex = 1;
-    UpdateOsdFocus();
-    
-    StartPlayback();
-    ShowOSD();
-}
+        {
+            _movie = newMovie;
+            _isFinished = false;
+            _isSeeking = false;
+            _seekPreviewMs = 0;
+            _startPositionMs = newMovie.PlaybackPositionTicks > 0 ? (int)(newMovie.PlaybackPositionTicks / 10000) : 0;
+            _initialSeekDone = false;
+            _progressFill.WidthSpecification = 0;
+            _currentTimeLabel.Text = "00:00"; _durationLabel.Text = "00:00";
+            _overrideAudioIndex = null;
+            StartPlayback();
+            ShowOSD();
+        }
 
         private void TogglePause()
         {
-            if (_player == null)
-                return;
-
-            if (_player.State == PlayerState.Playing)
-                _player.Pause();
-            else if (_player.State == PlayerState.Paused)
-                _player.Start();
+            if (_player == null) return;
+            if (_player.State == PlayerState.Playing) { _player.Pause(); ReportProgressToServer(force: true); }
+            else if (_player.State == PlayerState.Paused) { _player.Start(); ReportProgressToServer(force: true); }
         }
     }
 }

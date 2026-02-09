@@ -106,6 +106,9 @@ namespace JellyfinTizen.Screens
         {
             switch (key)
             {
+                case AppKey.Back:
+                    NavigationService.NavigateBack();
+                    return;
                 case AppKey.Down:
                     MoveFocus(1);
                     break;

@@ -17,6 +17,7 @@ namespace JellyfinTizen.Screens
         private readonly bool _resumeAvailable;
         private View _playButton;
         private View _resumeButton;
+        private View _subtitleButton;
         private readonly List<View> _buttons = new();
         private int _buttonIndex;
         private View _infoColumn;
@@ -25,6 +26,10 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
+
+        private List<MediaStream> _subtitleStreams;
+        private int? _selectedSubtitleIndex = null;
+
         public MovieDetailsScreen(JellyfinMovie movie)
         {
             _mediaItem = movie;
@@ -138,6 +143,11 @@ namespace JellyfinTizen.Screens
                     _buttons.Add(_resumeButton);
                     buttonRow.Add(_resumeButton);
                 }
+
+            _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
+            _buttons.Add(_subtitleButton);
+            buttonRow.Add(_subtitleButton);
+
                 _infoColumn.Add(buttonRow);
             }
             content.Add(posterFrame);
@@ -155,6 +165,7 @@ namespace JellyfinTizen.Screens
             }
             else
             {
+                _ = LoadSubtitleStreamsAsync();
                 FocusButton(0);
             }
         }
@@ -224,6 +235,20 @@ namespace JellyfinTizen.Screens
             _isEpisodeViewFocused = true;
             FocusEpisode(0);
         }
+
+        private async Task LoadSubtitleStreamsAsync()
+        {
+            try
+            {
+                _subtitleStreams = await AppState.Jellyfin.GetSubtitleStreamsAsync(_mediaItem.Id);
+                UpdateSubtitleButtonText();
+            }
+            catch
+            {
+                // Ignore errors, just no subs
+            }
+        }
+
         public void HandleKey(AppKey key)
         {
             if (_isEpisodeViewFocused)
@@ -345,12 +370,66 @@ namespace JellyfinTizen.Screens
             if (_resumeAvailable && _buttonIndex == 1)
             {
                 PlayMedia(_mediaItem, TicksToMs(_mediaItem.PlaybackPositionTicks));
+                return;
+            }
+            if (_buttons[_buttonIndex] == _subtitleButton)
+            {
+                CycleSubtitle();
+                return;
             }
         }
+
+        private void CycleSubtitle()
+        {
+            if (_subtitleStreams == null || _subtitleStreams.Count == 0) return;
+
+            if (_selectedSubtitleIndex == null)
+            {
+                // Select first
+                _selectedSubtitleIndex = _subtitleStreams[0].Index;
+            }
+            else
+            {
+                // Find current index in list
+                int currentListIndex = _subtitleStreams.FindIndex(s => s.Index == _selectedSubtitleIndex);
+                if (currentListIndex == -1 || currentListIndex == _subtitleStreams.Count - 1)
+                {
+                    _selectedSubtitleIndex = null; // Back to Off
+                }
+                else
+                {
+                    _selectedSubtitleIndex = _subtitleStreams[currentListIndex + 1].Index;
+                }
+            }
+            UpdateSubtitleButtonText();
+        }
+
+        private void UpdateSubtitleButtonText()
+        {
+            if (_subtitleButton == null) return;
+            var label = _subtitleButton.Children[0] as TextLabel;
+            if (label == null) return;
+
+            if (_selectedSubtitleIndex == null)
+            {
+                label.Text = "Subtitles: Off";
+            }
+            else
+            {
+                var stream = _subtitleStreams?.Find(s => s.Index == _selectedSubtitleIndex);
+                string lang = stream?.Language ?? "Unknown";
+                // Capitalize first letter
+                if (!string.IsNullOrEmpty(lang) && lang.Length > 1) 
+                    lang = char.ToUpper(lang[0]) + lang.Substring(1);
+                
+                label.Text = $"Subtitles: {lang}";
+            }
+        }
+
         private void PlayMedia(JellyfinMovie media, int startPositionMs)
         {
             NavigationService.Navigate(
-                new VideoPlayerScreen(media, startPositionMs)
+                new VideoPlayerScreen(media, startPositionMs, _selectedSubtitleIndex, AppState.BurnInSubtitles)
             );
         }
         private static int TicksToMs(long ticks)

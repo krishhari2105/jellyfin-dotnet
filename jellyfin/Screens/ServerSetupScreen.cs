@@ -1,6 +1,8 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using System.Threading.Tasks;
+using System;
 
 namespace JellyfinTizen.Screens
 {
@@ -9,6 +11,7 @@ namespace JellyfinTizen.Screens
         private TextField _serverInput;
         private View _continueButton;
         private TextLabel _continueText;
+        private TextLabel _errorLabel;
 
         public ServerSetupScreen()
         {
@@ -63,9 +66,19 @@ namespace JellyfinTizen.Screens
 
             _continueButton.Add(_continueText);
 
+            // Error label
+            _errorLabel = new TextLabel(string.Empty)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = 32,
+                TextColor = Color.Red,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
             container.Add(title);
             container.Add(_serverInput);
             container.Add(_continueButton);
+            container.Add(_errorLabel);
             Add(container);
         }
 
@@ -125,15 +138,88 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrEmpty(url))
                 return;
 
-            AppState.SaveServer(url);
-            AppState.Jellyfin.Connect(url);
+            // Auto prepend http or https if not already present
+            string validatedUrl = await ValidateAndPrependProtocol(url);
+            if (string.IsNullOrEmpty(validatedUrl))
+            {
+                ShowErrorMessage("Server not found. Please try again.");
+                return;
+            }
+
+            AppState.SaveServer(validatedUrl);
+            AppState.Jellyfin.Connect(validatedUrl);
             NavigationService.Navigate(new LoadingScreen("Fetching users..."));
 
-            var users = await AppState.Jellyfin.GetPublicUsersAsync();
-            NavigationService.Navigate(
-                new UserSelectScreen(users),
-                addToStack: false
-            );
+            try
+            {
+                var users = await AppState.Jellyfin.GetPublicUsersAsync();
+                NavigationService.Navigate(
+                    new UserSelectScreen(users),
+                    addToStack: true
+                );
+            }
+            catch
+            {
+                NavigationService.NavigateBack();
+                ShowErrorMessage("Failed to connect. Please try again.");
+            }
+        }
+
+        private async Task<string> ValidateAndPrependProtocol(string url)
+        {
+            // If already has http or https, use as is
+            if (url.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase))
+            {
+                return url;
+            }
+
+            // Try with http first
+            string httpUrl = "http://" + url;
+            if (await IsServerReachable(httpUrl))
+            {
+                return httpUrl;
+            }
+
+            // Try with https if http failed
+            string httpsUrl = "https://" + url;
+            if (await IsServerReachable(httpsUrl))
+            {
+                return httpsUrl;
+            }
+
+            return null;
+        }
+
+        private async Task<bool> IsServerReachable(string url)
+        {
+            try
+            {
+                using var httpClient = new System.Net.Http.HttpClient();
+                httpClient.Timeout = System.TimeSpan.FromSeconds(5);
+                var response = await httpClient.GetAsync(url + "/System/Info/Public");
+                return response.IsSuccessStatusCode;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void ShowErrorMessage(string message)
+        {
+            Console.WriteLine($"ERROR: {message}");
+            _errorLabel.Text = message;
+            
+            // Clear error after 5 seconds
+            var timer = new System.Timers.Timer(5000);
+            timer.Elapsed += (sender, e) =>
+            {
+                _errorLabel.Text = string.Empty;
+                timer.Stop();
+                timer.Dispose();
+            };
+            timer.Start();
         }
     }
 }

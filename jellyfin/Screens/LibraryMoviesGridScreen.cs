@@ -357,6 +357,7 @@ namespace JellyfinTizen.Screens
             };
 
             _settingsOptions.Clear();
+            _settingsOptions.Add(CreateSettingsOption("Playback Settings"));
             _settingsOptions.Add(CreateSettingsOption("Logout"));
             _settingsOptions.Add(CreateSettingsOption("Switch Server"));
             _settingsOptions.Add(CreateSettingsOption("Close"));
@@ -442,11 +443,18 @@ namespace JellyfinTizen.Screens
         {
             if (_settingsIndex == 0)
             {
-                _ = LogoutAsync();
+                HideSettingsPanel();
+                NavigationService.Navigate(new SettingsScreen());
                 return;
             }
 
             if (_settingsIndex == 1)
+            {
+                _ = LogoutAsync();
+                return;
+            }
+
+            if (_settingsIndex == 2)
             {
                 SwitchServer();
                 return;

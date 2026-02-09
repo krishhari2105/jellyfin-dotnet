@@ -6,6 +6,7 @@ namespace JellyfinTizen.Core
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
         private const string KeyUsername = "jf_username";
+        private const string KeyBurnInSubtitles = "jf_burn_in_subtitles";
 
         public static string ServerUrl { get; set; }
         public static string AccessToken { get; set; }
@@ -13,6 +14,17 @@ namespace JellyfinTizen.Core
         public static string Username { get; set; }
 
         public static JellyfinService Jellyfin { get; private set; }
+
+        public static bool BurnInSubtitles
+        {
+            get
+            {
+                if (Tizen.Applications.Preference.Contains(KeyBurnInSubtitles))
+                    return Tizen.Applications.Preference.Get<bool>(KeyBurnInSubtitles);
+                return false;
+            }
+            set => Tizen.Applications.Preference.Set(KeyBurnInSubtitles, value);
+        }
 
         public static void Init()
         {

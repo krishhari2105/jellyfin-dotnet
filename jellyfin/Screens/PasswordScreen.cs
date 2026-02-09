@@ -1,6 +1,7 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using System;
 
 namespace JellyfinTizen.Screens
 {
@@ -10,6 +11,7 @@ namespace JellyfinTizen.Screens
         private View _loginButton;
         private TextLabel _loginText;
         private bool _loginFocused;
+        private TextLabel _errorLabel;
 
         public PasswordScreen(string username)
         {
@@ -71,9 +73,19 @@ namespace JellyfinTizen.Screens
 
             _loginButton.Add(_loginText);
 
+            // Error label
+            _errorLabel = new TextLabel(string.Empty)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = 32,
+                TextColor = Color.Red,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+
             container.Add(title);
             container.Add(_passwordInput);
             container.Add(_loginButton);
+            container.Add(_errorLabel);
             Add(container);
         }
 
@@ -87,6 +99,10 @@ namespace JellyfinTizen.Screens
         {
             switch (key)
             {
+                case AppKey.Back:
+                    NavigationService.NavigateBack();
+                    return;
+
                 case AppKey.Down:
                     FocusLogin(true);
                     break;
@@ -155,10 +171,27 @@ namespace JellyfinTizen.Screens
             }
             catch
             {
-                NavigationService.Navigate(
-                    new LoadingScreen("Login failed")
-                );
+                // Return to password screen with clear password and show error
+                _passwordInput.Text = string.Empty;
+                NavigationService.NavigateBack();
+                ShowErrorMessage("Invalid password. Please try again.");
             }
+        }
+
+        private void ShowErrorMessage(string message)
+        {
+            Console.WriteLine($"ERROR: {message}");
+            _errorLabel.Text = message;
+            
+            // Clear error after 5 seconds
+            var timer = new System.Timers.Timer(5000);
+            timer.Elapsed += (sender, e) =>
+            {
+                _errorLabel.Text = string.Empty;
+                timer.Stop();
+                timer.Dispose();
+            };
+            timer.Start();
         }
     }
 }

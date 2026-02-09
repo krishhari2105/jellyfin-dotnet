@@ -1,3 +1,4 @@
+using System;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -33,10 +34,19 @@ namespace JellyfinTizen.Core
         {
             AccessToken = token;
 
+            // Remove OLD headers to prevent duplicates
             if (_http.DefaultRequestHeaders.Contains("X-MediaBrowser-Token"))
                 _http.DefaultRequestHeaders.Remove("X-MediaBrowser-Token");
+            
+            if (_http.DefaultRequestHeaders.Contains("X-Emby-Authorization"))
+                _http.DefaultRequestHeaders.Remove("X-Emby-Authorization");
 
-            _http.DefaultRequestHeaders.Add("X-MediaBrowser-Token", token);
+            // ADD NEW Consolidated Header (The Standard Way)
+            // This combines Client, Device, Version, AND Token into one string.
+            _http.DefaultRequestHeaders.Add(
+                "X-Emby-Authorization",
+                $"MediaBrowser Client=\"JellyfinTizen\", Device=\"SamsungTV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\""
+            );
         }
 
         public void SetUserId(string userId)
@@ -63,18 +73,42 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body)
         {
-            var json = JsonSerializer.Serialize(body);
+            var options = new JsonSerializerOptions 
+            { 
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
+            };
+            
+            var json = JsonSerializer.Serialize(body, options);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             var response = await _http.PostAsync(ServerUrl + path, content);
-            response.EnsureSuccessStatusCode();
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"HTTP {response.StatusCode}: {responseContent} for path {path}");
+                
+                var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
+                httpEx.Data["ResponseContent"] = responseContent;
+                throw httpEx;
+            }
+            
             return await response.Content.ReadAsStringAsync();
         }
 
         public async Task PostAsync(string path)
         {
             var response = await _http.PostAsync(ServerUrl + path, null);
-            response.EnsureSuccessStatusCode();
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                Console.WriteLine($"HTTP {response.StatusCode}: {responseContent} for path {path}");
+                
+                var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
+                httpEx.Data["ResponseContent"] = responseContent;
+                throw httpEx;
+            }
         }
 
         public async Task<List<JellyfinUser>> GetPublicUsersAsync()
@@ -357,6 +391,36 @@ namespace JellyfinTizen.Core
             return results;
         }
 
+        public async Task<List<MediaStream>> GetSubtitleStreamsAsync(string itemId)
+        {
+            var json = await GetAsync($"/Users/{UserId}/Items/{itemId}?Fields=MediaStreams");
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var list = new List<MediaStream>();
+
+            if (root.TryGetProperty("MediaStreams", out var streams))
+            {
+                foreach (var stream in streams.EnumerateArray())
+                {
+                    var type = stream.TryGetProperty("Type", out var t) ? t.GetString() : "";
+                    if (type == "Subtitle")
+                    {
+                        list.Add(new MediaStream
+                        {
+                            Index = stream.GetProperty("Index").GetInt32(),
+                            Type = type,
+                            Language = stream.TryGetProperty("Language", out var l) ? l.GetString() : "Unknown",
+                            DisplayTitle = stream.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : "Unknown",
+                            Codec = stream.TryGetProperty("Codec", out var c) ? c.GetString() : null,
+                            IsExternal = stream.TryGetProperty("IsExternal", out var e) && e.GetBoolean()
+                        });
+                    }
+                }
+            }
+            return list;
+        }
+
         public async Task UpdatePlaybackPositionAsync(string itemId, long positionTicks)
         {
             var body = new
@@ -370,6 +434,138 @@ namespace JellyfinTizen.Core
         public async Task MarkAsPlayedAsync(string itemId)
         {
             await PostAsync($"/Users/{UserId}/PlayedItems/{itemId}");
+        }
+
+        public async Task PostCapabilitiesAsync()
+        {
+            try
+            {
+                // Use the Builder to get the clean profile
+                var profile = ProfileBuilder.BuildTizenProfile();
+                
+                // The server expects a root "Capabilities" property
+                var caps = new
+                {
+                    Capabilities = new ClientCapabilitiesDto
+                    {
+                        DeviceProfile = profile,
+                        SupportedCommands = new List<string> { "Play", "Browse", "GoHome", "GoBack" }
+                    }
+                };
+
+                // Log the capabilities being sent for debugging
+                var options = new JsonSerializerOptions 
+                { 
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                };
+                var json = JsonSerializer.Serialize(caps, options);
+                Console.WriteLine("Sending capabilities: " + json);
+
+                // This URL tells Jellyfin "Here is what I can do"
+                await PostAsync("/Sessions/Capabilities/Full", caps);
+                Console.WriteLine("Successfully sent capabilities");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Failed to send capabilities: {ex.Message}");
+                if (ex is HttpRequestException httpEx)
+                {
+                    Console.WriteLine($"HTTP Status: {httpEx.StatusCode}");
+                    if (httpEx.Data.Contains("ResponseContent"))
+                    {
+                        Console.WriteLine($"Response content: {httpEx.Data["ResponseContent"]}");
+                    }
+                }
+                // Rethrow to allow caller to handle if needed
+                throw;
+            }
+        }
+
+        public async Task ReportPlaybackStartAsync(PlaybackProgressInfo info)
+        {
+            info.EventName = "TimeUpdate";
+            await PostAsync("/Sessions/Playing", info);
+        }
+
+        public async Task ReportPlaybackProgressAsync(PlaybackProgressInfo info)
+        {
+            info.EventName = "TimeUpdate";
+            await PostAsync("/Sessions/Playing/Progress", info);
+        }
+
+        public async Task ReportPlaybackStoppedAsync(PlaybackProgressInfo info)
+        {
+            info.EventName = "Stop";
+            await PostAsync("/Sessions/Playing/Stopped", info);
+        }
+
+        public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(string itemId, int? subtitleStreamIndex = null, bool forceBurnIn = false)
+        {
+            // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
+            var body = new 
+            { 
+                UserId = UserId,
+                AutoOpenLiveStream = true,
+                DeviceProfile = ProfileBuilder.BuildTizenProfile(forceBurnIn),
+                // Always include subtitle stream index, even if null (will be handled properly by server)
+                SubtitleStreamIndex = subtitleStreamIndex
+            };
+
+            var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
+            
+            // Simple deserialization
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            
+            var response = new PlaybackInfoResponse
+            {
+                PlaySessionId = root.GetProperty("PlaySessionId").GetString(),
+                MediaSources = new List<MediaSourceInfo>()
+            };
+
+            if (root.TryGetProperty("MediaSources", out var sources))
+            {
+                foreach (var src in sources.EnumerateArray())
+                {
+                    var ms = new MediaSourceInfo
+                    {
+                        Id = src.GetProperty("Id").GetString(),
+                        SupportsDirectPlay = src.GetProperty("SupportsDirectPlay").GetBoolean(),
+                        SupportsTranscoding = src.GetProperty("SupportsTranscoding").GetBoolean(),
+                        // TranscodingUrl is only present if transcoding is needed/possible
+                        TranscodingUrl = src.TryGetProperty("TranscodingUrl", out var tUrl) ? tUrl.GetString() : null,
+                        MediaStreams = new List<MediaStream>()
+                    };
+
+                    if (src.TryGetProperty("MediaStreams", out var streams))
+                    {
+                        foreach (var s in streams.EnumerateArray())
+                        {
+                            var mediaStream = new MediaStream
+                            {
+                                Index = s.GetProperty("Index").GetInt32(),
+                                Type = s.GetProperty("Type").GetString(),
+                                Language = s.TryGetProperty("Language", out var l) ? l.GetString() : null,
+                                DisplayTitle = s.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : null,
+                                Codec = s.TryGetProperty("Codec", out var c) ? c.GetString() : null,
+                                IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean()
+                            };
+                            
+                            // Log all subtitle streams for debugging
+                            if (mediaStream.Type == "Subtitle")
+                            {
+                                Console.WriteLine($"Found subtitle stream: Index={mediaStream.Index}, External={mediaStream.IsExternal}, Codec={mediaStream.Codec}, Language={mediaStream.Language}, DisplayTitle={mediaStream.DisplayTitle}");
+                            }
+                            
+                            ms.MediaStreams.Add(mediaStream);
+                        }
+                    }
+                    response.MediaSources.Add(ms);
+                }
+            }
+
+            return response;
         }
 
         public async Task<bool> GetIsAnamorphicAsync(string itemId)
@@ -411,4 +607,5 @@ namespace JellyfinTizen.Core
         }
 
     }
+
 }
