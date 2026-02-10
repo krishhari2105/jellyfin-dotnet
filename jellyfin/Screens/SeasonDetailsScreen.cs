@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
-using Tizen.NUI.Components;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 
@@ -13,9 +12,20 @@ namespace JellyfinTizen.Screens
     {
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
+        private const int EpisodeCardWidth = 420;
+        private const int EpisodeCardHeight = 236;
+        private const int EpisodeCardTextHeight = 64;
+        private const int EpisodeCardSpacing = 30;
+        private const int FocusBorder = 4;
+        private const int FocusPad = 20;
+        private const float FocusScale = 1.14f;
+
+        // Jellyfin Blue (#00A4DC)
+        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.45f);
         private readonly JellyfinMovie _season;
         private View _infoColumn;
-        private View _episodesView;
+        private View _episodeViewport;
+        private View _episodeRowContainer;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
@@ -73,7 +83,8 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = PosterWidth,
                 HeightSpecification = PosterHeight,
-                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f)
+                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f),
+                CornerRadius = 12.0f
             };
 
             var poster = new ImageView
@@ -106,6 +117,13 @@ namespace JellyfinTizen.Screens
                 LineWrapMode = LineWrapMode.Word
             };
 
+            var overviewViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 260,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
             var overview = new TextLabel(
                 string.IsNullOrEmpty(_season.Overview)
                     ? "No overview available."
@@ -113,15 +131,18 @@ namespace JellyfinTizen.Screens
             )
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 360,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
                 PointSize = 32,
                 TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
                 MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
+                LineWrapMode = LineWrapMode.Word,
+                Ellipsis = false
             };
 
+            overviewViewport.Add(overview);
+
             _infoColumn.Add(title);
-            _infoColumn.Add(overview);
+            _infoColumn.Add(overviewViewport);
 
             content.Add(posterFrame);
             content.Add(_infoColumn);
@@ -166,54 +187,168 @@ namespace JellyfinTizen.Screens
             _episodes = await AppState.Jellyfin.GetEpisodesAsync(_season.Id);
             _infoColumn.Remove(loading);
 
-            _episodesView = new View
+            var episodesTitle = new TextLabel("Episodes")
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 32,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                Ellipsis = false
+            };
+
+            var cardHeight = EpisodeCardHeight + EpisodeCardTextHeight;
+
+            _episodeViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = cardHeight + (FocusPad * 2),
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
+            _episodeRowContainer = new View
+            {
+                PositionY = FocusPad,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(EpisodeCardSpacing, 0)
+                }
+            };
+
+            _episodeViews.Clear();
+
+            foreach (var episode in _episodes)
+            {
+                var card = CreateEpisodeCard(episode);
+                _episodeViews.Add(card);
+                _episodeRowContainer.Add(card);
+            }
+
+            _episodeViewport.Add(_episodeRowContainer);
+            _infoColumn.Add(episodesTitle);
+            _infoColumn.Add(_episodeViewport);
+            _isEpisodeViewFocused = true;
+            FocusEpisode(0);
+        }
+
+        private View CreateEpisodeCard(JellyfinMovie episode)
+        {
+            var wrapper = new View
+            {
+                WidthSpecification = EpisodeCardWidth,
+                HeightSpecification = EpisodeCardHeight + EpisodeCardTextHeight,
+                Focusable = true,
+                BackgroundColor = Color.Transparent,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical
                 }
             };
 
-            var episodesScrollView = new ScrollableBase
+            var frame = new View
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
+                Name = "CardFrame",
+                WidthSpecification = EpisodeCardWidth,
+                HeightSpecification = EpisodeCardHeight,
+                CornerRadius = 16.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal
+                }
             };
-            episodesScrollView.Add(_episodesView);
 
-            foreach (var episode in _episodes)
+            var inner = new View
             {
-                var episodeView = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = 80,
-                    Focusable = true,
-                    Padding = new Extents(50, 20, 20, 20),
-                    CornerRadius = 12.0f,
-                    Margin = new Extents(0, 0, 0, 12)
-                };
+                Name = "CardInner",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                CornerRadius = 12.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
+            };
 
-                var episodeLabel = new TextLabel($"{episode.IndexNumber}. {episode.Name}")
-                {
-                    PointSize = 30,
-                    TextColor = Color.White,
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FillToParent,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    HorizontalAlignment = HorizontalAlignment.Begin,
-                    Padding = new Extents(30, 20, 0, 0)
-                };
+            var content = new View
+            {
+                Name = "CardContent",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
 
-                episodeView.Add(episodeLabel);
-                _episodesView.Add(episodeView);
-                _episodeViews.Add(episodeView);
+            var apiKey = Uri.EscapeDataString(AppState.AccessToken);
+            var serverUrl = AppState.Jellyfin.ServerUrl;
+            string imageUrl = null;
+
+            if (episode.HasThumb)
+            {
+                imageUrl =
+                    $"{serverUrl}/Items/{episode.Id}/Images/Thumb/0" +
+                    $"?maxWidth={EpisodeCardWidth}&quality=90&api_key={apiKey}";
+            }
+            else if (episode.HasPrimary)
+            {
+                imageUrl =
+                    $"{serverUrl}/Items/{episode.Id}/Images/Primary/0" +
+                    $"?maxWidth={EpisodeCardWidth}&quality=90&api_key={apiKey}";
+            }
+            else if (episode.HasBackdrop)
+            {
+                imageUrl =
+                    $"{serverUrl}/Items/{episode.Id}/Images/Backdrop/0" +
+                    $"?maxWidth={EpisodeCardWidth}&quality=85&api_key={apiKey}";
             }
 
-            _infoColumn.Add(episodesScrollView);
-            _isEpisodeViewFocused = true;
-            FocusEpisode(0);
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                var image = new ImageView
+                {
+                    Name = "CardImage",
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FillToParent,
+                    ResourceUrl = imageUrl,
+                    PreMultipliedAlpha = false
+                };
+                content.Add(image);
+            }
+
+            inner.Add(content);
+            frame.Add(inner);
+
+            var textContainer = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = EpisodeCardTextHeight,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(8, 8, 6, 0),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical
+                }
+            };
+
+            var episodeNumber = episode.IndexNumber > 0 ? $"E{episode.IndexNumber} - " : string.Empty;
+            var title = new TextLabel($"{episodeNumber}{episode.Name}")
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 22,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                MultiLine = true,
+                LineWrapMode = LineWrapMode.Word
+            };
+
+            textContainer.Add(title);
+            wrapper.Add(frame);
+            wrapper.Add(textContainer);
+            return wrapper;
         }
 
         public void HandleKey(AppKey key)
@@ -243,10 +378,10 @@ namespace JellyfinTizen.Screens
         {
             switch (key)
             {
-                case AppKey.Up:
+                case AppKey.Left:
                     MoveEpisodeFocus(-1);
                     break;
-                case AppKey.Down:
+                case AppKey.Right:
                     MoveEpisodeFocus(1);
                     break;
                 case AppKey.Enter:
@@ -269,26 +404,105 @@ namespace JellyfinTizen.Screens
 
         private void FocusEpisode(int index)
         {
-            if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
-            {
-                _episodeViews[_episodeIndex].BackgroundColor = Color.Transparent;
-                _episodeViews[_episodeIndex].Scale = Vector3.One;
-            }
-
-            _episodeIndex = index;
+            if (_episodeViews.Count == 0) return;
 
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
-            {
-                var view = _episodeViews[_episodeIndex];
-                view.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1);
-                view.Scale = Vector3.One;
+                ApplyEpisodeFocus(_episodeViews[_episodeIndex], false);
 
-                // CRITICAL: Sync Tizen focus
-                Tizen.Applications.CoreApplication.Post(() =>
+            _episodeIndex = Math.Clamp(index, 0, _episodeViews.Count - 1);
+            ApplyEpisodeFocus(_episodeViews[_episodeIndex], true);
+            ScrollEpisodesIfNeeded();
+
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
+            });
+        }
+
+        private void ApplyEpisodeFocus(View card, bool focused)
+        {
+            var frame = GetCardFrame(card);
+            var content = GetCardContent(card);
+
+            if (content != null)
+                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+
+            card.Scale = Vector3.One;
+            card.PositionZ = focused ? 20 : 0;
+
+            if (frame != null)
+            {
+                frame.CornerRadius = 16.0f;
+                if (focused)
                 {
-                    FocusManager.Instance.SetCurrentFocusView(view);
-                });
+                    frame.BackgroundColor = _focusBorderColor;
+                    frame.BoxShadow = new Shadow(8.0f, new Color(0.0f, 0.64f, 0.86f, 0.25f), new Vector2(0, 0));
+                }
+                else
+                {
+                    frame.BackgroundColor = Color.Transparent;
+                    frame.BoxShadow = null;
+                }
             }
+        }
+
+        private void ScrollEpisodesIfNeeded()
+        {
+            if (_episodeRowContainer == null || _episodeViewport == null || _episodeViews.Count == 0)
+                return;
+
+            if (_episodeIndex == 0)
+            {
+                _episodeRowContainer.PositionX = 0;
+                return;
+            }
+
+            var offset = -_episodeRowContainer.PositionX;
+            var viewportWidth = _episodeViewport.SizeWidth;
+            var focused = _episodeViews[_episodeIndex];
+
+            var left = focused.PositionX;
+            var right = left + EpisodeCardWidth;
+
+            var visibleLeft = offset;
+            var visibleRight = offset + viewportWidth;
+
+            if (right > visibleRight)
+                _episodeRowContainer.PositionX -= (right - visibleRight + EpisodeCardSpacing);
+            else if (left < visibleLeft)
+                _episodeRowContainer.PositionX += (visibleLeft - left + EpisodeCardSpacing);
+        }
+
+        private View GetCardFrame(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                    return child;
+            }
+            return null;
+        }
+
+        private View GetCardContent(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                {
+                    foreach (var frameChild in child.Children)
+                    {
+                        if (frameChild.Name == "CardInner")
+                        {
+                            foreach (var innerChild in frameChild.Children)
+                            {
+                                if (innerChild.Name == "CardContent")
+                                    return innerChild;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
         }
         
     }

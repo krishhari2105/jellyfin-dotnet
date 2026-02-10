@@ -13,7 +13,7 @@ namespace JellyfinTizen.Screens
     {
         // ==================== TEMPORARY AUTO-LOGIN CONFIGURATION ====================
         // Set to true to enable auto-login for testing, false to disable
-        private const bool ENABLE_AUTO_LOGIN = true;
+        private static readonly bool ENABLE_AUTO_LOGIN = true;
         private const string TEST_SERVER_URL = "http://192.168.1.3:8096";
         private const string TEST_USERNAME = "Samsung";
         private const string TEST_PASSWORD = "2233";
@@ -21,7 +21,6 @@ namespace JellyfinTizen.Screens
 
         private bool _navigated;
         private ThreadingTimer _fallbackTimer;
-        private TextLabel _status;
         private bool _loaded;
 
         public StartupScreen()
@@ -49,21 +48,7 @@ namespace JellyfinTizen.Screens
                 TextColor = Color.White
             };
 
-            _status = new TextLabel("")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 50,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                PointSize = 20,
-                TextColor = new Color(1, 1, 1, 0.6f),
-                PositionY = Window.Default.Size.Height - 120
-            };
-
             Add(label);
-            Add(_status);
-
-            UpdateStatus("Startup: init");
 
             // Safety fallback if network calls hang for any reason.
             _fallbackTimer = new ThreadingTimer(_ =>
@@ -76,7 +61,6 @@ namespace JellyfinTizen.Screens
                 {
                     Tizen.Applications.CoreApplication.Post(() =>
                     {
-                        UpdateStatus("Startup: fallback -> ServerSetup");
                         NavigationService.Navigate(
                             new ServerSetupScreen(),
                             addToStack: false
@@ -95,7 +79,6 @@ namespace JellyfinTizen.Screens
             // ==================== TEMPORARY AUTO-LOGIN FEATURE ====================
             if (ENABLE_AUTO_LOGIN)
             {
-                UpdateStatus("Startup: Auto-login enabled, skipping normal flow");
                 await PerformAutoLogin();
                 return;
             }
@@ -107,7 +90,6 @@ namespace JellyfinTizen.Screens
                 {
                     _navigated = true;
                     _fallbackTimer?.Dispose();
-                    UpdateStatus("Startup: session ok -> HomeLoading");
                     NavigationService.Navigate(
                         new HomeLoadingScreen(),
                         addToStack: false
@@ -118,7 +100,6 @@ namespace JellyfinTizen.Screens
 
             if (AppState.TryRestoreServer())
             {
-                UpdateStatus("Startup: server ok -> users");
                 if (!_navigated)
                 {
                     NavigationService.Navigate(
@@ -137,7 +118,6 @@ namespace JellyfinTizen.Screens
                     {
                         _navigated = true;
                         _fallbackTimer?.Dispose();
-                        UpdateStatus("Startup: users ok -> UserSelect");
                         NavigationService.Navigate(
                             new UserSelectScreen(users),
                             addToStack: false
@@ -150,7 +130,6 @@ namespace JellyfinTizen.Screens
                     {
                         _navigated = true;
                         _fallbackTimer?.Dispose();
-                        UpdateStatus("Startup: users failed -> ServerSetup");
                         NavigationService.Navigate(
                             new ServerSetupScreen(),
                             addToStack: false
@@ -164,7 +143,6 @@ namespace JellyfinTizen.Screens
             {
                 _navigated = true;
                 _fallbackTimer?.Dispose();
-                UpdateStatus("Startup: no server -> ServerSetup");
                 NavigationService.Navigate(
                     new ServerSetupScreen(),
                     addToStack: false
@@ -185,11 +163,9 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                UpdateStatus("Auto-login: Connecting to server...");
                 AppState.Jellyfin.Connect(TEST_SERVER_URL);
                 AppState.SaveServer(TEST_SERVER_URL);
 
-                UpdateStatus("Auto-login: Authenticating user...");
                 var result = await AppState.Jellyfin.AuthenticateAsync(
                     TEST_USERNAME,
                     TEST_PASSWORD
@@ -199,26 +175,13 @@ namespace JellyfinTizen.Screens
                 AppState.Username = TEST_USERNAME;
                 AppState.Jellyfin.SetAuthToken(result.accessToken);
                 AppState.Jellyfin.SetUserId(result.userId);
-                try 
-{
-    UpdateStatus("Sending Device Profile...");
-    
-    // 1. Send the profile
-    await AppState.Jellyfin.PostCapabilitiesAsync();
-
-    // 2. IF WE GET HERE, IT WORKED!
-    // Show a green/success message and wait 3 seconds so you can read it.
-    UpdateStatus("✅ PROFILE SENT: SUCCESS! (DTS Disabled)");
-    await Task.Delay(3000); 
-}
-catch (Exception capEx)
-{
-    // 3. IF WE GET HERE, IT FAILED.
-    // Show the specific error on screen for 5 seconds.
-    Console.WriteLine($"Capabilities failed: {capEx.Message}");
-    UpdateStatus($"❌ PROFILE FAILED: {capEx.Message}");
-    await Task.Delay(5000); // Long delay so you can read the error
-}
+                try
+                {
+                    await AppState.Jellyfin.PostCapabilitiesAsync();
+                }
+                catch
+                {
+                }
 
 
                 AppState.SaveSession(
@@ -228,7 +191,6 @@ catch (Exception capEx)
                     TEST_USERNAME
                 );
 
-                UpdateStatus("Auto-login: Success -> HomeLoading");
                 if (!_navigated)
                 {
                     _navigated = true;
@@ -242,7 +204,6 @@ catch (Exception capEx)
             }
             catch (Exception ex)
             {
-                UpdateStatus($"Auto-login failed: {ex.Message}");
                 // Fall back to normal flow if auto-login fails
                 LoadNormalFlow();
             }
@@ -256,7 +217,6 @@ catch (Exception capEx)
                 {
                     _navigated = true;
                     _fallbackTimer?.Dispose();
-                    UpdateStatus("Startup: session ok -> HomeLoading");
                     NavigationService.Navigate(
                         new HomeLoadingScreen(),
                         addToStack: false
@@ -267,7 +227,6 @@ catch (Exception capEx)
 
             if (AppState.TryRestoreServer())
             {
-                UpdateStatus("Startup: server ok -> users");
                 if (!_navigated)
                 {
                     NavigationService.Navigate(
@@ -291,7 +250,6 @@ catch (Exception capEx)
                             _fallbackTimer?.Dispose();
                             Tizen.Applications.CoreApplication.Post(() =>
                             {
-                                UpdateStatus("Startup: users ok -> UserSelect");
                                 NavigationService.Navigate(
                                     new UserSelectScreen(users),
                                     addToStack: false
@@ -307,7 +265,6 @@ catch (Exception capEx)
                             _fallbackTimer?.Dispose();
                             Tizen.Applications.CoreApplication.Post(() =>
                             {
-                                UpdateStatus("Startup: users failed -> ServerSetup");
                                 NavigationService.Navigate(
                                     new ServerSetupScreen(),
                                     addToStack: false
@@ -323,28 +280,10 @@ catch (Exception capEx)
             {
                 _navigated = true;
                 _fallbackTimer?.Dispose();
-                UpdateStatus("Startup: no server -> ServerSetup");
                 NavigationService.Navigate(
                     new ServerSetupScreen(),
                     addToStack: false
                 );
-            }
-        }
-
-        private void UpdateStatus(string text)
-        {
-            try
-            {
-                Tizen.Applications.CoreApplication.Post(() =>
-                {
-                    if (_status != null)
-                        _status.Text = text;
-                });
-            }
-            catch
-            {
-                if (_status != null)
-                    _status.Text = text;
             }
         }
     }

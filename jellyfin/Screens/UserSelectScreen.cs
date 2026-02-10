@@ -60,7 +60,8 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = 90,
                 BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                Focusable = true
+                Focusable = true,
+                CornerRadius = 12.0f
             };
 
             var label = new TextLabel(user.Name)
@@ -86,9 +87,9 @@ namespace JellyfinTizen.Screens
 
         private void Highlight(int index, bool focused = true)
         {
-            _userViews[index].BackgroundColor =
-                focused ? new Color(0.35f, 0.35f, 0.35f, 1f)
-                        : new Color(0.2f, 0.2f, 0.2f, 1f);
+            var view = _userViews[index];
+            view.BackgroundColor = focused ? new Color(0.35f, 0.35f, 0.35f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
+            view.Scale = focused ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
         }
 
         private void OnUserSelected(int index)

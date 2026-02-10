@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
-using Tizen.NUI.Components;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 
@@ -13,9 +12,20 @@ namespace JellyfinTizen.Screens
     {
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
+        private const int SeasonCardWidth = 260;
+        private const int SeasonCardHeight = 390;
+        private const int SeasonCardTextHeight = 56;
+        private const int SeasonCardSpacing = 24;
+        private const int FocusBorder = 4;
+        private const int FocusPad = 20;
+        private const float FocusScale = 1.14f;
+
+        // Jellyfin Blue (#00A4DC)
+        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.45f);
         private readonly JellyfinMovie _series;
         private View _infoColumn;
-        private View _seasonsView;
+        private View _seasonViewport;
+        private View _seasonRowContainer;
         private List<JellyfinMovie> _seasons;
         private readonly List<View> _seasonViews = new();
         private int _seasonIndex = -1;
@@ -73,7 +83,8 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = PosterWidth,
                 HeightSpecification = PosterHeight,
-                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f)
+                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f),
+                CornerRadius = 12.0f
             };
 
             var poster = new ImageView
@@ -113,7 +124,7 @@ namespace JellyfinTizen.Screens
             )
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 360,
+                HeightSpecification = 260,
                 PointSize = 32,
                 TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
                 MultiLine = true,
@@ -167,54 +178,167 @@ namespace JellyfinTizen.Screens
             _seasons = await AppState.Jellyfin.GetSeasonsAsync(_series.Id);
             _infoColumn.Remove(loading);
 
-            _seasonsView = new View
+            var seasonsTitle = new TextLabel("Seasons")
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 32,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                Ellipsis = false
+            };
+
+            var cardHeight = SeasonCardHeight + SeasonCardTextHeight;
+
+            _seasonViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = cardHeight + (FocusPad * 2),
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
+            _seasonRowContainer = new View
+            {
+                PositionY = FocusPad,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(SeasonCardSpacing, 0)
+                }
+            };
+
+            _seasonViews.Clear();
+
+            foreach (var season in _seasons)
+            {
+                var card = CreateSeasonCard(season);
+                _seasonViews.Add(card);
+                _seasonRowContainer.Add(card);
+            }
+
+            _seasonViewport.Add(_seasonRowContainer);
+            _infoColumn.Add(seasonsTitle);
+            _infoColumn.Add(_seasonViewport);
+            _isSeasonViewFocused = true;
+            FocusSeason(0);
+        }
+
+        private View CreateSeasonCard(JellyfinMovie season)
+        {
+            var wrapper = new View
+            {
+                WidthSpecification = SeasonCardWidth,
+                HeightSpecification = SeasonCardHeight + SeasonCardTextHeight,
+                Focusable = true,
+                BackgroundColor = Color.Transparent,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical
                 }
             };
 
-            var seasonsScrollView = new ScrollableBase
+            var frame = new View
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
+                Name = "CardFrame",
+                WidthSpecification = SeasonCardWidth,
+                HeightSpecification = SeasonCardHeight,
+                CornerRadius = 16.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal
+                }
             };
-            seasonsScrollView.Add(_seasonsView);
 
-            foreach (var season in _seasons)
+            var inner = new View
             {
-                var seasonView = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = 80,
-                    Focusable = true,
-                    Padding = new Extents(50, 20, 20, 20),
-                    CornerRadius = 12.0f,
-                    Margin = new Extents(0, 0, 0, 12)
-                };
+                Name = "CardInner",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                CornerRadius = 12.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
+            };
 
-                var seasonLabel = new TextLabel(season.Name)
-                {
-                    PointSize = 30,
-                    TextColor = Color.White,
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FillToParent,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    HorizontalAlignment = HorizontalAlignment.Begin,
-                    Padding = new Extents(30, 20, 0, 0)
-                };
+            var content = new View
+            {
+                Name = "CardContent",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
 
-                seasonView.Add(seasonLabel);
-                _seasonsView.Add(seasonView);
-                _seasonViews.Add(seasonView);
+            var apiKey = Uri.EscapeDataString(AppState.AccessToken);
+            var serverUrl = AppState.Jellyfin.ServerUrl;
+            string posterUrl = null;
+
+            if (season.HasPrimary)
+            {
+                posterUrl =
+                    $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
+                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+            }
+            else if (season.HasThumb)
+            {
+                posterUrl =
+                    $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
+                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+            }
+            else if (season.HasBackdrop)
+            {
+                posterUrl =
+                    $"{serverUrl}/Items/{season.Id}/Images/Backdrop/0" +
+                    $"?maxWidth={SeasonCardWidth}&quality=85&api_key={apiKey}";
             }
 
-            _infoColumn.Add(seasonsScrollView);
-            _isSeasonViewFocused = true;
-            FocusSeason(0);
+            if (!string.IsNullOrEmpty(posterUrl))
+            {
+                var image = new ImageView
+                {
+                    Name = "CardImage",
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FillToParent,
+                    ResourceUrl = posterUrl,
+                    PreMultipliedAlpha = false
+                };
+                content.Add(image);
+            }
+
+            inner.Add(content);
+            frame.Add(inner);
+
+            var textContainer = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = SeasonCardTextHeight,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(8, 8, 6, 0),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical
+                }
+            };
+
+            var title = new TextLabel(season.Name ?? string.Empty)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 22,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                MultiLine = true,
+                LineWrapMode = LineWrapMode.Word
+            };
+
+            textContainer.Add(title);
+            wrapper.Add(frame);
+            wrapper.Add(textContainer);
+            return wrapper;
         }
 
         public void HandleKey(AppKey key)
@@ -244,10 +368,10 @@ namespace JellyfinTizen.Screens
         {
             switch (key)
             {
-                case AppKey.Up:
+                case AppKey.Left:
                     MoveSeasonFocus(-1);
                     break;
-                case AppKey.Down:
+                case AppKey.Right:
                     MoveSeasonFocus(1);
                     break;
                 case AppKey.Enter:
@@ -270,30 +394,105 @@ namespace JellyfinTizen.Screens
 
         private void FocusSeason(int index)
         {
-            // 1. Un-highlight old
+            if (_seasonViews.Count == 0) return;
+
             if (_seasonIndex >= 0 && _seasonIndex < _seasonViews.Count)
+                ApplySeasonFocus(_seasonViews[_seasonIndex], false);
+
+            _seasonIndex = Math.Clamp(index, 0, _seasonViews.Count - 1);
+            ApplySeasonFocus(_seasonViews[_seasonIndex], true);
+            ScrollSeasonsIfNeeded();
+
+            Tizen.Applications.CoreApplication.Post(() =>
             {
-                _seasonViews[_seasonIndex].BackgroundColor = Color.Transparent;
-                _seasonViews[_seasonIndex].Scale = Vector3.One;
-            }
+                FocusManager.Instance.SetCurrentFocusView(_seasonViews[_seasonIndex]);
+            });
+        }
 
-            // 2. Update Index
-            _seasonIndex = index;
+        private void ApplySeasonFocus(View card, bool focused)
+        {
+            var frame = GetCardFrame(card);
+            var content = GetCardContent(card);
 
-            // 3. Highlight new
-            if (_seasonIndex >= 0 && _seasonIndex < _seasonViews.Count)
+            if (content != null)
+                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+
+            card.Scale = Vector3.One;
+            card.PositionZ = focused ? 20 : 0;
+
+            if (frame != null)
             {
-                var view = _seasonViews[_seasonIndex];
-                view.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1);
-                view.Scale = Vector3.One;
-
-                // CRITICAL: Use Post to ensure this runs AFTER the layout pass.
-                // This fixes the "Blue Outline" being on the wrong item.
-                Tizen.Applications.CoreApplication.Post(() =>
+                frame.CornerRadius = 16.0f;
+                if (focused)
                 {
-                    FocusManager.Instance.SetCurrentFocusView(view);
-                });
+                    frame.BackgroundColor = _focusBorderColor;
+                    frame.BoxShadow = new Shadow(8.0f, new Color(0.0f, 0.64f, 0.86f, 0.25f), new Vector2(0, 0));
+                }
+                else
+                {
+                    frame.BackgroundColor = Color.Transparent;
+                    frame.BoxShadow = null;
+                }
             }
+        }
+
+        private void ScrollSeasonsIfNeeded()
+        {
+            if (_seasonRowContainer == null || _seasonViewport == null || _seasonViews.Count == 0)
+                return;
+
+            if (_seasonIndex == 0)
+            {
+                _seasonRowContainer.PositionX = 0;
+                return;
+            }
+
+            var offset = -_seasonRowContainer.PositionX;
+            var viewportWidth = _seasonViewport.SizeWidth;
+            var focused = _seasonViews[_seasonIndex];
+
+            var left = focused.PositionX;
+            var right = left + SeasonCardWidth;
+
+            var visibleLeft = offset;
+            var visibleRight = offset + viewportWidth;
+
+            if (right > visibleRight)
+                _seasonRowContainer.PositionX -= (right - visibleRight + SeasonCardSpacing);
+            else if (left < visibleLeft)
+                _seasonRowContainer.PositionX += (visibleLeft - left + SeasonCardSpacing);
+        }
+
+        private View GetCardFrame(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                    return child;
+            }
+            return null;
+        }
+
+        private View GetCardContent(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                {
+                    foreach (var frameChild in child.Children)
+                    {
+                        if (frameChild.Name == "CardInner")
+                        {
+                            foreach (var innerChild in frameChild.Children)
+                            {
+                                if (innerChild.Name == "CardContent")
+                                    return innerChild;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
         }
 
     }

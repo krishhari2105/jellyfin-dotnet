@@ -9,9 +9,12 @@ namespace JellyfinTizen.Screens
 {
     public class HomeScreen : ScreenBase, IKeyHandler
     {
-        private const int TopBarHeight = 90;
-        private const int RowsStartY = 120;
+        private const int TopBarHeight = 72;
+        private const int RowsStartY = TopBarHeight + 28;
         private const int SidePadding = 60;
+        private const int FocusBorder = 4;
+        private const int FocusPad = 20;
+        private const float FocusScale = 1.14f;
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
@@ -35,6 +38,10 @@ namespace JellyfinTizen.Screens
         private int _settingsIndex;
         private bool _settingsVisible;
 
+        // Jellyfin Blue (#00A4DC)
+        private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
+        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.45f);
+
         public HomeScreen(List<HomeRowData> rows)
         {
             _rows = rows ?? new List<HomeRowData>();
@@ -54,25 +61,26 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(20, 0)
+                    CellPadding = new Size2D(16, 0)
                 },
-                Padding = new Extents(SidePadding, SidePadding, 30, 0)
+                Padding = new Extents(SidePadding, SidePadding, 16, 0)
             };
 
             var title = new TextLabel("Jellyfin")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 54,
+                PointSize = 46,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin
             };
 
             _settingsButton = new View
             {
-                WidthSpecification = 200,
-                HeightSpecification = 70,
+                WidthSpecification = 180,
+                HeightSpecification = 52,
                 BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                Focusable = true
+                Focusable = true,
+                CornerRadius = 26f
             };
 
             var settingsLabel = new TextLabel("Settings")
@@ -81,7 +89,7 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 28,
+                PointSize = 24,
                 TextColor = Color.White
             };
 
@@ -149,10 +157,14 @@ namespace JellyfinTizen.Screens
 
                 var rowInfo = GetRowStyle(row.Kind);
 
+                var textHeight = GetCardTextHeight(row.Kind);
+                var cardHeight = rowInfo.CardHeight + textHeight;
+                var rowHeight = rowInfo.RowHeight + textHeight;
+
                 var rowBlock = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = rowInfo.RowHeight,
+                    HeightSpecification = rowHeight + (FocusPad * 2),
                     PositionY = y
                 };
 
@@ -169,7 +181,7 @@ namespace JellyfinTizen.Screens
                 var viewport = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = rowInfo.CardHeight,
+                    HeightSpecification = cardHeight + (FocusPad * 2),
                     PositionY = rowInfo.TitleHeight + 10,
                     ClippingMode = ClippingModeType.ClipChildren,
                     Padding = new Extents(SidePadding, SidePadding, 0, 0)
@@ -177,6 +189,7 @@ namespace JellyfinTizen.Screens
 
                 var rowContainer = new View
                 {
+                    PositionY = FocusPad,
                     Layout = new LinearLayout
                     {
                         LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -188,7 +201,7 @@ namespace JellyfinTizen.Screens
 
                 foreach (var item in row.Items)
                 {
-                    var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight);
+                    var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight);
                     cards.Add(card);
                     rowContainer.Add(card);
                 }
@@ -203,13 +216,24 @@ namespace JellyfinTizen.Screens
                 _rowContainers.Add(rowContainer);
                 _rowViewports.Add(viewport);
                 _rowCardWidths.Add(rowInfo.CardWidth);
-                _rowCardHeights.Add(rowInfo.CardHeight);
+                _rowCardHeights.Add(cardHeight);
                 _rowSpacings.Add(rowInfo.Spacing);
                 _rowTops.Add(y);
-                _rowHeights.Add(rowInfo.RowHeight);
+                _rowHeights.Add(rowHeight + (FocusPad * 2));
 
-                y += rowInfo.RowHeight + rowInfo.RowSpacing;
+                y += rowHeight + (FocusPad * 2) + rowInfo.RowSpacing;
             }
+        }
+
+        private int GetCardTextHeight(HomeRowKind kind)
+        {
+            return kind switch
+            {
+                HomeRowKind.Libraries => 48,
+                HomeRowKind.NextUp => 64,
+                HomeRowKind.ContinueWatching => 64,
+                _ => 60
+            };
         }
 
         private (int CardWidth, int CardHeight, int Spacing, int TitleHeight, int RowHeight, int RowSpacing) GetRowStyle(HomeRowKind kind)
@@ -223,79 +247,123 @@ namespace JellyfinTizen.Screens
             };
         }
 
-        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int height)
+        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight)
         {
-            var card = new View
-            {
-                WidthSpecification = width,
-                HeightSpecification = height,
-                Focusable = true
-            };
-
             var isLandscapeRow = kind == HomeRowKind.Libraries ||
                                  kind == HomeRowKind.NextUp ||
                                  kind == HomeRowKind.ContinueWatching;
 
-            var titleOverlayHeight = isLandscapeRow ? 60 : 70;
-            var subtitleOverlayHeight = 40;
+            var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
+
+            // Wrapper holds image card + separate text below
+            var wrapper = new View
+            {
+                WidthSpecification = width,
+                HeightSpecification = imageHeight + textHeight,
+                Focusable = true,
+                BackgroundColor = Color.Transparent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical
+                }
+            };
+
+            // Image card (fixed size)
+            var frame = new View
+            {
+                Name = "CardFrame",
+                WidthSpecification = width,
+                HeightSpecification = imageHeight,
+                CornerRadius = 16.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal
+                }
+            };
+
+            var inner = new View
+            {
+                Name = "CardInner",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                CornerRadius = 12.0f, // Matches outer radius minus inset roughly
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
+            };
+
+            var imageContainer = new View
+            {
+                Name = "CardContent",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
 
             if (!string.IsNullOrEmpty(item.ImageUrl))
             {
                 var image = new ImageView
                 {
+                    Name = "CardImage",
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightResizePolicy = ResizePolicyType.FillToParent,
                     ResourceUrl = item.ImageUrl,
                     PreMultipliedAlpha = false
                 };
-
-                card.Add(image);
-            }
-            else
-            {
-                card.BackgroundColor = new Color(0.15f, 0.15f, 0.15f, 1f);
+                imageContainer.Add(image);
             }
 
-            var overlay = new View
+            inner.Add(imageContainer);
+            frame.Add(inner);
+
+            var textContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = titleOverlayHeight,
-                PositionY = height - titleOverlayHeight,
-                BackgroundColor = new Color(0, 0, 0, 0.65f)
+                HeightSpecification = textHeight,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(8, 8, 6, 0),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 2)
+                }
             };
 
             var title = new TextLabel(item.Title ?? string.Empty)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = kind == HomeRowKind.Libraries ? 30 : 24,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = isLandscapeRow ? 22 : 24,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word
             };
+            textContainer.Add(title);
 
-            overlay.Add(title);
-            card.Add(overlay);
-
-            if (!string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries)
+            if (hasSubtitle)
             {
                 var subtitle = new TextLabel(item.Subtitle)
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = subtitleOverlayHeight,
-                    PositionY = height - titleOverlayHeight - subtitleOverlayHeight,
-                    BackgroundColor = new Color(0, 0, 0, 0.4f),
-                    TextColor = new Color(1, 1, 1, 0.8f),
-                    PointSize = 20,
+                    HeightResizePolicy = ResizePolicyType.FitToChildren,
+                    TextColor = new Color(1, 1, 1, 0.75f),
+                    PointSize = 18,
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MultiLine = false
                 };
-                card.Add(subtitle);
+                textContainer.Add(subtitle);
             }
 
-            return card;
+            wrapper.Add(frame);
+            wrapper.Add(textContainer);
+            return wrapper;
         }
 
         public void HandleKey(AppKey key)
@@ -365,11 +433,82 @@ namespace JellyfinTizen.Screens
 
         private void Highlight(bool focused)
         {
-            _rowCards[_rowIndex][_colIndex].Scale =
-                Vector3.One;
+            var card = _rowCards[_rowIndex][_colIndex];
+            var frame = GetCardFrame(card);
+            var content = GetCardContent(card);
+
+            // Ensure the card itself stays rounded
+            if (frame != null)
+                frame.CornerRadius = 16.0f;
+
+            if (focused)
+            {
+                if (content != null)
+                    content.Scale = new Vector3(FocusScale, FocusScale, 1f);
+
+                // Keep outer size stable to avoid viewport clipping
+                card.Scale = Vector3.One;
+                card.PositionZ = 30;
+
+                // KEY FIX: Use BackgroundColor as the border mechanism.
+                // Since 'card' has Padding(5), this fills the gap with color, creating a frame.
+                // BackgroundColor respects CornerRadius much better than BorderlineWidth in some cases.
+                if (frame != null)
+                {
+                    frame.BackgroundColor = _focusBorderColor;
+                    frame.BorderlineWidth = 0.0f; // Disable explicit border line
+                    frame.BoxShadow = new Shadow(8.0f, new Color(0.0f, 0.64f, 0.86f, 0.25f), new Vector2(0, 0));
+                }
+            }
+            else
+            {
+                if (content != null)
+                    content.Scale = Vector3.One;
+
+                card.Scale = Vector3.One;
+                card.PositionZ = 0;
+
+                // Remove focus effects
+                if (frame != null)
+                {
+                    frame.BackgroundColor = Color.Transparent;
+                    frame.BorderlineWidth = 0.0f;
+                    frame.BoxShadow = null;
+                }
+            }
         }
 
-        //
+        private View GetCardFrame(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                    return child;
+            }
+            return null;
+        }
+
+        private View GetCardContent(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                {
+                    foreach (var frameChild in child.Children)
+                    {
+                        if (frameChild.Name == "CardInner")
+                        {
+                            foreach (var innerChild in frameChild.Children)
+                            {
+                                if (innerChild.Name == "CardContent")
+                                    return innerChild;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
 
         private void ScrollHorizontalIfNeeded()
         {
@@ -377,8 +516,6 @@ namespace JellyfinTizen.Screens
             var viewport = _rowViewports[_rowIndex];
             var focused = _rowCards[_rowIndex][_colIndex];
 
-            // FIX: Force the container to start at SidePadding (80), not 0.
-            // This restores your "breathing space".
             if (_colIndex == 0)
             {
                 rowContainer.PositionX = SidePadding;
@@ -484,17 +621,23 @@ namespace JellyfinTizen.Screens
         {
             _settingsFocused = focused;
 
-            _settingsButton.BackgroundColor = focused
-                ? new Color(0.35f, 0.35f, 0.35f, 1f)
-                : new Color(0.2f, 0.2f, 0.2f, 1f);
-
             if (focused)
             {
+                _settingsButton.Scale = new Vector3(1.1f, 1.1f, 1f);
+                _settingsButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
+                _settingsButton.BorderlineWidth = 0.0f;
+                _settingsButton.BoxShadow = null;
+
                 Highlight(false);
                 FocusManager.Instance.SetCurrentFocusView(_settingsButton);
             }
             else
             {
+                _settingsButton.Scale = Vector3.One;
+                _settingsButton.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+                _settingsButton.BorderlineWidth = 0.0f;
+                _settingsButton.BoxShadow = null;
+
                 Highlight(true);
                 FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);
             }
@@ -505,10 +648,21 @@ namespace JellyfinTizen.Screens
             _settingsPanel = new View
             {
                 WidthSpecification = 420,
-                HeightSpecification = 260,
-                BackgroundColor = new Color(0, 0, 0, 0.9f),
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                BackgroundColor = new Color(0, 0, 0, 1.0f),
                 PositionX = Window.Default.Size.Width - 520,
-                PositionY = 120
+                PositionY = TopBarHeight + 16,
+                CornerRadius = 14f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BorderlineWidth = 1.5f,
+                BorderlineColor = new Color(0.2f, 0.2f, 0.2f, 1f),
+                Padding = new Extents(16, 16, 16, 16),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 12)
+                }
             };
 
             _settingsPanel.Hide();
@@ -516,8 +670,8 @@ namespace JellyfinTizen.Screens
             var title = new TextLabel("Settings")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 60,
-                PointSize = 28,
+                HeightSpecification = 48,
+                PointSize = 26,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -527,7 +681,6 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = 70,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -539,7 +692,6 @@ namespace JellyfinTizen.Screens
             _settingsOptions.Add(CreateSettingsOption("Playback Settings"));
             _settingsOptions.Add(CreateSettingsOption("Logout"));
             _settingsOptions.Add(CreateSettingsOption("Switch Server"));
-            _settingsOptions.Add(CreateSettingsOption("Close"));
 
             foreach (var opt in _settingsOptions)
                 list.Add(opt);
@@ -555,16 +707,19 @@ namespace JellyfinTizen.Screens
             var row = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 60,
-                BackgroundColor = new Color(1, 1, 1, 0.1f)
+                HeightSpecification = 56,
+                BackgroundColor = new Color(1, 1, 1, 0.12f),
+                CornerRadius = 10.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren
             };
 
             var label = new TextLabel(text)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 26,
-                TextColor = new Color(1, 1, 1, 0.85f),
+                PointSize = 24,
+                TextColor = new Color(1, 1, 1, 0.9f),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -613,8 +768,8 @@ namespace JellyfinTizen.Screens
             for (int i = 0; i < _settingsOptions.Count; i++)
             {
                 _settingsOptions[i].BackgroundColor = i == _settingsIndex
-                    ? new Color(1, 1, 1, 0.2f)
-                    : new Color(1, 1, 1, 0.1f);
+                    ? new Color(1, 1, 1, 0.22f)
+                    : new Color(1, 1, 1, 0.12f);
             }
         }
 

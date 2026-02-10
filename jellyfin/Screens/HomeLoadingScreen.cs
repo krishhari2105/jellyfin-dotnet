@@ -14,8 +14,6 @@ namespace JellyfinTizen.Screens
     {
         private bool _navigated;
         private ThreadingTimer _fallbackTimer;
-        private TextLabel _status;
-
         public HomeLoadingScreen()
         {
             Load();
@@ -33,21 +31,7 @@ namespace JellyfinTizen.Screens
                 TextColor = Color.White
             };
 
-            _status = new TextLabel("")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 50,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                PointSize = 20,
-                TextColor = new Color(1, 1, 1, 0.6f),
-                PositionY = Window.Default.Size.Height - 120
-            };
-
             Add(label);
-            Add(_status);
-
-            UpdateStatus("HomeLoad: init");
 
             _fallbackTimer = new ThreadingTimer(_ =>
             {
@@ -60,7 +44,6 @@ namespace JellyfinTizen.Screens
                 {
                     Tizen.Applications.CoreApplication.Post(() =>
                     {
-                        UpdateStatus("HomeLoad: fallback -> ServerSetup");
                         NavigationService.Navigate(
                             new ServerSetupScreen(),
                             addToStack: false
@@ -89,7 +72,6 @@ namespace JellyfinTizen.Screens
                 {
                     _navigated = true;
                     _fallbackTimer?.Dispose();
-                    UpdateStatus("HomeLoad: rows ok -> Home");
                     NavigationService.ClearStack();
                     NavigationService.Navigate(
                         new HomeScreen(rows),
@@ -105,7 +87,6 @@ namespace JellyfinTizen.Screens
                 _navigated = true;
                 _fallbackTimer?.Dispose();
                 AppState.ClearSession(clearServer: false);
-                UpdateStatus("HomeLoad: libs failed -> UserSelect");
                 NavigationService.Navigate(
                     new LoadingScreen("Session expired. Please sign in."),
                     addToStack: false
@@ -117,7 +98,6 @@ namespace JellyfinTizen.Screens
                         AppState.Jellyfin.GetPublicUsersAsync(),
                         10000
                     );
-                    UpdateStatus("HomeLoad: users ok -> UserSelect");
                     NavigationService.Navigate(
                         new UserSelectScreen(users),
                         addToStack: false
@@ -125,7 +105,6 @@ namespace JellyfinTizen.Screens
                 }
                 catch
                 {
-                    UpdateStatus("HomeLoad: users failed -> ServerSetup");
                     NavigationService.Navigate(
                         new ServerSetupScreen(),
                         addToStack: false
@@ -149,23 +128,9 @@ namespace JellyfinTizen.Screens
 
             foreach (var lib in libs)
             {
-                var includeTypes = lib.CollectionType == "tvshows"
-                    ? "Series"
-                    : "Movie";
-
-                var randomId = await WithTimeout(
-                    AppState.Jellyfin.GetRandomItemWithBackdropIdAsync(lib.Id, includeTypes),
-                    10000
-                );
-
-                var imageUrl = string.IsNullOrEmpty(randomId)
-                    ? null
-                    : $"{serverUrl}/Items/{randomId}/Images/Backdrop/0?maxWidth=900&quality=85&api_key={apiKey}";
-                
-                if (string.IsNullOrEmpty(imageUrl) && lib.HasPrimaryImage)
-                {
-                    imageUrl = $"{serverUrl}/Items/{lib.Id}/Images/Primary?maxWidth=900&quality=85&api_key={apiKey}";
-                }
+                var imageUrl = lib.HasPrimaryImage
+                    ? $"{serverUrl}/Items/{lib.Id}/Images/Primary?maxWidth=900&quality=85&api_key={apiKey}"
+                    : null;
 
                 librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                 {
@@ -307,21 +272,5 @@ namespace JellyfinTizen.Screens
             return await task;
         }
 
-        private void UpdateStatus(string text)
-        {
-            try
-            {
-                Tizen.Applications.CoreApplication.Post(() =>
-                {
-                    if (_status != null)
-                        _status.Text = text;
-                });
-            }
-            catch
-            {
-                if (_status != null)
-                    _status.Text = text;
-            }
-        }
     }
 }

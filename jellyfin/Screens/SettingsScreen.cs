@@ -59,6 +59,16 @@ namespace JellyfinTizen.Screens
             };
             _burnInToggle.Add(_burnInLabel);
             root.Add(_burnInToggle);
+            
+            _burnInToggle.FocusGained += (s, e) =>
+            {
+                _burnInToggle.Scale = new Vector3(1.05f, 1.05f, 1.0f);
+            };
+
+            _burnInToggle.FocusLost += (s, e) =>
+            {
+                _burnInToggle.Scale = Vector3.One;
+            };
 
             FocusManager.Instance.SetCurrentFocusView(_burnInToggle);
         }

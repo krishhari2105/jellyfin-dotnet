@@ -76,7 +76,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = PosterWidth,
                 HeightSpecification = PosterHeight,
-                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f)
+                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f),
+                CornerRadius = 16.0f,
+                ClippingMode = ClippingModeType.ClipChildren
             };
             var poster = new ImageView
             {
@@ -129,9 +131,9 @@ namespace JellyfinTizen.Screens
                     Layout = new LinearLayout
                     {
                         LinearOrientation = LinearLayout.Orientation.Horizontal,
-                        CellPadding = new Size2D(20, 0)
+                        CellPadding = new Size2D(30, 0)
                     },
-                    Margin = new Extents(0, 0, 10, 0)
+                    Margin = new Extents(0, 0, 20, 0)
                 };
                 _playButton = CreateActionButton("Play", isPrimary: true);
                 _buttons.Add(_playButton);
@@ -144,9 +146,9 @@ namespace JellyfinTizen.Screens
                     buttonRow.Add(_resumeButton);
                 }
 
-            _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
-            _buttons.Add(_subtitleButton);
-            buttonRow.Add(_subtitleButton);
+                _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
+                _buttons.Add(_subtitleButton);
+                buttonRow.Add(_subtitleButton);
 
                 _infoColumn.Add(buttonRow);
             }
@@ -217,7 +219,9 @@ namespace JellyfinTizen.Screens
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightSpecification = 80,
                     Focusable = true,
-                    Padding = new Extents(10, 10, 10, 10)
+                    Padding = new Extents(10, 10, 10, 10),
+                    CornerRadius = 24.0f,
+                    Margin = new Extents(0, 0, 0, 12)
                 };
                 var episodeLabel = new TextLabel($"{episode.IndexNumber}. {episode.Name}")
                 {
@@ -312,7 +316,8 @@ namespace JellyfinTizen.Screens
             _episodeIndex = index;
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
             {
-                _episodeViews[_episodeIndex].BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1);
+                // Lighter grey for better visibility, no border to keep corners rounded
+                _episodeViews[_episodeIndex].BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1.0f);
                 FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
             }
         }
@@ -320,12 +325,13 @@ namespace JellyfinTizen.Screens
         {
             var button = new View
             {
-                WidthSpecification = 340,
-                HeightSpecification = 90,
+                WidthSpecification = 260,
+                HeightSpecification = 70,
                 BackgroundColor = isPrimary
                     ? new Color(0.85f, 0.11f, 0.11f, 1f)
                     : new Color(0.2f, 0.2f, 0.2f, 1f),
-                Focusable = true
+                Focusable = true,
+                CornerRadius = 35.0f
             };
             var label = new TextLabel(text)
             {
@@ -333,7 +339,7 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 34,
+                PointSize = 26,
                 TextColor = Color.White
             };
             button.Add(label);
@@ -352,9 +358,24 @@ namespace JellyfinTizen.Screens
             for (int i = 0; i < _buttons.Count; i++)
             {
                 var focused = i == _buttonIndex;
-                _buttons[i].Scale = focused ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
-                _buttons[i].Opacity = focused ? 1f : 0.85f;
+                var button = _buttons[i];
+                button.Scale = focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One;
+                
+                // Add focused look
+                if (focused)
+                {
+                    button.BackgroundColor = (i == 0) // Play button is usually index 0
+                        ? new Color(0.95f, 0.2f, 0.2f, 1f) 
+                        : new Color(0.35f, 0.35f, 0.35f, 1f);
+                }
+                else
+                {
+                    button.BackgroundColor = (i == 0)
+                        ? new Color(0.85f, 0.11f, 0.11f, 1f)
+                        : new Color(0.2f, 0.2f, 0.2f, 1f);
+                }
             }
+
             if (_buttonIndex >= 0)
             {
                 FocusManager.Instance.SetCurrentFocusView(_buttons[_buttonIndex]);

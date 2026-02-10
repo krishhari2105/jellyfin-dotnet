@@ -9,11 +9,22 @@ namespace JellyfinTizen.Screens
 {
     public class LibraryMoviesGridScreen : ScreenBase, IKeyHandler
     {
+        private const int TopBarHeight = 72;
+        private const int ContentStartY = TopBarHeight + 28;
+        private const int TopBarZ = 100;
         private const int PosterWidth = 260;
         private const int PosterHeight = 390;
         private const int Spacing = 30;
         private const int SidePadding = 80;
         private const int RowSpacing = 50;
+        private const int FocusBorder = 4;
+        private const int FocusPad = 20;
+        private const float FocusScale = 1.14f;
+        private const int CardTextHeight = 56;
+
+        // Jellyfin Blue (#00A4DC)
+        private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
+        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.45f);
 
         private readonly List<JellyfinMovie> _movies;
 
@@ -49,29 +60,32 @@ namespace JellyfinTizen.Screens
             var topBar = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 80,
+                HeightSpecification = TopBarHeight,
+                PositionZ = TopBarZ,
+                BackgroundColor = Color.Black,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(20, 0)
+                    CellPadding = new Size2D(16, 0)
                 },
-                Padding = new Extents(SidePadding, SidePadding, 20, 0)
+                Padding = new Extents(SidePadding, SidePadding, 16, 0)
             };
 
             var title = new TextLabel(libraryName)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 52,
+                PointSize = 46,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin
             };
 
             _settingsButton = new View
             {
-                WidthSpecification = 200,
-                HeightSpecification = 70,
+                WidthSpecification = 180,
+                HeightSpecification = 52,
                 BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                Focusable = true
+                Focusable = true,
+                CornerRadius = 26f
             };
 
             var settingsLabel = new TextLabel("Settings")
@@ -80,7 +94,7 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 28,
+                PointSize = 24,
                 TextColor = Color.White
             };
 
@@ -93,11 +107,11 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = 120
+                PositionY = ContentStartY
             };
 
-            root.Add(topBar);
             root.Add(_verticalContainer);
+            root.Add(topBar);
 
             BuildGrid();
 
@@ -112,10 +126,11 @@ namespace JellyfinTizen.Screens
 
             while (index < _movies.Count)
             {
+                var cardHeight = PosterHeight + CardTextHeight;
                 var viewport = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = PosterHeight,
+                    HeightSpecification = cardHeight + (FocusPad * 2),
                     PositionY = y,
                     ClippingMode = ClippingModeType.ClipChildren,
                     Padding = new Extents(SidePadding, SidePadding, 0, 0)
@@ -123,6 +138,7 @@ namespace JellyfinTizen.Screens
 
                 var rowContainer = new View
                 {
+                    PositionY = FocusPad,
                     Layout = new LinearLayout
                     {
                         LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -146,7 +162,7 @@ namespace JellyfinTizen.Screens
                 _rowContainers.Add(rowContainer);
                 _viewports.Add(viewport);
 
-                y += PosterHeight + RowSpacing;
+                y += cardHeight + (FocusPad * 2) + RowSpacing;
             }
         }
 
@@ -181,11 +197,55 @@ namespace JellyfinTizen.Screens
 
         private View CreatePosterCard(JellyfinMovie movie)
         {
-            var card = new View
+            var wrapper = new View
             {
                 WidthSpecification = PosterWidth,
+                HeightSpecification = PosterHeight + CardTextHeight,
+                Focusable = true,
+                BackgroundColor = Color.Transparent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical
+                }
+            };
+
+            var frame = new View
+            {
+                Name = "CardFrame",
+                WidthSpecification = PosterWidth,
                 HeightSpecification = PosterHeight,
-                Focusable = true
+                CornerRadius = 16.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal
+                }
+            };
+
+            var inner = new View
+            {
+                Name = "CardInner",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                CornerRadius = 12.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal
+                }
+            };
+
+            var content = new View
+            {
+                Name = "CardContent",
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                ClippingMode = ClippingModeType.ClipChildren
             };
 
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
@@ -213,18 +273,17 @@ namespace JellyfinTizen.Screens
 
             var poster = new ImageView
             {
+                Name = "CardImage",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false   // 🔑 CRITICAL on Tizen
             };
 
-            var titleOverlay = new TextLabel(movie.Name)
+            var titleText = new TextLabel(movie.Name)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 80,
-                PositionY = PosterHeight - 80,
-                BackgroundColor = new Color(0, 0, 0, 0.65f),
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 TextColor = Color.White,
                 PointSize = 22,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -233,10 +292,27 @@ namespace JellyfinTizen.Screens
                 LineWrapMode = LineWrapMode.Word
             };
 
-            card.Add(poster);
-            card.Add(titleOverlay);
+            var textContainer = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = CardTextHeight,
+                BackgroundColor = Color.Transparent,
+                Padding = new Extents(8, 8, 6, 0),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical
+                }
+            };
 
-            return card;
+            content.Add(poster);
+            inner.Add(content);
+            frame.Add(inner);
+
+            textContainer.Add(titleText);
+            wrapper.Add(frame);
+            wrapper.Add(textContainer);
+
+            return wrapper;
         }
 
 
@@ -297,25 +373,85 @@ namespace JellyfinTizen.Screens
 
         private void Highlight(bool focused)
         {
-            _grid[_rowIndex][_colIndex].Scale =
-                focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One;
+            var card = _grid[_rowIndex][_colIndex];
+            var frame = GetCardFrame(card);
+            var content = GetCardContent(card);
+            if (content != null)
+                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+
+            card.Scale = Vector3.One;
+            card.PositionZ = focused ? 20 : 0;
+
+            if (frame != null)
+            {
+                frame.CornerRadius = 16.0f;
+                if (focused)
+                {
+                    frame.BackgroundColor = _focusBorderColor;
+                    frame.BoxShadow = new Shadow(8.0f, new Color(0.0f, 0.64f, 0.86f, 0.25f), new Vector2(0, 0));
+                }
+                else
+                {
+                    frame.BackgroundColor = Color.Transparent;
+                    frame.BoxShadow = null;
+                }
+            }
         }
+
+        private View GetCardFrame(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                    return child;
+            }
+            return null;
+        }
+
+        private View GetCardInner(View card)
+        {
+            foreach (var child in card.Children)
+            {
+                if (child.Name == "CardFrame")
+                {
+                    foreach (var frameChild in child.Children)
+                    {
+                        if (frameChild.Name == "CardInner")
+                            return frameChild;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private View GetCardContent(View card)
+        {
+            var inner = GetCardInner(card);
+            if (inner == null) return null;
+            foreach (var child in inner.Children)
+            {
+                if (child.Name == "CardContent")
+                    return child;
+            }
+            return null;
+        }
+
 
         private void FocusSettings(bool focused)
         {
             _settingsFocused = focused;
 
-            _settingsButton.BackgroundColor = focused
-                ? new Color(0.35f, 0.35f, 0.35f, 1f)
-                : new Color(0.2f, 0.2f, 0.2f, 1f);
+            _settingsButton.Scale = focused ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
 
             if (focused)
             {
+                _settingsButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
                 Highlight(false);
                 FocusManager.Instance.SetCurrentFocusView(_settingsButton);
             }
             else
             {
+                _settingsButton.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f);
                 Highlight(true);
                 FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
             }
@@ -326,10 +462,22 @@ namespace JellyfinTizen.Screens
             _settingsPanel = new View
             {
                 WidthSpecification = 420,
-                HeightSpecification = 260,
-                BackgroundColor = new Color(0, 0, 0, 0.9f),
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                BackgroundColor = new Color(0, 0, 0, 1.0f),
                 PositionX = Window.Default.Size.Width - 520,
-                PositionY = 120
+                PositionY = TopBarHeight + 16,
+                PositionZ = TopBarZ + 5,
+                CornerRadius = 14f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                BorderlineWidth = 1.5f,
+                BorderlineColor = new Color(0.2f, 0.2f, 0.2f, 1f),
+                Padding = new Extents(16, 16, 16, 16),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 12)
+                }
             };
 
             _settingsPanel.Hide();
@@ -337,8 +485,8 @@ namespace JellyfinTizen.Screens
             var title = new TextLabel("Settings")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 60,
-                PointSize = 28,
+                HeightSpecification = 48,
+                PointSize = 26,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -348,7 +496,6 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = 70,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -360,7 +507,6 @@ namespace JellyfinTizen.Screens
             _settingsOptions.Add(CreateSettingsOption("Playback Settings"));
             _settingsOptions.Add(CreateSettingsOption("Logout"));
             _settingsOptions.Add(CreateSettingsOption("Switch Server"));
-            _settingsOptions.Add(CreateSettingsOption("Close"));
 
             foreach (var opt in _settingsOptions)
                 list.Add(opt);
@@ -376,16 +522,19 @@ namespace JellyfinTizen.Screens
             var row = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 60,
-                BackgroundColor = new Color(1, 1, 1, 0.1f)
+                HeightSpecification = 56,
+                BackgroundColor = new Color(1, 1, 1, 0.12f),
+                CornerRadius = 10f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren
             };
 
             var label = new TextLabel(text)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 26,
-                TextColor = new Color(1, 1, 1, 0.85f),
+                PointSize = 24,
+                TextColor = new Color(1, 1, 1, 0.9f),
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -434,8 +583,8 @@ namespace JellyfinTizen.Screens
             for (int i = 0; i < _settingsOptions.Count; i++)
             {
                 _settingsOptions[i].BackgroundColor = i == _settingsIndex
-                    ? new Color(1, 1, 1, 0.2f)
-                    : new Color(1, 1, 1, 0.1f);
+                    ? new Color(1, 1, 1, 0.22f)
+                    : new Color(1, 1, 1, 0.12f);
             }
         }
 
@@ -521,9 +670,9 @@ namespace JellyfinTizen.Screens
         private void ScrollVerticalIfNeeded()
         {
             var viewportHeight = Window.Default.Size.Height;
-            var rowHeight = PosterHeight + RowSpacing;
+            var rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
 
-            var currentOffset = -_verticalContainer.PositionY + 120;
+            var currentOffset = -_verticalContainer.PositionY + ContentStartY;
 
             var rowTop = _rowIndex * rowHeight;
             var rowBottom = rowTop + rowHeight;
@@ -543,6 +692,9 @@ namespace JellyfinTizen.Screens
                 var delta = visibleTop - rowTop;
                 _verticalContainer.PositionY += delta;
             }
+
+            if (_verticalContainer.PositionY > ContentStartY)
+                _verticalContainer.PositionY = ContentStartY;
         }
 
 

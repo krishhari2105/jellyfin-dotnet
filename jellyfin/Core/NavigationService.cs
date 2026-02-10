@@ -18,6 +18,9 @@ namespace JellyfinTizen.Core
             _window = window;
             // standard NUI event - this works!
             _window.KeyEvent += OnKeyEvent; 
+
+            // Remove the default blue focus border globally
+            FocusManager.Instance.FocusIndicator = null;
         }
 
         private static void OnKeyEvent(object sender, Window.KeyEventArgs e)

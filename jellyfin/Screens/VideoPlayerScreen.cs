@@ -11,6 +11,8 @@ using System.Threading.Tasks;
 using System.IO;
 using System.Net.Http;
 using System.Linq;
+using System.Text.RegularExpressions;
+using System.Net;
 
 namespace JellyfinTizen.Screens
 {
@@ -20,8 +22,6 @@ namespace JellyfinTizen.Screens
         private JellyfinMovie _movie;
         private int _startPositionMs;
         private bool _initialSeekDone = false;
-        private View _debugOverlay;
-        private TextLabel _debugText;
         private View _osd;
         private View _topOsd;
         private bool _osdVisible;
@@ -35,16 +35,18 @@ namespace JellyfinTizen.Screens
         private View _previewFill;
         private Timer _progressTimer;
         private View _audioOverlay;
-        private PlayerTrackInfo _audioTrackInfo;
         private int _audioIndex;
         private bool _audioOverlayVisible;
         private View _subtitleOverlay;
-        private PlayerTrackInfo _subtitleTrackInfo;
         private int _subtitleIndex;
         private bool _subtitleOverlayVisible;
         private bool _subtitleEnabled;
         private TextLabel _subtitleText;
         private Timer _subtitleHideTimer;
+        private Timer _subtitleRenderTimer;
+        private List<SubtitleCue> _subtitleCues = new List<SubtitleCue>();
+        private bool _useParsedSubtitleRenderer;
+        private int _activeSubtitleCueIndex = -1;
         private Timer _reportProgressTimer;
         private bool _isFinished;
         private View _progressThumb;
@@ -56,9 +58,6 @@ namespace JellyfinTizen.Screens
         private string _playSessionId;
         private int? _initialSubtitleIndex;
         private bool _burnIn;
-        
-        // Track if we have external subtitles
-        private bool _hasExternalSubtitle = false;
         private string _externalSubtitlePath = null;
         private string _externalSubtitleLanguage = "EXTERNAL"; 
         private int? _externalSubtitleIndex = null;
@@ -67,14 +66,36 @@ namespace JellyfinTizen.Screens
 
         // OSD Controls
         private View _controlsContainer;
+        private View _subtitleOffsetButton;
         private View _prevButton;
         private View _nextButton;
+        private View _subtitleOffsetTrackContainer;
+        private View _subtitleOffsetThumb;
+        private View _subtitleOffsetCenterMarker;
+        private bool _subtitleOffsetAdjustMode;
+        private int _subtitleOffsetMs;
+        private bool _subtitleOffsetBurnInWarningShown;
+        private int _osdButtonCount = 1;
         private int _osdFocusRow = 0; // 0 = Seekbar, 1 = Buttons
-        private int _buttonFocusIndex = 1; 
+        private int _buttonFocusIndex = 0;
+
+        private const int OffsetButtonIndex = 0;
+        private const int PrevButtonIndex = 1;
+        private const int NextButtonIndex = 2;
+        private const int SubtitleOffsetStepMs = 100;
+        private const int SubtitleOffsetLimitMs = 5000;
+        private const int SubtitleOffsetTrackWidth = 280;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
         private int? _overrideAudioIndex = null;
+
+        private struct SubtitleCue
+        {
+            public int StartMs;
+            public int EndMs;
+            public string Text;
+        }
 
         public VideoPlayerScreen(JellyfinMovie movie, int startPositionMs = 0, int? subtitleStreamIndex = null, bool burnIn = false)
         {
@@ -88,50 +109,8 @@ namespace JellyfinTizen.Screens
             BackgroundColor = Color.Transparent;
         }
 
-        private void CreateDebugOverlay()
-        {
-            if (_debugOverlay != null) return;
-
-            _debugOverlay = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 500,
-                BackgroundColor = new Color(0, 0, 0, 0.7f),
-                Position = new Position(0, 0),
-                ParentOrigin = Tizen.NUI.ParentOrigin.TopLeft,
-                PivotPoint = Tizen.NUI.PivotPoint.TopLeft,
-            };
-
-            _debugText = new TextLabel
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                TextColor = Color.Yellow,
-                PointSize = 14,
-                MultiLine = true,
-                HorizontalAlignment = HorizontalAlignment.Begin,
-                VerticalAlignment = VerticalAlignment.Top,
-                Text = "Initializing Debug Log..."
-            };
-
-            _debugText.Padding = new Extents(20, 20, 20, 20);
-            _debugOverlay.Add(_debugText);
-            Add(_debugOverlay);
-        }
-
         public void Log(string message)
         {
-            Console.WriteLine($"[JELLYFIN_PLAYER] {message}");
-            Tizen.Applications.CoreApplication.Post(() =>
-            {
-                if (_debugText != null)
-                {
-                    string current = _debugText.Text;
-                    var lines = current.Split('\n');
-                    if (lines.Length > 15) current = string.Join("\n", lines, 0, 15);
-                    _debugText.Text = $"[{DateTime.Now:HH:mm:ss}] {message}\n" + current;
-                }
-            });
         }
 
         public override void OnShow()
@@ -160,10 +139,13 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                if (_debugOverlay == null) CreateDebugOverlay();
                 Log($"Initializing Player for: {_movie.Name}");
 
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
+                _subtitleOffsetBurnInWarningShown = false;
+                _useParsedSubtitleRenderer = false;
+                _subtitleCues.Clear();
+                _activeSubtitleCueIndex = -1;
                 _player = new Player();
                 
                 _player.ErrorOccurred += (s, e) => Log($"!!! PLAYER ERROR !!!: {e.Error}");
@@ -307,7 +289,6 @@ namespace JellyfinTizen.Screens
                     if (externalSubStreams != null && externalSubStreams.Count > 0)
                     {
                         var subStream = externalSubStreams.First();
-                        _hasExternalSubtitle = true;
                         _externalSubtitleIndex = subStream.Index;
                         _externalSubtitleMediaSourceId = mediaSource.Id;
                         _externalSubtitleCodec = subStream.Codec;
@@ -324,7 +305,6 @@ namespace JellyfinTizen.Screens
                             if (_playMethod == "Transcode")
                             {
                                 var subStream = internalSubStreams.First();
-                                _hasExternalSubtitle = true;
                                 _externalSubtitleIndex = subStream.Index;
                                 _externalSubtitleMediaSourceId = mediaSource.Id;
                                 _externalSubtitleCodec = subStream.Codec;
@@ -343,7 +323,6 @@ namespace JellyfinTizen.Screens
                         var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (subStream != null)
                         {
-                            _hasExternalSubtitle = true;
                             _externalSubtitleIndex = _initialSubtitleIndex.Value;
                             _externalSubtitleMediaSourceId = mediaSource.Id;
                             _externalSubtitleCodec = subStream.Codec;
@@ -363,8 +342,7 @@ namespace JellyfinTizen.Screens
                     try 
                     {
                         var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
-                        // If External OR Transcoding (Extract Internal), download it.
-                        if (subStream != null && (subStream.IsExternal || _playMethod == "Transcode"))
+                        if (subStream != null)
                         {
                             await DownloadAndSetSubtitle(mediaSource.Id, _initialSubtitleIndex.Value, subStream.Codec);
                         }
@@ -385,7 +363,7 @@ namespace JellyfinTizen.Screens
                     Log($"Subtitle Tracks: {subCount}");
 
                     // Map Jellyfin Index to Tizen Index (for DirectPlay)
-                    if (_initialSubtitleIndex.HasValue && subCount > 0)
+                    if (_initialSubtitleIndex.HasValue && subCount > 0 && string.IsNullOrEmpty(_externalSubtitlePath))
                     {
                         var embeddedSubs = mediaSource.MediaStreams?
                             .Where(s => s.Type == "Subtitle" && !s.IsExternal)
@@ -406,6 +384,8 @@ namespace JellyfinTizen.Screens
                     }
                 } catch {}
 
+                if (_useParsedSubtitleRenderer) TryDisableNativeSubtitleTrack();
+
                 if (_startPositionMs > 0)
                 {
                     Log($"Resuming at {_startPositionMs}ms");
@@ -413,6 +393,7 @@ namespace JellyfinTizen.Screens
                 }
 
                 _player.Start();
+                ApplySubtitleOffset();
                 Log("Playback Started.");
 
                 var info = new PlaybackProgressInfo
@@ -428,17 +409,11 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async Task DownloadAndSetSubtitle(string mediaSourceId, int subtitleIndex, string codec)
+        private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, int subtitleIndex, string _codec)
         {
             try
             {
-                string ext = "vtt"; 
-                if (!string.IsNullOrEmpty(codec))
-                {
-                    var c = codec.ToLowerInvariant();
-                    if (c.Contains("srt") || c.Contains("subrip")) ext = "srt";
-                    else if (c.Contains("ass") || c.Contains("ssa")) ext = "ssa";
-                }
+                string ext = "srt";
 
                 var apiKey = AppState.AccessToken;
                 var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -459,15 +434,221 @@ namespace JellyfinTizen.Screens
                 }
 
                 Log($"Setting Subtitle Path: {localPath}");
-                _player.SetSubtitle(localPath);
-                
-                _hasExternalSubtitle = true;
                 _externalSubtitlePath = localPath;
+
+                if (TryLoadSrtSubtitleCues(localPath))
+                {
+                    _useParsedSubtitleRenderer = true;
+                    TryDisableNativeSubtitleTrack();
+                    StartSubtitleRenderTimer();
+                    Log($"Subtitle renderer: Parsed SRT cues ({_subtitleCues.Count})");
+                }
+                else
+                {
+                    _useParsedSubtitleRenderer = false;
+                    _player.SetSubtitle(localPath);
+                    Log("Subtitle renderer: Player native event path");
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
                 Log($"Failed to set subtitle: {ex.Message}");
+                _externalSubtitlePath = null;
+                _useParsedSubtitleRenderer = false;
+                _subtitleCues.Clear();
+                StopSubtitleRenderTimer();
+                return false;
             }
+        }
+
+        private bool TryLoadSrtSubtitleCues(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+
+                string raw = File.ReadAllText(path);
+                string normalized = raw.Replace("\r\n", "\n").Replace('\r', '\n');
+                string[] blocks = normalized.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
+                var cues = new List<SubtitleCue>();
+
+                foreach (string block in blocks)
+                {
+                    var lines = block.Split('\n')
+                        .Select(l => l.TrimEnd())
+                        .Where(l => !string.IsNullOrWhiteSpace(l))
+                        .ToList();
+
+                    if (lines.Count < 2) continue;
+
+                    int timeLineIndex = lines[0].Contains("-->") ? 0 : 1;
+                    if (timeLineIndex >= lines.Count) continue;
+
+                    string timeLine = lines[timeLineIndex];
+                    string[] parts = timeLine.Split(new[] { "-->" }, StringSplitOptions.None);
+                    if (parts.Length != 2) continue;
+
+                    if (!TryParseSubtitleTimestamp(parts[0], out int startMs)) continue;
+                    if (!TryParseSubtitleTimestamp(parts[1], out int endMs)) continue;
+
+                    if (endMs <= startMs) endMs = startMs + 500;
+
+                    string cueText = string.Join("\n", lines.Skip(timeLineIndex + 1));
+                    if (string.IsNullOrWhiteSpace(cueText)) continue;
+
+                    cues.Add(new SubtitleCue
+                    {
+                        StartMs = startMs,
+                        EndMs = endMs,
+                        Text = cueText
+                    });
+                }
+
+                cues.Sort((a, b) => a.StartMs.CompareTo(b.StartMs));
+                _subtitleCues = cues;
+                _activeSubtitleCueIndex = -1;
+                if (cues.Count > 0)
+                {
+                    var first = cues[0];
+                    var last = cues[cues.Count - 1];
+                    Log($"Parsed SRT timing: first={first.StartMs}ms, last={last.EndMs}ms");
+                }
+                return cues.Count > 0;
+            }
+            catch (Exception ex)
+            {
+                Log($"SRT parse failed: {ex.Message}");
+                _subtitleCues.Clear();
+                _activeSubtitleCueIndex = -1;
+                return false;
+            }
+        }
+
+        private bool TryParseSubtitleTimestamp(string input, out int totalMs)
+        {
+            totalMs = 0;
+            if (string.IsNullOrWhiteSpace(input)) return false;
+
+            string token = input.Trim();
+            int spaceIndex = token.IndexOf(' ');
+            if (spaceIndex >= 0) token = token.Substring(0, spaceIndex);
+
+            token = token.Replace('.', ',');
+            string[] parts = token.Split(':');
+            if (parts.Length != 3) return false;
+
+            if (!int.TryParse(parts[0], out int hours)) return false;
+            if (!int.TryParse(parts[1], out int minutes)) return false;
+
+            string[] secParts = parts[2].Split(',');
+            if (secParts.Length != 2) return false;
+            if (!int.TryParse(secParts[0], out int seconds)) return false;
+
+            string msPart = secParts[1].Trim();
+            if (msPart.Length > 3) msPart = msPart.Substring(0, 3);
+            while (msPart.Length < 3) msPart += "0";
+            if (!int.TryParse(msPart, out int millis)) return false;
+
+            totalMs = (((hours * 60) + minutes) * 60 + seconds) * 1000 + millis;
+            return true;
+        }
+
+        private void StartSubtitleRenderTimer()
+        {
+            StopSubtitleRenderTimer();
+            _subtitleHideTimer?.Stop();
+            _activeSubtitleCueIndex = -1;
+            _subtitleRenderTimer = new Timer(80);
+            _subtitleRenderTimer.Tick += OnSubtitleRenderTick;
+            _subtitleRenderTimer.Start();
+            UpdateParsedSubtitleRender();
+        }
+
+        private void StopSubtitleRenderTimer()
+        {
+            try
+            {
+                _subtitleRenderTimer?.Stop();
+                _subtitleRenderTimer = null;
+            }
+            catch { }
+        }
+
+        private bool OnSubtitleRenderTick(object sender, Timer.TickEventArgs e)
+        {
+            UpdateParsedSubtitleRender();
+            return true;
+        }
+
+        private void UpdateParsedSubtitleRender()
+        {
+            if (!_useParsedSubtitleRenderer || _subtitleText == null || _player == null || !_subtitleEnabled || _subtitleCues.Count == 0)
+            {
+                _subtitleText?.Hide();
+                _activeSubtitleCueIndex = -1;
+                return;
+            }
+
+            int queryPosMs = GetPlayPositionMs() - _subtitleOffsetMs;
+            if (queryPosMs < 0)
+            {
+                _subtitleText.Hide();
+                _activeSubtitleCueIndex = -1;
+                return;
+            }
+
+            int cueIndex = -1;
+            for (int i = 0; i < _subtitleCues.Count; i++)
+            {
+                var cue = _subtitleCues[i];
+                if (queryPosMs < cue.StartMs) break;
+                if (queryPosMs <= cue.EndMs)
+                {
+                    cueIndex = i;
+                    break;
+                }
+            }
+
+            if (cueIndex == -1)
+            {
+                if (_activeSubtitleCueIndex != -1) _subtitleText.Hide();
+                _activeSubtitleCueIndex = -1;
+                return;
+            }
+
+            if (cueIndex != _activeSubtitleCueIndex)
+            {
+                _activeSubtitleCueIndex = cueIndex;
+                _subtitleText.Text = NormalizeParsedCueText(_subtitleCues[cueIndex].Text);
+                _subtitleText.Show();
+
+            }
+        }
+
+        private string NormalizeParsedCueText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+
+            string normalized = text.Replace("\r", "").Replace("\\N", "\n").Replace("\\h", " ");
+            normalized = Regex.Replace(normalized, "(?i)<br\\s*/?>", "\n");
+            // Remove common ASS/SSA inline override tags.
+            normalized = Regex.Replace(normalized, "\\{\\\\[^\\}]*\\}", string.Empty);
+            // Strip HTML-like formatting tags from SRT payloads.
+            normalized = Regex.Replace(normalized, "<[^>]+>", string.Empty);
+            normalized = WebUtility.HtmlDecode(normalized);
+            return normalized.Trim();
+        }
+
+        private void TryDisableNativeSubtitleTrack()
+        {
+            if (_player == null) return;
+            try
+            {
+                if (_player.SubtitleTrackInfo.GetCount() > 0) _player.SubtitleTrackInfo.Selected = -1;
+            }
+            catch { }
         }
 
         private void CreateOSD()
@@ -531,13 +712,24 @@ namespace JellyfinTizen.Screens
             progressRow.Add(_durationLabel);
             progressRow.Add(_progressThumb);
 
-            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 170, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(50, 0) } };
+            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 170, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(40, 0) } };
             _prevButton = CreateOsdButton("Prev");
             _nextButton = CreateOsdButton("Next");
 
-            if (_movie.ItemType == "Episode") { _controlsContainer.Add(_prevButton); _controlsContainer.Add(_nextButton); }
+            _osdButtonCount = 0;
+            if (_movie.ItemType == "Episode")
+            {
+                _controlsContainer.Add(_prevButton);
+                _controlsContainer.Add(_nextButton);
+                _osdButtonCount = 2;
+                _buttonFocusIndex = 0; // 0 = Prev, 1 = Next
+            }
+
+            CreateSubtitleOffsetTrack(screenWidth);
+            UpdateSubtitleOffsetUI();
 
             _osd.Add(progressRow);
+            _osd.Add(_subtitleOffsetTrackContainer);
             _osd.Add(_controlsContainer);
             Add(_osd);
 
@@ -553,10 +745,176 @@ namespace JellyfinTizen.Screens
 
         private View CreateOsdButton(string text)
         {
-            var btn = new View { WidthSpecification = 160, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
+            var btn = new View { WidthSpecification = 180, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 24 };
             btn.Add(label);
             return btn;
+        }
+
+        private void SetButtonVisual(View button, bool focused, bool editing = false)
+        {
+             if (button == null) return;
+             button.BackgroundColor = focused
+                 ? (editing ? new Color(0, 164f / 255f, 220f / 255f, 1f) : new Color(0.85f, 0.11f, 0.11f, 1f))
+                 : new Color(1, 1, 1, 0.15f);
+             button.Scale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
+        }
+
+        private void CreateSubtitleOffsetTrack(int screenWidth)
+        {
+            int trackX = (screenWidth - SubtitleOffsetTrackWidth) / 2;
+            _subtitleOffsetTrackContainer = new View
+            {
+                WidthSpecification = SubtitleOffsetTrackWidth,
+                HeightSpecification = 36,
+                PositionX = trackX,
+                PositionY = 138
+            };
+
+            var trackLine = new View
+            {
+                WidthSpecification = SubtitleOffsetTrackWidth,
+                HeightSpecification = 2,
+                PositionY = 17,
+                BackgroundColor = new Color(1, 1, 1, 0.45f),
+                CornerRadius = 1.0f
+            };
+
+            _subtitleOffsetCenterMarker = new View
+            {
+                WidthSpecification = 2,
+                HeightSpecification = 16,
+                PositionX = (SubtitleOffsetTrackWidth / 2) - 1,
+                PositionY = 10,
+                BackgroundColor = new Color(1, 1, 1, 0.85f)
+            };
+
+            _subtitleOffsetThumb = new View
+            {
+                WidthSpecification = 12,
+                HeightSpecification = 12,
+                PositionY = 12,
+                BackgroundColor = new Color(0, 164f / 255f, 220f / 255f, 1f),
+                CornerRadius = 6.0f
+            };
+
+            _subtitleOffsetTrackContainer.Add(trackLine);
+            _subtitleOffsetTrackContainer.Add(_subtitleOffsetCenterMarker);
+            _subtitleOffsetTrackContainer.Add(_subtitleOffsetThumb);
+            _subtitleOffsetTrackContainer.Hide();
+        }
+
+        private void SetOsdButtonText(View button, string text)
+        {
+            if (button == null || button.ChildCount == 0) return;
+            if (button.GetChildAt(0) is TextLabel label) label.Text = text;
+        }
+
+        private string FormatSubtitleOffsetLabel()
+        {
+            float seconds = _subtitleOffsetMs / 1000f;
+            string sign = seconds > 0 ? "+" : "";
+            return $"{sign}{seconds:0.0}s";
+        }
+
+        private void UpdateSubtitleOffsetUI()
+        {
+            if (_subtitleOffsetButton != null && _subtitleOffsetButton.ChildCount > 0)
+            {
+                if (_subtitleOffsetButton.GetChildAt(0) is TextLabel label)
+                {
+                    label.Text = $"Offset: {FormatSubtitleOffsetLabel()}";
+                }
+            }
+            UpdateSubtitleOffsetTrackThumb();
+        }
+
+        private void UpdateSubtitleOffsetTrackThumb()
+        {
+            if (_subtitleOffsetThumb == null) return;
+            float ratio = (float)(_subtitleOffsetMs + SubtitleOffsetLimitMs) / (SubtitleOffsetLimitMs * 2);
+            ratio = Math.Clamp(ratio, 0f, 1f);
+            int usableWidth = SubtitleOffsetTrackWidth - _subtitleOffsetThumb.WidthSpecification;
+            _subtitleOffsetThumb.PositionX = (int)Math.Round(usableWidth * ratio);
+        }
+
+        private void AdjustSubtitleOffset(int deltaMs)
+        {
+            int newOffset = Math.Clamp(_subtitleOffsetMs + deltaMs, -SubtitleOffsetLimitMs, SubtitleOffsetLimitMs);
+            if (newOffset == _subtitleOffsetMs) return;
+
+            _subtitleOffsetMs = newOffset;
+            ApplySubtitleOffset();
+            UpdateSubtitleOffsetUI();
+            _osdTimer.Stop();
+            _osdTimer.Start();
+            Log($"Subtitle offset: {_subtitleOffsetMs}ms");
+        }
+
+        private void ApplySubtitleOffset()
+        {
+            if (_player == null) return;
+            if (_useParsedSubtitleRenderer)
+            {
+                _activeSubtitleCueIndex = -1;
+                UpdateParsedSubtitleRender();
+                return;
+            }
+
+            if (!_subtitleEnabled) return;
+            if (_burnIn)
+            {
+                if (!_subtitleOffsetBurnInWarningShown)
+                {
+                    Log("Subtitle offset unavailable with Burn-In subtitles. Disable Burn-In in Settings.");
+                    _subtitleOffsetBurnInWarningShown = true;
+                }
+                return;
+            }
+
+            try
+            {
+                _player.SetSubtitleOffset(_subtitleOffsetMs);
+            }
+            catch (Exception ex)
+            {
+                Log($"Subtitle offset apply failed: {ex.Message}");
+            }
+        }
+
+        private void ToggleSubtitleOffsetAdjustMode()
+        {
+            _subtitleOffsetAdjustMode = !_subtitleOffsetAdjustMode;
+            if (_subtitleOffsetTrackContainer != null)
+            {
+                if (_subtitleOffsetAdjustMode) _subtitleOffsetTrackContainer.Show();
+                else _subtitleOffsetTrackContainer.Hide();
+            }
+            // Update visual for subtitle offset button
+            if (_subtitleOffsetButton != null)
+            {
+                _subtitleOffsetButton.BackgroundColor = _subtitleOffsetAdjustMode 
+                    ? new Color(0, 164f / 255f, 220f / 255f, 1f) // Blue when editing
+                    : new Color(1, 1, 1, 0.15f); // Default transparent
+                
+                _subtitleOffsetButton.Scale = _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
+            }
+            _osdTimer.Stop();
+            _osdTimer.Start();
+        }
+
+        private void ExitSubtitleOffsetAdjustMode()
+        {
+            if (!_subtitleOffsetAdjustMode) return;
+            _subtitleOffsetAdjustMode = false;
+            _subtitleOffsetTrackContainer?.Hide();
+            // Reset subtitle offset button visual
+            if (_subtitleOffsetButton != null)
+            {
+                _subtitleOffsetButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
+                _subtitleOffsetButton.Scale = Vector3.One;
+            }
+            UpdateOsdFocus();
         }
 
         private void UpdateProgress()
@@ -646,16 +1004,14 @@ namespace JellyfinTizen.Screens
 
         private void CreateSubtitleOverlay()
         {
-            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 25.0f, ClippingMode = ClippingModeType.ClipChildren };
+            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren };
             _subtitleOverlay.Hide();
             Add(_subtitleOverlay);
         }
 
         private void CreateSubtitleText()
         {
-            _subtitleText = new TextLabel("") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 200, PointSize = 46, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, BackgroundColor = Color.Transparent, PositionY = Window.Default.Size.Height - 200, MultiLine = true, LineWrapMode = LineWrapMode.Word, Padding = new Extents(150, 150, 0, 0), EnableMarkup = true };
-            var shadow = new PropertyMap(); shadow.Add("offset", new PropertyValue(new Vector2(2, 2))); shadow.Add("color", new PropertyValue(new Color(0, 0, 0, 1.0f)));
-            _subtitleText.Shadow = shadow;
+            _subtitleText = new TextLabel("") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 200, PointSize = 46, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, BackgroundColor = Color.Transparent, PositionY = Window.Default.Size.Height - 250, MultiLine = true, LineWrapMode = LineWrapMode.Word, Padding = new Extents(150, 150, 0, 0), EnableMarkup = false };
             _subtitleText.Hide();
             Add(_subtitleText);
         }
@@ -665,6 +1021,7 @@ namespace JellyfinTizen.Screens
             if (_player == null) return;
             if (_subtitleOverlay == null) CreateSubtitleOverlay();
             HideAudioOverlay();
+            ExitSubtitleOffsetAdjustMode();
 
             // 1. Use Jellyfin Metadata to list ALL tracks (fixes Tizen HLS limitation)
             var subtitleStreams = _currentMediaSource?.MediaStreams?
@@ -675,7 +1032,30 @@ namespace JellyfinTizen.Screens
             if (_subtitleOverlay.ChildCount == 0)
             {
                 _subtitleOverlay.Add(new TextLabel("Subtitles") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
-                _subtitleScrollView = new ScrollableBase { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PositionY = 80, HeightSpecification = 420, ScrollingDirection = ScrollableBase.Direction.Vertical };
+                
+                // Subtitle Offset Button and Track - Minimal Design
+                var offsetContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 80 };
+                _subtitleOffsetButton = new View { WidthSpecification = 280, HeightSpecification = 45, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 22.5f, PositionX = 85 };
+                var offsetLabel = new TextLabel($"Offset: {FormatSubtitleOffsetLabel()}") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 20 };
+                _subtitleOffsetButton.Add(offsetLabel);
+                offsetContainer.Add(_subtitleOffsetButton);
+                
+                CreateSubtitleOffsetTrack(280); // Smaller track width
+                _subtitleOffsetTrackContainer.PositionX = 85;
+                _subtitleOffsetTrackContainer.PositionY = 40;
+                offsetContainer.Add(_subtitleOffsetTrackContainer);
+                
+                _subtitleOverlay.Add(offsetContainer);
+                
+                _subtitleScrollView = new ScrollableBase 
+                { 
+                    WidthSpecification = 410, 
+                    HeightSpecification = 320, 
+                    PositionX = 20, 
+                    PositionY = 160, 
+                    ScrollingDirection = ScrollableBase.Direction.Vertical,
+                    BackgroundColor = Color.Transparent
+                };
                 _subtitleListContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FitToChildren, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Vertical, CellPadding = new Size2D(0, 5) } };
                 _subtitleScrollView.Add(_subtitleListContainer);
                 _subtitleOverlay.Add(_subtitleScrollView);
@@ -707,25 +1087,67 @@ namespace JellyfinTizen.Screens
 
         private View CreateSubtitleRow(string text, string indexId)
         {
-            var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 12.0f, Margin = new Extents(20, 20, 5, 5) };
+            var row = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60,
+                BackgroundColor = Color.Transparent, CornerRadius = 8.0f,
+                Margin = new Extents(20, 20, 5, 5),
+                Focusable = true
+            };
             row.Name = indexId; 
+            
+            row.FocusGained += (s, e) => {
+                // When Tizen moves focus here, sync our internal index and visuals
+                if (_subtitleListContainer != null)
+                {
+                    // Find index of this row
+                    for (int i = 0; i < _subtitleListContainer.ChildCount; i++)
+                    {
+                        if (_subtitleListContainer.GetChildAt((uint)i) == row)
+                        {
+                            _subtitleIndex = i;
+                            UpdateSubtitleVisuals(false); // Update colors only
+                            break;
+                        }
+                    }
+                }
+            };
+
+            row.FocusLost += (s, e) =>
+            {
+                row.BackgroundColor = Color.Transparent;
+                var label = row.GetChildAt(0) as TextLabel;
+                if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
+                row.Scale = Vector3.One;
+            };
+            
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 28, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
             row.Add(label);
             return row;
         }
 
-        private void UpdateSubtitleVisuals()
+        private void UpdateSubtitleVisuals(bool setFocus = true)
         {
             if (_subtitleListContainer == null) return;
             int count = (int)_subtitleListContainer.ChildCount;
+            View focusedView = null;
             for (int i = 0; i < count; i++)
             {
                 var row = _subtitleListContainer.GetChildAt((uint)i);
                 bool selected = (i == _subtitleIndex);
-                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.2f) : Color.Transparent;
+                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
+                row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
                 var label = row.GetChildAt(0) as TextLabel;
-                if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+                if (label != null)
+                {
+                    label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+                }
+                if (selected)
+                {
+                    focusedView = row;
+                }
             }
+            if (setFocus && focusedView != null) FocusManager.Instance.SetCurrentFocusView(focusedView);
         }
 
         private void MoveSubtitleSelection(int delta)
@@ -749,9 +1171,17 @@ namespace JellyfinTizen.Screens
             if (selectedName == "OFF_INDEX")
             {
                 _subtitleEnabled = false;
+                _useParsedSubtitleRenderer = false;
+                _subtitleCues.Clear();
+                _activeSubtitleCueIndex = -1;
+                StopSubtitleRenderTimer();
                 Log("Subtitles: Disabled");
                 try { _player?.ClearSubtitle(); } catch { }
-                RunOnUiThread(() => { _subtitleHideTimer?.Stop(); _subtitleText?.Hide(); });
+                RunOnUiThread(() =>
+                {
+                    _subtitleHideTimer?.Stop();
+                    _subtitleText?.Hide();
+                });
                 return;
             }
 
@@ -762,33 +1192,47 @@ namespace JellyfinTizen.Screens
             var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             if (subStream == null) return;
 
-            // Try Native Switch if DirectPlay + Internal
-            bool tryNative = _playMethod == "DirectPlay" && !subStream.IsExternal;
+            bool sidecarSet = false;
+            if (!_burnIn)
+            {
+                sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, jellyfinStreamIndex, subStream.Codec);
+                if (sidecarSet)
+                {
+                    ApplySubtitleOffset();
+                    return;
+                }
+            }
 
+            // Fallback: native internal switch if sidecar extraction is unavailable.
+            bool tryNative = _playMethod == "DirectPlay" && !subStream.IsExternal;
             if (tryNative)
             {
-                try 
+                try
                 {
                     var embeddedSubs = _currentMediaSource.MediaStreams.Where(s => s.Type == "Subtitle" && !s.IsExternal).OrderBy(s => s.Index).ToList();
                     int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
                     if (tizenIndex != -1 && tizenIndex < _player.SubtitleTrackInfo.GetCount())
                     {
                         Log($"Native Switch to Tizen Subtitle Track {tizenIndex}");
+                        _useParsedSubtitleRenderer = false;
+                        _subtitleCues.Clear();
+                        _activeSubtitleCueIndex = -1;
+                        StopSubtitleRenderTimer();
+                        _subtitleText?.Hide();
                         _player.SubtitleTrackInfo.Selected = tizenIndex;
-                        return; 
+                        ApplySubtitleOffset();
+                        return;
                     }
                 }
                 catch {}
             }
 
-            // Fallback: Download and set as sidecar (Works for HLS and External)
-            Log("Setting subtitle via Extraction/Download...");
-            await DownloadAndSetSubtitle(_currentMediaSource.Id, jellyfinStreamIndex, subStream.Codec);
+            Log("Subtitle switch failed: sidecar and native both unavailable.");
         }
 
         private void CreateAudioOverlay()
         {
-            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 25.0f, ClippingMode = ClippingModeType.ClipChildren };
+            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren };
             _audioOverlay.Hide();
             Add(_audioOverlay);
         }
@@ -798,6 +1242,7 @@ namespace JellyfinTizen.Screens
             if (_player == null) return;
             if (_audioOverlay == null) CreateAudioOverlay();
             HideSubtitleOverlay();
+            ExitSubtitleOffsetAdjustMode();
 
             var audioStreams = _currentMediaSource?.MediaStreams?
                 .Where(s => s.Type == "Audio")
@@ -820,9 +1265,33 @@ namespace JellyfinTizen.Screens
                     var codec = !string.IsNullOrEmpty(stream.Codec) ? stream.Codec.ToUpper() : "AUDIO";
                     var displayText = $"{lang} | {codec}";
 
-                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 12.0f, Margin = new Extents(20, 20, 5, 5) };
+                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 8.0f, Margin = new Extents(20, 20, 5, 5), Focusable = true };
                     row.Name = stream.Index.ToString();
+                    
+                    // Handle focus events to remove default blue border
+                    row.FocusGained += (s, e) => {
+                        // When Tizen moves focus here, sync our internal index and visuals
+                        if (_audioListContainer != null)
+                        {
+                            for (int i = 0; i < _audioListContainer.ChildCount; i++)
+                            {
+                                if (_audioListContainer.GetChildAt((uint)i) == row)
+                                {
+                                    _audioIndex = i;
+                                    UpdateAudioVisuals(false); // Update colors only
+                                    break;
+                                }
+                            }
+                        }
+                    };
 
+                    row.FocusLost += (s, e) =>
+                    {
+                        row.BackgroundColor = Color.Transparent;
+                        var label = row.GetChildAt(0) as TextLabel;
+                        if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
+                        row.Scale = Vector3.One;
+                    };
                     var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
                     row.Add(label);
                     _audioListContainer.Add(row);
@@ -833,18 +1302,21 @@ namespace JellyfinTizen.Screens
             _audioOverlayVisible = true;
         }
 
-        private void UpdateAudioVisuals()
+        private void UpdateAudioVisuals(bool setFocus = true)
         {
             if (_audioListContainer == null) return;
             int count = (int)_audioListContainer.ChildCount;
+            View focusedView = null;
             for (int i = 0; i < count; i++)
             {
                 var row = _audioListContainer.GetChildAt((uint)i);
                 bool selected = (i == _audioIndex);
-                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.2f) : Color.Transparent;
+                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
+                row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
             }
+            if (setFocus && focusedView != null) FocusManager.Instance.SetCurrentFocusView(focusedView);
         }
 
         private void HideAudioOverlay() { if (_audioOverlay != null) { _audioOverlay.Hide(); _audioOverlayVisible = false; } }
@@ -852,14 +1324,24 @@ namespace JellyfinTizen.Screens
 
         private void OnSubtitleUpdated(object sender, SubtitleUpdatedEventArgs e)
         {
+            if (_useParsedSubtitleRenderer) return;
+
             RunOnUiThread(() =>
             {
                 string text = e.Text;
-                if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(text)) { _subtitleText?.Hide(); return; }
+                _subtitleHideTimer?.Stop();
+
+                if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(text))
+                {
+                    _subtitleText?.Hide();
+                    return;
+                }
+
                 _subtitleText.Text = text;
                 _subtitleText.Show();
-                _subtitleHideTimer?.Stop();
-                _subtitleHideTimer = new Timer(Math.Max(500, e.Duration));
+
+                uint hideDurationMs = (uint)Math.Clamp((long)e.Duration, 200L, uint.MaxValue);
+                _subtitleHideTimer = new Timer(hideDurationMs);
                 _subtitleHideTimer.Tick += (_, __) => { _subtitleText.Hide(); return false; };
                 _subtitleHideTimer.Start();
             });
@@ -876,7 +1358,7 @@ namespace JellyfinTizen.Screens
             ShowAudioOverlay(); 
         }
 
-        private async void SelectAudioTrack() 
+        private void SelectAudioTrack() 
         { 
             if (_audioListContainer == null) return; 
             if (_audioIndex < 0 || _audioIndex >= _audioListContainer.ChildCount) return;
@@ -899,8 +1381,8 @@ namespace JellyfinTizen.Screens
                 {
                     var supportedTracks = _currentMediaSource.MediaStreams
                         .Where(s => s.Type == "Audio" && 
-                               (s.Codec.ToLower().Contains("aac") || s.Codec.ToLower().Contains("ac3") || 
-                                s.Codec.ToLower().Contains("eac3") || s.Codec.ToLower().Contains("mp3")))
+                               (s.Codec != null && (s.Codec.ToLower().Contains("aac") || s.Codec.ToLower().Contains("ac3") || 
+                                s.Codec.ToLower().Contains("eac3") || s.Codec.ToLower().Contains("mp3"))))
                         .OrderBy(s => s.Index)
                         .ToList();
 
@@ -928,9 +1410,15 @@ namespace JellyfinTizen.Screens
             if (!_osdVisible) _osdFocusRow = 0;
             _osd.Show(); _osd.Opacity = 1;
             if (_topOsd != null) { _topOsd.Show(); _topOsd.Opacity = 1; }
+            if (_subtitleOffsetTrackContainer != null)
+            {
+                if (_subtitleOffsetAdjustMode) _subtitleOffsetTrackContainer.Show();
+                else _subtitleOffsetTrackContainer.Hide();
+            }
             _osdVisible = true;
             if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 330;
             UpdateOsdFocus();
+            UpdateSubtitleOffsetUI();
             UpdateProgress();
             _osdTimer.Stop(); _osdTimer.Start();
             _progressTimer.Start();
@@ -938,30 +1426,36 @@ namespace JellyfinTizen.Screens
 
         private void UpdateOsdFocus()
         {
+            if (_progressTrack == null) return;
+
             if (_osdFocusRow == 0)
             {
                 _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.4f);
-                _prevButton.BackgroundColor = new Color(1, 1, 1, 0.15f); _nextButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
-                _prevButton.Scale = Vector3.One; _nextButton.Scale = Vector3.One;
+                SetButtonVisual(_prevButton, false);
+                SetButtonVisual(_nextButton, false);
             }
             else
             {
                 _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.25f);
-                bool prevFocused = _buttonFocusIndex == 0;
-                _prevButton.BackgroundColor = prevFocused ? new Color(0.85f, 0.11f, 0.11f, 1f) : new Color(1, 1, 1, 0.15f);
-                _prevButton.Scale = prevFocused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
-                bool nextFocused = _buttonFocusIndex == 1;
-                _nextButton.BackgroundColor = nextFocused ? new Color(0.85f, 0.11f, 0.11f, 1f) : new Color(1, 1, 1, 0.15f);
-                _nextButton.Scale = nextFocused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
+                SetButtonVisual(_prevButton, _buttonFocusIndex == 0);
+                SetButtonVisual(_nextButton, _buttonFocusIndex == 1);
+            }
+
+            if (_subtitleOffsetCenterMarker != null)
+            {
+                _subtitleOffsetCenterMarker.BackgroundColor = _subtitleOffsetAdjustMode
+                    ? new Color(0, 164f / 255f, 220f / 255f, 1f)
+                    : new Color(1, 1, 1, 0.85f);
             }
         }
 
         private void HideOSD()
         {
+            ExitSubtitleOffsetAdjustMode();
             _osd.Hide(); _osd.Opacity = 0;
             if (_topOsd != null) { _topOsd.Hide(); _topOsd.Opacity = 0; }
             _osdVisible = false;
-            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 180;
+            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 250;
             _osdTimer.Stop();
             _progressTimer.Stop();
             if (_isSeeking && _player != null) { _isSeeking = false; _seekPreviewMs = GetPlayPositionMs(); UpdateProgress(); }
@@ -971,7 +1465,7 @@ namespace JellyfinTizen.Screens
 
         private void ReportProgressToServer(bool force = false)
         {
-            if (_player == null || _isSeeking || _isFinished) return;
+            if (_player == null || _isSeeking || _isFinished || _currentMediaSource == null) return;
             if (!force && _player.State != PlayerState.Playing) return;
 
             var positionMs = GetPlayPositionMs();
@@ -980,7 +1474,7 @@ namespace JellyfinTizen.Screens
 
             var info = new PlaybackProgressInfo
             {
-                ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = _movie.Id,
+                ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = _currentMediaSource.Id,
                 PositionTicks = (long)positionMs * 10000, IsPaused = _player.State == PlayerState.Paused,
                 PlayMethod = _playMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate"
             };
@@ -1013,9 +1507,13 @@ namespace JellyfinTizen.Screens
                 if (_player == null) return;
                 try { _progressTimer?.Stop(); } catch { }
                 try { _osdTimer?.Stop(); } catch { }
+                try { _subtitleRenderTimer?.Stop(); } catch { }
                 _player.SubtitleUpdated -= OnSubtitleUpdated;
                 _subtitleHideTimer?.Stop();
                 _subtitleText?.Hide();
+                _useParsedSubtitleRenderer = false;
+                _subtitleCues.Clear();
+                _activeSubtitleCueIndex = -1;
                 try { _player.Stop(); } catch { }
                 try { _player.Unprepare(); } catch { }
                 try { _player.Dispose(); } catch { }
@@ -1038,36 +1536,84 @@ namespace JellyfinTizen.Screens
                 case AppKey.MediaFastForward: Scrub(30); break;
                 case AppKey.Enter:
                     if (_audioOverlayVisible) SelectAudioTrack();
-                    else if (_subtitleOverlayVisible) SelectSubtitle();
+                    else if (_subtitleOverlayVisible) 
+                    {
+                        if (_subtitleOffsetAdjustMode) 
+                        {
+                            ExitSubtitleOffsetAdjustMode();
+                        }
+                        else 
+                        {
+                            // Select the currently highlighted subtitle
+                            SelectSubtitle();
+                        }
+                    }
                     else if (_isSeeking) CommitSeek();
                     else if (_osdVisible) { if (_osdFocusRow == 1) ActivateOsdButton(); else { TogglePause(); _osdTimer.Stop(); _osdTimer.Start(); } }
                     else ShowOSD();
                     break;
                 case AppKey.Left:
-                    if (_audioOverlayVisible) MoveAudioSelection(-1);
+                    if (_audioOverlayVisible)
+                    {
+                        // Let FocusManager handle audio overlay navigation.
+                    }
+                    else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(-SubtitleOffsetStepMs);
+                    // else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1); // Let FocusManager handle navigation.
                     else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(-1);
                     else Scrub(-30);
                     break;
                 case AppKey.Right:
-                    if (_audioOverlayVisible) MoveAudioSelection(1);
+                    if (_audioOverlayVisible)
+                    {
+                        // Let FocusManager handle audio overlay navigation.
+                    }
+                    else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(SubtitleOffsetStepMs);
+                    // else if (_subtitleOverlayVisible) MoveSubtitleSelection(1); // Let FocusManager handle navigation.
                     else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(1);
                     else Scrub(30);
                     break;
                 case AppKey.Up:
-                    if (_audioOverlayVisible) MoveAudioSelection(-1);
-                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1);
+                    if (_audioOverlayVisible)
+                    {
+                        // Let FocusManager handle audio overlay navigation.
+                    }
+                    else if (_subtitleOverlayVisible) 
+                    {
+                        if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
+                        else 
+                        {
+                            // Check if we're at the first subtitle, then toggle offset adjust mode
+                            if (_subtitleIndex == 0)
+                            {
+                                ToggleSubtitleOffsetAdjustMode();
+                            }
+                            // else: Do nothing, let FocusManager move focus up naturally
+                        }
+                    }
                     else if (_osdVisible) MoveOsdRow(-1);
                     else ShowAudioOverlay();
                     break;
                 case AppKey.Down:
-                    if (_audioOverlayVisible) MoveAudioSelection(1);
-                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(1);
+                    if (_audioOverlayVisible)
+                    {
+                        // Let FocusManager handle audio overlay navigation.
+                    }
+                    else if (_subtitleOverlayVisible) 
+                    {
+                        if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
+                        // else MoveSubtitleSelection(1); // Let FocusManager move focus down naturally.
+                    }
                     else if (_osdVisible) MoveOsdRow(1);
                     else ShowSubtitleOverlay();
                     break;
                 case AppKey.Back:
-                    if (_subtitleOverlayVisible) HideSubtitleOverlay();
+                    if (_subtitleOverlayVisible) 
+                    {
+                        if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
+                        else HideSubtitleOverlay();
+                    }
                     else if (_audioOverlayVisible) HideAudioOverlay();
+                    else if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
                     else if (_isSeeking) { _isSeeking = false; UpdateProgress(); }
                     else if (_osdVisible) HideOSD();
                     else NavigationService.NavigateBack();
@@ -1075,9 +1621,44 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private void MoveOsdRow(int delta) { int newRow = Math.Clamp(_osdFocusRow + delta, 0, 1); if (newRow != _osdFocusRow) { _osdFocusRow = newRow; UpdateOsdFocus(); _osdTimer.Stop(); _osdTimer.Start(); } }
-        private void MoveButtonFocus(int delta) { int newIndex = Math.Clamp(_buttonFocusIndex + delta, 0, 1); if (newIndex != _buttonFocusIndex) { _buttonFocusIndex = newIndex; UpdateOsdFocus(); _osdTimer.Stop(); _osdTimer.Start(); } }
-        private void ActivateOsdButton() { if (_buttonFocusIndex == 0) PlayPreviousEpisode(); else PlayNextEpisode(); }
+        private void MoveOsdRow(int delta)
+        {
+            int newRow = Math.Clamp(_osdFocusRow + delta, 0, 1);
+            if (newRow == _osdFocusRow) return;
+
+            bool leavingButtonRow = _osdFocusRow == 1 && newRow != 1;
+            _osdFocusRow = newRow;
+            if (leavingButtonRow) ExitSubtitleOffsetAdjustMode();
+            UpdateOsdFocus();
+            _osdTimer.Stop();
+            _osdTimer.Start();
+        }
+
+        private void MoveButtonFocus(int delta)
+        {
+            int maxIndex = Math.Max(0, _osdButtonCount - 1);
+            int newIndex = Math.Clamp(_buttonFocusIndex + delta, 0, maxIndex);
+            if (newIndex == _buttonFocusIndex) return;
+
+            _buttonFocusIndex = newIndex;
+            if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
+            UpdateOsdFocus();
+            _osdTimer.Stop();
+            _osdTimer.Start();
+        }
+
+        private void ActivateOsdButton()
+        {
+            switch (_buttonFocusIndex)
+            {
+                case 0: // Prev button
+                    if (_movie.ItemType == "Episode") PlayPreviousEpisode();
+                    break;
+                case 1: // Next button
+                    if (_movie.ItemType == "Episode") PlayNextEpisode();
+                    break;
+            }
+        }
         
         private async void PlayNextEpisode() { await SwitchEpisode(1); }
         private async void PlayPreviousEpisode()
@@ -1130,6 +1711,10 @@ namespace JellyfinTizen.Screens
             _progressFill.WidthSpecification = 0;
             _currentTimeLabel.Text = "00:00"; _durationLabel.Text = "00:00";
             _overrideAudioIndex = null;
+            _useParsedSubtitleRenderer = false;
+            _subtitleCues.Clear();
+            _activeSubtitleCueIndex = -1;
+            StopSubtitleRenderTimer();
             StartPlayback();
             ShowOSD();
         }

@@ -4,8 +4,6 @@
   <privileges>
     <privilege>http://tizen.org/privilege/internet</privilege>
     <privilege>http://tizen.org/privilege/tv.inputdevice</privilege>
-    
-    
   </privileges>
   <ui-application appid="org.tizen.example.jellyfin"
 					exec="jellyfin.dll"
