@@ -69,6 +69,8 @@ namespace JellyfinTizen.Screens
         // OSD Controls
         private View _controlsContainer;
         private View _subtitleOffsetButton;
+        private View _audioButton;
+        private View _subtitleButton;
         private View _prevButton;
         private View _nextButton;
         private View _subtitleOffsetTrackContainer;
@@ -93,9 +95,10 @@ namespace JellyfinTizen.Screens
         private int _subtitleOverlayBaseX;
         private int _audioOverlayBaseX;
 
-        private const int OffsetButtonIndex = 0;
-        private const int PrevButtonIndex = 1;
-        private const int NextButtonIndex = 2;
+        private const int AudioButtonIndex = 0;
+        private const int SubtitleButtonIndex = 1;
+        private const int PrevButtonIndex = 2;
+        private const int NextButtonIndex = 3;
         private const int SubtitleOffsetStepMs = 100;
         private const int SubtitleOffsetLimitMs = 5000;
         private const int SubtitleOffsetTrackWidth = 280;
@@ -700,17 +703,22 @@ namespace JellyfinTizen.Screens
             progressRow.Add(_durationLabel);
             progressRow.Add(_progressThumb);
 
-            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 155, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(40, 0) } };
+            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 155, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(32, 0) } };
+            _audioButton = CreateOsdButton("Audio");
+            _subtitleButton = CreateOsdButton("Subtitles");
             _prevButton = CreateOsdButton("Prev");
             _nextButton = CreateOsdButton("Next");
 
-            _osdButtonCount = 0;
+            _controlsContainer.Add(_audioButton);
+            _controlsContainer.Add(_subtitleButton);
+            _osdButtonCount = 2;
+            _buttonFocusIndex = AudioButtonIndex;
+
             if (_movie.ItemType == "Episode")
             {
                 _controlsContainer.Add(_prevButton);
                 _controlsContainer.Add(_nextButton);
-                _osdButtonCount = 2;
-                _buttonFocusIndex = 0; // 0 = Prev, 1 = Next
+                _osdButtonCount = 4;
             }
 
             CreateSubtitleOffsetTrack(screenWidth);
@@ -1639,18 +1647,15 @@ namespace JellyfinTizen.Screens
         {
             if (_progressTrack == null) return;
 
-            if (_osdFocusRow == 0)
-            {
-                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.4f);
-                SetButtonVisual(_prevButton, false);
-                SetButtonVisual(_nextButton, false);
-            }
-            else
-            {
-                _progressTrack.BackgroundColor = new Color(1, 1, 1, 0.25f);
-                SetButtonVisual(_prevButton, _buttonFocusIndex == 0);
-                SetButtonVisual(_nextButton, _buttonFocusIndex == 1);
-            }
+            bool buttonRowFocused = _osdFocusRow == 1;
+            _progressTrack.BackgroundColor = buttonRowFocused
+                ? new Color(1, 1, 1, 0.25f)
+                : new Color(1, 1, 1, 0.4f);
+
+            SetButtonVisual(_audioButton, buttonRowFocused && _buttonFocusIndex == AudioButtonIndex);
+            SetButtonVisual(_subtitleButton, buttonRowFocused && _buttonFocusIndex == SubtitleButtonIndex);
+            SetButtonVisual(_prevButton, buttonRowFocused && _buttonFocusIndex == PrevButtonIndex);
+            SetButtonVisual(_nextButton, buttonRowFocused && _buttonFocusIndex == NextButtonIndex);
 
             if (_subtitleOffsetCenterMarker != null)
             {
@@ -1801,7 +1806,7 @@ namespace JellyfinTizen.Screens
                     }
                     else if (_isSeeking) CommitSeek();
                     else if (_osdVisible) { if (_osdFocusRow == 1) ActivateOsdButton(); else { TogglePause(); _osdTimer.Stop(); _osdTimer.Start(); } }
-                    else ShowOSD();
+                    else { TogglePause(); ShowOSD(); }
                     break;
                 case AppKey.Left:
                     if (_audioOverlayVisible)
@@ -1842,7 +1847,7 @@ namespace JellyfinTizen.Screens
                         }
                     }
                     else if (_osdVisible) MoveOsdRow(-1);
-                    else ShowAudioOverlay();
+                    else ShowOSD();
                     break;
                 case AppKey.Down:
                     if (_audioOverlayVisible)
@@ -1855,7 +1860,7 @@ namespace JellyfinTizen.Screens
                         // else MoveSubtitleSelection(1); // Let FocusManager move focus down naturally.
                     }
                     else if (_osdVisible) MoveOsdRow(1);
-                    else ShowSubtitleOverlay();
+                    else ShowOSD();
                     break;
                 case AppKey.Back:
                     if (_subtitleOverlayVisible) 
@@ -1902,10 +1907,16 @@ namespace JellyfinTizen.Screens
         {
             switch (_buttonFocusIndex)
             {
-                case 0: // Prev button
+                case AudioButtonIndex:
+                    ShowAudioOverlay();
+                    break;
+                case SubtitleButtonIndex:
+                    ShowSubtitleOverlay();
+                    break;
+                case PrevButtonIndex:
                     if (_movie.ItemType == "Episode") PlayPreviousEpisode();
                     break;
-                case 1: // Next button
+                case NextButtonIndex:
                     if (_movie.ItemType == "Episode") PlayNextEpisode();
                     break;
             }

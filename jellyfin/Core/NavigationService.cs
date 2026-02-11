@@ -9,6 +9,10 @@ namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
+        private const int ScreenDurationLiteMs = 170;
+        private const float ScreenSlideDistanceLite = 56f;
+        private const float ScreenSlideRatioLite = 0.035f;
+
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
@@ -92,7 +96,8 @@ namespace JellyfinTizen.Core
 
             var outgoing = _currentScreen;
             var incoming = screen;
-            var slide = GetSlideDistance();
+            var transition = GetTransitionSpec(outgoing, incoming);
+            var slide = transition.SlideDistance;
 
             _isTransitioning = true;
 
@@ -108,7 +113,7 @@ namespace JellyfinTizen.Core
             UiAnimator.Replace(
                 ref _screenTransitionAnimation,
                 UiAnimator.Start(
-                    UiAnimator.ScreenDurationMs,
+                    transition.DurationMs,
                     animation =>
                     {
                         animation.AnimateTo(incoming, "PositionX", 0.0f);
@@ -142,7 +147,8 @@ namespace JellyfinTizen.Core
 
             var outgoing = _currentScreen;
             var incoming = _stack.Pop();
-            var slide = GetSlideDistance();
+            var transition = GetTransitionSpec(outgoing, incoming);
+            var slide = transition.SlideDistance;
 
             if (incoming == null)
             {
@@ -163,7 +169,7 @@ namespace JellyfinTizen.Core
             UiAnimator.Replace(
                 ref _screenTransitionAnimation,
                 UiAnimator.Start(
-                    UiAnimator.ScreenDurationMs,
+                    transition.DurationMs,
                     animation =>
                     {
                         animation.AnimateTo(incoming, "PositionX", 0.0f);
@@ -253,6 +259,30 @@ namespace JellyfinTizen.Core
                 return UiAnimator.ScreenSlideDistance;
 
             return Math.Max(UiAnimator.ScreenSlideDistance, _window.Size.Width * 0.08f);
+        }
+
+        private static (int DurationMs, float SlideDistance) GetTransitionSpec(ScreenBase outgoing, ScreenBase incoming)
+        {
+            if (UseFullTransitionProfile(outgoing, incoming))
+            {
+                return (UiAnimator.ScreenDurationMs, GetSlideDistance());
+            }
+
+            return (ScreenDurationLiteMs, GetLiteSlideDistance());
+        }
+
+        private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
+        {
+            return (outgoing is MovieDetailsScreen && incoming is VideoPlayerScreen) ||
+                   (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen);
+        }
+
+        private static float GetLiteSlideDistance()
+        {
+            if (_window == null)
+                return ScreenSlideDistanceLite;
+
+            return Math.Max(ScreenSlideDistanceLite, _window.Size.Width * ScreenSlideRatioLite);
         }
     }
 }

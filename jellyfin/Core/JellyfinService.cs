@@ -26,7 +26,7 @@ namespace JellyfinTizen.Core
             _http.Timeout = System.TimeSpan.FromSeconds(10);
             _http.DefaultRequestHeaders.Add(
                 "X-Emby-Authorization",
-                "MediaBrowser Client=\"JellyfinTizen\", Device=\"SamsungTV\", DeviceId=\"tizen-tv\", Version=\"1.0\""
+                "MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\""
             );
         }
 
@@ -45,7 +45,7 @@ namespace JellyfinTizen.Core
             // This combines Client, Device, Version, AND Token into one string.
             _http.DefaultRequestHeaders.Add(
                 "X-Emby-Authorization",
-                $"MediaBrowser Client=\"JellyfinTizen\", Device=\"SamsungTV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\""
+                $"MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\""
             );
         }
 

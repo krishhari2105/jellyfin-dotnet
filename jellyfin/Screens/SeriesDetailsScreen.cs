@@ -29,7 +29,6 @@ namespace JellyfinTizen.Screens
         private View _seasonRowContainer;
         private List<JellyfinMovie> _seasons;
         private readonly List<View> _seasonViews = new();
-        private readonly Dictionary<View, Animation> _focusAnimations = new();
         private int _seasonIndex = -1;
         private bool _isSeasonViewFocused;
         private Animation _seasonScrollAnimation;
@@ -205,7 +204,6 @@ namespace JellyfinTizen.Screens
         public override void OnHide()
         {
             UiAnimator.StopAndDispose(ref _seasonScrollAnimation);
-            UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
         private async Task LoadSeasonsAsync()
@@ -459,7 +457,7 @@ namespace JellyfinTizen.Screens
             var content = GetCardContent(card);
 
             if (content != null)
-                AnimateCardScale(content, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
+                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
 
             card.Scale = Vector3.One;
             card.PositionZ = focused ? 20 : 0;
@@ -478,28 +476,6 @@ namespace JellyfinTizen.Screens
                     frame.BoxShadow = null;
                 }
             }
-        }
-
-        private void AnimateCardScale(View content, Vector3 targetScale)
-        {
-            if (content == null)
-            {
-                return;
-            }
-
-            if (_focusAnimations.TryGetValue(content, out var existing))
-            {
-                UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(content);
-            }
-
-            var animation = UiAnimator.Start(
-                UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(content, "Scale", targetScale),
-                () => _focusAnimations.Remove(content)
-            );
-
-            _focusAnimations[content] = animation;
         }
 
         private void ScrollSeasonsIfNeeded()

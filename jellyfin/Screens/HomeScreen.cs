@@ -16,8 +16,8 @@ namespace JellyfinTizen.Screens
         private const int FocusBorder = 5;
         private const int FocusPad = 24;
         private const int LibraryTitleImageGap = 12;
-        private const float FocusScale = 1.14f;
-        private const int SettingsPanelSlideDistance = 36;
+        private const float FocusScale = 1.08f;
+        private const bool UseLightweightFocusMode = true;
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
@@ -45,8 +45,6 @@ namespace JellyfinTizen.Screens
 
         private Animation _horizontalScrollAnimation;
         private Animation _verticalScrollAnimation;
-        private Animation _settingsPanelAnimation;
-        private Animation _settingsButtonAnimation;
 
         // Jellyfin Blue (#00A4DC)
         private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
@@ -173,22 +171,18 @@ namespace JellyfinTizen.Screens
         {
             UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
             UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
-            UiAnimator.StopAndDispose(ref _settingsPanelAnimation);
-            UiAnimator.StopAndDispose(ref _settingsButtonAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
         private void ResetSettingsPanelVisualState()
         {
-            UiAnimator.StopAndDispose(ref _settingsPanelAnimation);
-
             if (_settingsPanel == null)
             {
                 return;
             }
 
-            _settingsPanel.Opacity = 0.0f;
-            _settingsPanel.PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance;
+            _settingsPanel.PositionX = _settingsPanelBaseX;
+            _settingsPanel.Opacity = 1.0f;
             _settingsPanel.Hide();
         }
 
@@ -509,7 +503,9 @@ namespace JellyfinTizen.Screens
                     frame.BackgroundColor = _focusBorderColor;
                     frame.BorderlineWidth = 2.0f;
                     frame.BorderlineColor = _focusColor;
-                    frame.BoxShadow = new Shadow(12.0f, new Color(0.0f, 0.64f, 0.86f, 0.36f), new Vector2(0, 0));
+                    frame.BoxShadow = UseLightweightFocusMode
+                        ? null
+                        : new Shadow(12.0f, new Color(0.0f, 0.64f, 0.86f, 0.36f), new Vector2(0, 0));
                 }
             }
             else
@@ -535,6 +531,18 @@ namespace JellyfinTizen.Screens
         {
             if (content == null)
             {
+                return;
+            }
+
+            if (UseLightweightFocusMode)
+            {
+                if (_focusAnimations.TryGetValue(content, out var existingDirect))
+                {
+                    UiAnimator.StopAndDispose(ref existingDirect);
+                    _focusAnimations.Remove(content);
+                }
+
+                content.Scale = targetScale;
                 return;
             }
 
@@ -620,6 +628,13 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
+            if (UseLightweightFocusMode)
+            {
+                UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
+                rowContainer.PositionX = targetX;
+                return;
+            }
+
             UiAnimator.Replace(
                 ref _horizontalScrollAnimation,
                 UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
@@ -654,6 +669,13 @@ namespace JellyfinTizen.Screens
 
             if (Math.Abs(targetY - _verticalContainer.PositionY) < 0.5f)
             {
+                return;
+            }
+
+            if (UseLightweightFocusMode)
+            {
+                UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
+                _verticalContainer.PositionY = targetY;
                 return;
             }
 
@@ -718,12 +740,7 @@ namespace JellyfinTizen.Screens
         private void FocusSettings(bool focused)
         {
             _settingsFocused = focused;
-            var targetScale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
-
-            UiAnimator.Replace(
-                ref _settingsButtonAnimation,
-                UiAnimator.AnimateTo(_settingsButton, "Scale", targetScale, UiAnimator.FocusDurationMs)
-            );
+            _settingsButton.Scale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
 
             if (focused)
             {
@@ -746,7 +763,7 @@ namespace JellyfinTizen.Screens
                 WidthSpecification = 420,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
                 BackgroundColor = new Color(0, 0, 0, 1.0f),
-                PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance,
+                PositionX = _settingsPanelBaseX,
                 PositionY = TopBarHeight + 16,
                 CornerRadius = 14f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
@@ -761,7 +778,7 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            _settingsPanel.Opacity = 0.0f;
+            _settingsPanel.Opacity = 1.0f;
             _settingsPanel.Hide();
 
             var title = new TextLabel("Settings")
@@ -831,39 +848,15 @@ namespace JellyfinTizen.Screens
             _settingsIndex = 0;
             UpdateSettingsHighlight();
 
-            _settingsPanel.PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance;
-            _settingsPanel.Opacity = 0.0f;
+            _settingsPanel.PositionX = _settingsPanelBaseX;
+            _settingsPanel.Opacity = 1.0f;
             _settingsPanel.Show();
-
-            UiAnimator.Replace(
-                ref _settingsPanelAnimation,
-                UiAnimator.Start(
-                    UiAnimator.PanelDurationMs,
-                    animation =>
-                    {
-                        animation.AnimateTo(_settingsPanel, "PositionX", (float)_settingsPanelBaseX);
-                        animation.AnimateTo(_settingsPanel, "Opacity", 1.0f);
-                    }
-                )
-            );
         }
 
         private void HideSettingsPanel()
         {
             _settingsVisible = false;
-
-            UiAnimator.Replace(
-                ref _settingsPanelAnimation,
-                UiAnimator.Start(
-                    UiAnimator.PanelDurationMs,
-                    animation =>
-                    {
-                        animation.AnimateTo(_settingsPanel, "PositionX", _settingsPanelBaseX + SettingsPanelSlideDistance);
-                        animation.AnimateTo(_settingsPanel, "Opacity", 0.0f);
-                    },
-                    () => _settingsPanel.Hide()
-                )
-            );
+            _settingsPanel.Hide();
         }
 
         private void HandleSettingsPanelKey(AppKey key)
