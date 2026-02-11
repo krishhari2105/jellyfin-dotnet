@@ -202,7 +202,7 @@ namespace JellyfinTizen.Screens
                     );
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 // Fall back to normal flow if auto-login fails
                 LoadNormalFlow();

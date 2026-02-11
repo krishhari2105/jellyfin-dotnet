@@ -15,5 +15,6 @@ namespace JellyfinTizen.Models
         public bool HasPrimary { get; set; }
         public bool HasThumb { get; set; }
         public bool HasBackdrop { get; set; }
+        public bool HasLogo { get; set; }
     }
 }

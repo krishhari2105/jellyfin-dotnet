@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Tizen.Multimedia;
 using Tizen.NUI;
@@ -58,6 +58,7 @@ namespace JellyfinTizen.Screens
         private string _playSessionId;
         private int? _initialSubtitleIndex;
         private bool _burnIn;
+        private string _preferredMediaSourceId;
         private string _externalSubtitlePath = null;
         private string _externalSubtitleLanguage = "EXTERNAL"; 
         private int? _externalSubtitleIndex = null;
@@ -89,6 +90,7 @@ namespace JellyfinTizen.Screens
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
         private int? _overrideAudioIndex = null;
+        private bool _isAnamorphicVideo;
 
         private struct SubtitleCue
         {
@@ -97,20 +99,23 @@ namespace JellyfinTizen.Screens
             public string Text;
         }
 
-        public VideoPlayerScreen(JellyfinMovie movie, int startPositionMs = 0, int? subtitleStreamIndex = null, bool burnIn = false)
+        public VideoPlayerScreen(
+            JellyfinMovie movie,
+            int startPositionMs = 0,
+            int? subtitleStreamIndex = null,
+            bool burnIn = false,
+            string preferredMediaSourceId = null
+        )
         {
             _movie = movie;
             _startPositionMs = startPositionMs;
             _initialSubtitleIndex = subtitleStreamIndex;
             _burnIn = burnIn;
+            _preferredMediaSourceId = preferredMediaSourceId;
 
             // CRITICAL: Ensure the window is transparent so the video plane is visible.
             Window.Default.BackgroundColor = Color.Transparent;
             BackgroundColor = Color.Transparent;
-        }
-
-        public void Log(string message)
-        {
         }
 
         public override void OnShow()
@@ -139,17 +144,15 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                Log($"Initializing Player for: {_movie.Name}");
-
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
                 _player = new Player();
-                
-                _player.ErrorOccurred += (s, e) => Log($"!!! PLAYER ERROR !!!: {e.Error}");
-                _player.BufferingProgressChanged += (s, e) => { if (e.Percent % 20 == 0) Log($"Buffering: {e.Percent}%"); };
+
+                _player.ErrorOccurred += (s, e) => { };
+                _player.BufferingProgressChanged += (s, e) => { };
                 _player.PlaybackCompleted += OnPlaybackCompleted;
                 _player.SubtitleUpdated += OnSubtitleUpdated;
 
@@ -157,79 +160,58 @@ namespace JellyfinTizen.Screens
                 _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
                 _player.DisplaySettings.IsVisible = true;
 
-                Log("Fetching PlaybackInfo...");
                 var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_movie.Id, _initialSubtitleIndex, _burnIn);
-                
                 if (playbackInfo.MediaSources == null || playbackInfo.MediaSources.Count == 0)
-                {
-                    Log("Error: No MediaSources found.");
                     return;
-                }
 
                 var mediaSource = playbackInfo.MediaSources[0];
+                if (!string.IsNullOrWhiteSpace(_preferredMediaSourceId))
+                {
+                    var preferredSource = playbackInfo.MediaSources.FirstOrDefault(s => s.Id == _preferredMediaSourceId);
+                    if (preferredSource != null)
+                        mediaSource = preferredSource;
+                }
                 _currentMediaSource = mediaSource; 
                 _playSessionId = playbackInfo.PlaySessionId;
-                
-                // Log Streams
-                foreach (var stream in mediaSource.MediaStreams)
+
+                try
                 {
-                     Log($"Stream: Type={stream.Type}, Index={stream.Index}, Codec={stream.Codec}, External={stream.IsExternal}");
+                    _isAnamorphicVideo = await AppState.Jellyfin.GetIsAnamorphicAsync(_movie.Id);
                 }
-                
-                Log($"Supports DirectPlay: {mediaSource.SupportsDirectPlay}");
-                Log($"Supports Transcoding: {mediaSource.SupportsTranscoding}");
-                Log($"Transcoding URL: {mediaSource.TranscodingUrl}");
+                catch
+                {
+                    _isAnamorphicVideo = false;
+                }
+
+                ApplyDisplayModeForCurrentVideo();
 
                 string streamUrl = "";
                 var apiKey = AppState.AccessToken;
                 var serverUrl = AppState.Jellyfin.ServerUrl;
-
-                // --- ROBUST PLAYBACK SELECTION LOGIC ---
-                
                 bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
                 bool supportsTranscoding = mediaSource.SupportsTranscoding;
                 bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
-                
-                // Reasons to force transcoding:
-                // 1. Audio Override is active (e.g. DTS selected via UI)
-                // 2. Burn-In is requested for subtitles
                 bool forceTranscode = _overrideAudioIndex.HasValue || (_burnIn && _initialSubtitleIndex.HasValue);
 
-                // --- DIRECT PLAY LOGIC ---
                 if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
                 {
                     _playMethod = "DirectPlay";
                     streamUrl = $"{serverUrl}/Videos/{_movie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
-                    
-                    if (forceTranscode) Log("WARNING: Forced Transcode requested but not available. Falling back to DirectPlay.");
-                    Log("Mode: DirectPlay");
                 }
-                // --- TRANSCODE / DIRECT STREAM LOGIC ---
                 else if (supportsTranscoding || forceTranscode)
                 {
                     _playMethod = "Transcode";
 
-                    // SMART CONTAINER SELECTION:
                     var videoStream = mediaSource.MediaStreams.FirstOrDefault(s => s.Type == "Video");
                     string vidCodec = videoStream?.Codec?.ToLower() ?? "unknown";
-                    
-                    // Native Video Codecs for Tizen
                     bool isVideoNative = vidCodec.Contains("h264") || vidCodec.Contains("hevc") || 
                                          vidCodec.Contains("vp9") || vidCodec.Contains("av1");
-
-                    // 1. Direct Stream (Video is Native + No Burn-in) -> MP4 (Lighter, better scrubbing)
-                    // 2. Full Transcode / Burn-in -> TS (Better stability for heavy processing)
                     string container = (isVideoNative && !_burnIn) ? "mp4" : "ts";
-                    
-                    // Audio Priority: AC3 > EAC3 > AAC > MP3
                     string audioPriority = "ac3,eac3,aac,mp3";
-                    
-                    // FIX: If server didn't provide a URL (because it thought DP was fine), we must build one manually.
+
                     if (!hasTranscodeUrl)
                     {
-                        Log($"Constructing Manual URL (Container: {container}, Audio: AC3+)...");
                         streamUrl = $"{serverUrl}/Videos/{_movie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
-                        
                         streamUrl += "&VideoCodec=h264,hevc,vp9,av1";
                         streamUrl += $"&AudioCodec={audioPriority}"; 
                         streamUrl += $"&SegmentContainer={container}"; 
@@ -240,8 +222,6 @@ namespace JellyfinTizen.Screens
                     else
                     {
                         streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
-                        
-                        // Inject preferences into existing URL if we are overriding
                         if (_overrideAudioIndex.HasValue)
                         {
                             if (!streamUrl.Contains("SegmentContainer=")) streamUrl += $"&SegmentContainer={container}";
@@ -257,32 +237,20 @@ namespace JellyfinTizen.Screens
 
                     if (!streamUrl.Contains("api_key=") && !streamUrl.Contains("Token=")) streamUrl = AppendParam(streamUrl, $"api_key={apiKey}");
                     if (!streamUrl.Contains("PlaySessionId=") && !string.IsNullOrEmpty(_playSessionId)) streamUrl = AppendParam(streamUrl, $"PlaySessionId={_playSessionId}");
-                    
-                    // Apply Audio Override
                     if (_overrideAudioIndex.HasValue)
-                    {
-                        Log($"Applying Audio Override Index: {_overrideAudioIndex.Value}");
                         streamUrl = AppendParam(streamUrl, $"AudioStreamIndex={_overrideAudioIndex.Value}");
-                    }
 
-                    // Apply Subtitles
                     if (_initialSubtitleIndex.HasValue)
                     {
                         if (!streamUrl.Contains("SubtitleStreamIndex=")) streamUrl = AppendParam(streamUrl, $"SubtitleStreamIndex={_initialSubtitleIndex}");
                         if (_burnIn && !streamUrl.Contains("SubtitleMethod=")) streamUrl = AppendParam(streamUrl, "SubtitleMethod=Encode");
                     }
-                    
+
                     streamUrl = streamUrl.Replace("?&", "?").Replace("&&", "&").Replace(" ", "%20").Replace("\n", "").Replace("\r", "");
-                    
-                    Log($"Mode: Transcode/DirectStream (Config: {container})");
                 }
                 else
-                {
-                    Log("Error: Format not supported by Server.");
                     return;
-                }
 
-                // --- SUBTITLE TRACKING & EXTRACTION ---
                 if (!_burnIn)
                 {
                     var externalSubStreams = mediaSource.MediaStreams?.Where(s => s.Type == "Subtitle" && s.IsExternal).ToList();
@@ -293,15 +261,12 @@ namespace JellyfinTizen.Screens
                         _externalSubtitleMediaSourceId = mediaSource.Id;
                         _externalSubtitleCodec = subStream.Codec;
                         _externalSubtitleLanguage = !string.IsNullOrEmpty(subStream.Language) ? subStream.Language.ToUpper() : "EXTERNAL";
-                        Log($"Found external subtitle stream: {_externalSubtitleLanguage}");
                     }
                     else
                     {
                         var internalSubStreams = mediaSource.MediaStreams?.Where(s => s.Type == "Subtitle" && !s.IsExternal).ToList();
                         if (internalSubStreams != null && internalSubStreams.Count > 0)
                         {
-                            // For HLS transcodes, internal subtitles often fail to load in Tizen.
-                            // We track them so we can extract them as sidecar files if needed.
                             if (_playMethod == "Transcode")
                             {
                                 var subStream = internalSubStreams.First();
@@ -309,15 +274,10 @@ namespace JellyfinTizen.Screens
                                 _externalSubtitleMediaSourceId = mediaSource.Id;
                                 _externalSubtitleCodec = subStream.Codec;
                                 _externalSubtitleLanguage = !string.IsNullOrEmpty(subStream.Language) ? subStream.Language.ToUpper() : "EXTERNAL";
-                                Log($"Found internal subtitle (treated as external for HLS): {_externalSubtitleLanguage}");
-                            }
-                            else
-                            {
-                                Log($"Found internal subtitle streams: Count = {internalSubStreams.Count}");
                             }
                         }
                     }
-                    
+
                     if (_initialSubtitleIndex.HasValue)
                     {
                         var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
@@ -331,38 +291,28 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
-                Log($"URL: {streamUrl}");
-
                 var source = new MediaUriSource(streamUrl);
                 _player.SetSource(source);
 
-                // --- DOWNLOAD SUBTITLE IF NEEDED ---
                 if (!_burnIn && _initialSubtitleIndex.HasValue)
                 {
                     try 
                     {
                         var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (subStream != null)
-                        {
                             await DownloadAndSetSubtitle(mediaSource.Id, _initialSubtitleIndex.Value, subStream.Codec);
-                        }
                     }
-                    catch (Exception subEx) { Log($"Subtitle Error: {subEx.Message}"); }
+                    catch { }
                 }
 
-                Log("Calling PrepareAsync...");
                 await _player.PrepareAsync();
-                Log("PrepareAsync Success.");
+                ApplyDisplayModeForCurrentVideo();
 
-                // Check Track Detection
-                try { var v = _player.StreamInfo.GetVideoProperties(); Log($"Video: {v.Size.Width}x{v.Size.Height}"); } catch {}
-                try { Log($"Audio Tracks: {_player.AudioTrackInfo.GetCount()}"); } catch {}
+                try { _ = _player.StreamInfo.GetVideoProperties(); } catch { }
+                try { _ = _player.AudioTrackInfo.GetCount(); } catch { }
                 try 
                 {
                     int subCount = _player.SubtitleTrackInfo.GetCount();
-                    Log($"Subtitle Tracks: {subCount}");
-
-                    // Map Jellyfin Index to Tizen Index (for DirectPlay)
                     if (_initialSubtitleIndex.HasValue && subCount > 0 && string.IsNullOrEmpty(_externalSubtitlePath))
                     {
                         var embeddedSubs = mediaSource.MediaStreams?
@@ -375,7 +325,6 @@ namespace JellyfinTizen.Screens
                             int tizenIndex = embeddedSubs.FindIndex(s => s.Index == _initialSubtitleIndex.Value);
                             if (tizenIndex != -1 && tizenIndex < subCount)
                             {
-                                Log($"Mapping StreamIndex {_initialSubtitleIndex} to Tizen Track {tizenIndex}");
                                 _player.SubtitleTrackInfo.Selected = tizenIndex;
                                 _subtitleIndex = tizenIndex + 1;
                                 _subtitleEnabled = true;
@@ -387,14 +336,11 @@ namespace JellyfinTizen.Screens
                 if (_useParsedSubtitleRenderer) TryDisableNativeSubtitleTrack();
 
                 if (_startPositionMs > 0)
-                {
-                    Log($"Resuming at {_startPositionMs}ms");
                     await _player.SetPlayPositionAsync(_startPositionMs, false);
-                }
 
                 _player.Start();
+                ApplyDisplayModeForCurrentVideo();
                 ApplySubtitleOffset();
-                Log("Playback Started.");
 
                 var info = new PlaybackProgressInfo
                 {
@@ -403,10 +349,7 @@ namespace JellyfinTizen.Screens
                 };
                 _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
             }
-            catch (Exception ex)
-            {
-                Log($"CRITICAL START EXCEPTION: {ex.Message}");
-            }
+            catch { }
         }
 
         private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, int subtitleIndex, string _codec)
@@ -417,11 +360,8 @@ namespace JellyfinTizen.Screens
 
                 var apiKey = AppState.AccessToken;
                 var serverUrl = AppState.Jellyfin.ServerUrl;
-                
-                // /Videos/{ItemId}/{MediaSourceId}/Subtitles/{Index}/0/Stream.{Format}
-                var downloadUrl = $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}?api_key={apiKey}";
-                Log($"Downloading Subtitle: {downloadUrl}");
 
+                var downloadUrl = $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}?api_key={apiKey}";
                 var localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{ext}");
 
                 using (var client = new HttpClient())
@@ -432,8 +372,6 @@ namespace JellyfinTizen.Screens
                     var data = await response.Content.ReadAsByteArrayAsync();
                     await File.WriteAllBytesAsync(localPath, data);
                 }
-
-                Log($"Setting Subtitle Path: {localPath}");
                 _externalSubtitlePath = localPath;
 
                 if (TryLoadSrtSubtitleCues(localPath))
@@ -441,20 +379,17 @@ namespace JellyfinTizen.Screens
                     _useParsedSubtitleRenderer = true;
                     TryDisableNativeSubtitleTrack();
                     StartSubtitleRenderTimer();
-                    Log($"Subtitle renderer: Parsed SRT cues ({_subtitleCues.Count})");
                 }
                 else
                 {
                     _useParsedSubtitleRenderer = false;
                     _player.SetSubtitle(localPath);
-                    Log("Subtitle renderer: Player native event path");
                 }
 
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
-                Log($"Failed to set subtitle: {ex.Message}");
                 _externalSubtitlePath = null;
                 _useParsedSubtitleRenderer = false;
                 _subtitleCues.Clear();
@@ -509,17 +444,10 @@ namespace JellyfinTizen.Screens
                 cues.Sort((a, b) => a.StartMs.CompareTo(b.StartMs));
                 _subtitleCues = cues;
                 _activeSubtitleCueIndex = -1;
-                if (cues.Count > 0)
-                {
-                    var first = cues[0];
-                    var last = cues[cues.Count - 1];
-                    Log($"Parsed SRT timing: first={first.StartMs}ms, last={last.EndMs}ms");
-                }
                 return cues.Count > 0;
             }
-            catch (Exception ex)
+            catch
             {
-                Log($"SRT parse failed: {ex.Message}");
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
                 return false;
@@ -651,6 +579,43 @@ namespace JellyfinTizen.Screens
             catch { }
         }
 
+        private void ApplyDisplayModeForCurrentVideo()
+        {
+            if (_player == null)
+                return;
+
+            _player.DisplaySettings.Mode = ResolveDisplayMode(_isAnamorphicVideo);
+        }
+
+        private static PlayerDisplayMode ResolveDisplayMode(bool isAnamorphic)
+        {
+            if (!isAnamorphic)
+                return PlayerDisplayMode.LetterBox;
+
+            // Prefer fullscreen-like modes for anamorphic content.
+            if (TryParseDisplayMode("FullScreen", out var mode)) return mode;
+            if (TryParseDisplayMode("CroppedFull", out mode)) return mode;
+            if (TryParseDisplayMode("CropFull", out mode)) return mode;
+            if (TryParseDisplayMode("OriginalSize", out mode)) return mode;
+            if (TryParseDisplayMode("Original", out mode)) return mode;
+
+            return PlayerDisplayMode.LetterBox;
+        }
+
+        private static bool TryParseDisplayMode(string name, out PlayerDisplayMode mode)
+        {
+            try
+            {
+                mode = (PlayerDisplayMode)Enum.Parse(typeof(PlayerDisplayMode), name, ignoreCase: true);
+                return true;
+            }
+            catch
+            {
+                mode = PlayerDisplayMode.LetterBox;
+                return false;
+            }
+        }
+
         private void CreateOSD()
         {
             int sidePadding = 60; int labelWidth = 140; int labelGap = 20; int bottomHeight = 260; int topHeight = 160; int screenWidth = Window.Default.Size.Width;
@@ -671,9 +636,7 @@ namespace JellyfinTizen.Screens
             _topOsd.Background = topGradient;
             _topOsd.Hide();
 
-            string titleText = _movie.ItemType == "Episode" ? $"{_movie.SeriesName} S{_movie.ParentIndexNumber}:E{_movie.IndexNumber} - {_movie.Name}" : _movie.Name;
-            var titleLabel = new TextLabel(titleText) { PositionX = sidePadding, PositionY = 40, WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Top };
-            _topOsd.Add(titleLabel);
+            _topOsd.Add(CreateTopOsdTitleView(sidePadding));
             Add(_topOsd);
 
             _osd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = bottomHeight, PositionY = Window.Default.Size.Height - bottomHeight };
@@ -692,9 +655,9 @@ namespace JellyfinTizen.Screens
             _osd.Background = bottomGradient;
             _osd.Hide();
 
-            var progressRow = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 50, PositionY = 110 };
-            _currentTimeLabel = new TextLabel("00:00") { PositionX = sidePadding, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 24, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Begin };
-            _durationLabel = new TextLabel("00:00") { PositionX = screenWidth - sidePadding - labelWidth, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 24, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.End };
+            var progressRow = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 50, PositionY = 90 };
+            _currentTimeLabel = new TextLabel("00:00") { PositionX = sidePadding, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Begin };
+            _durationLabel = new TextLabel("00:00") { PositionX = screenWidth - sidePadding - labelWidth, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.End };
 
             int trackStartX = sidePadding + labelWidth + labelGap;
             int trackWidth = screenWidth - (2 * trackStartX);
@@ -712,7 +675,7 @@ namespace JellyfinTizen.Screens
             progressRow.Add(_durationLabel);
             progressRow.Add(_progressThumb);
 
-            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 170, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(40, 0) } };
+            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 155, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(40, 0) } };
             _prevButton = CreateOsdButton("Prev");
             _nextButton = CreateOsdButton("Next");
 
@@ -743,9 +706,70 @@ namespace JellyfinTizen.Screens
             _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
         }
 
+        private View CreateTopOsdTitleView(int sidePadding)
+        {
+            // Keep textual title for episodes in OSD.
+            if (_movie.ItemType == "Episode")
+                return CreateTopOsdTitleLabel(sidePadding, GetFallbackOsdTitleText());
+
+            if (_movie.HasLogo)
+            {
+                var logoUrl = AppState.GetItemLogoUrl(_movie.Id, 720);
+                if (!string.IsNullOrWhiteSpace(logoUrl))
+                {
+                    int topLogoWidth = 340;
+                    var logoContainer = new View
+                    {
+                        PositionX = sidePadding,
+                        PositionY = 24,
+                        WidthSpecification = topLogoWidth,
+                        HeightSpecification = 116,
+                        ClippingMode = ClippingModeType.ClipChildren
+                    };
+
+                    var logo = new ImageView
+                    {
+                        WidthResizePolicy = ResizePolicyType.FillToParent,
+                        HeightResizePolicy = ResizePolicyType.FillToParent,
+                        ResourceUrl = logoUrl,
+                        PreMultipliedAlpha = false,
+                        FittingMode = FittingModeType.ShrinkToFit,
+                        SamplingMode = SamplingModeType.BoxThenLanczos
+                    };
+
+                    logoContainer.Add(logo);
+                    return logoContainer;
+                }
+            }
+
+            return CreateTopOsdTitleLabel(sidePadding, GetFallbackOsdTitleText());
+        }
+
+        private TextLabel CreateTopOsdTitleLabel(int sidePadding, string text)
+        {
+            return new TextLabel(text)
+            {
+                PositionX = sidePadding,
+                PositionY = 40,
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = 36,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+        }
+
+        private string GetFallbackOsdTitleText()
+        {
+            return _movie.ItemType == "Episode"
+                ? $"{_movie.SeriesName} S{_movie.ParentIndexNumber}:E{_movie.IndexNumber} - {_movie.Name}"
+                : _movie.Name;
+        }
+
         private View CreateOsdButton(string text)
         {
-            var btn = new View { WidthSpecification = 180, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
+            var btn = new View { WidthSpecification = 150, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 24 };
             btn.Add(label);
             return btn;
@@ -847,9 +871,7 @@ namespace JellyfinTizen.Screens
             ApplySubtitleOffset();
             UpdateSubtitleOffsetUI();
             _osdTimer.Stop();
-            _osdTimer.Start();
-            Log($"Subtitle offset: {_subtitleOffsetMs}ms");
-        }
+            _osdTimer.Start();}
 
         private void ApplySubtitleOffset()
         {
@@ -865,9 +887,7 @@ namespace JellyfinTizen.Screens
             if (_burnIn)
             {
                 if (!_subtitleOffsetBurnInWarningShown)
-                {
-                    Log("Subtitle offset unavailable with Burn-In subtitles. Disable Burn-In in Settings.");
-                    _subtitleOffsetBurnInWarningShown = true;
+                {_subtitleOffsetBurnInWarningShown = true;
                 }
                 return;
             }
@@ -877,9 +897,7 @@ namespace JellyfinTizen.Screens
                 _player.SetSubtitleOffset(_subtitleOffsetMs);
             }
             catch (Exception ex)
-            {
-                Log($"Subtitle offset apply failed: {ex.Message}");
-            }
+            {}
         }
 
         private void ToggleSubtitleOffsetAdjustMode()
@@ -1175,7 +1193,6 @@ namespace JellyfinTizen.Screens
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
                 StopSubtitleRenderTimer();
-                Log("Subtitles: Disabled");
                 try { _player?.ClearSubtitle(); } catch { }
                 RunOnUiThread(() =>
                 {
@@ -1186,7 +1203,6 @@ namespace JellyfinTizen.Screens
             }
 
             if (!int.TryParse(selectedName, out int jellyfinStreamIndex)) return;
-            Log($"User selected Subtitle Stream Index: {jellyfinStreamIndex}");
             _subtitleEnabled = true;
 
             var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
@@ -1212,9 +1228,7 @@ namespace JellyfinTizen.Screens
                     var embeddedSubs = _currentMediaSource.MediaStreams.Where(s => s.Type == "Subtitle" && !s.IsExternal).OrderBy(s => s.Index).ToList();
                     int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
                     if (tizenIndex != -1 && tizenIndex < _player.SubtitleTrackInfo.GetCount())
-                    {
-                        Log($"Native Switch to Tizen Subtitle Track {tizenIndex}");
-                        _useParsedSubtitleRenderer = false;
+                    {_useParsedSubtitleRenderer = false;
                         _subtitleCues.Clear();
                         _activeSubtitleCueIndex = -1;
                         StopSubtitleRenderTimer();
@@ -1225,10 +1239,7 @@ namespace JellyfinTizen.Screens
                     }
                 }
                 catch {}
-            }
-
-            Log("Subtitle switch failed: sidecar and native both unavailable.");
-        }
+            }}
 
         private void CreateAudioOverlay()
         {
@@ -1367,8 +1378,6 @@ namespace JellyfinTizen.Screens
             if (!int.TryParse(selectedRow.Name, out int jellyfinStreamIndex)) return;
 
             HideAudioOverlay();
-            Log($"User selected Audio Stream Index: {jellyfinStreamIndex}");
-
             var selectedStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             string codec = selectedStream?.Codec?.ToLower() ?? "";
             
@@ -1389,7 +1398,6 @@ namespace JellyfinTizen.Screens
                     int tizenIndex = supportedTracks.FindIndex(s => s.Index == jellyfinStreamIndex);
                     if (tizenIndex != -1 && tizenIndex < _player.AudioTrackInfo.GetCount())
                     {
-                        Log($"Native Switch to Tizen Track {tizenIndex}");
                         _player.AudioTrackInfo.Selected = tizenIndex;
                         return;
                     }
@@ -1397,7 +1405,6 @@ namespace JellyfinTizen.Screens
                 catch {}
             }
 
-            Log("Native switch not possible (Unsupported Codec or mismatch). Reloading via Server...");
             long currentPos = GetPlayPositionMs();
             StopPlayback();
             _overrideAudioIndex = jellyfinStreamIndex;
@@ -1416,7 +1423,7 @@ namespace JellyfinTizen.Screens
                 else _subtitleOffsetTrackContainer.Hide();
             }
             _osdVisible = true;
-            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 330;
+            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 340;
             UpdateOsdFocus();
             UpdateSubtitleOffsetUI();
             UpdateProgress();
@@ -1485,9 +1492,7 @@ namespace JellyfinTizen.Screens
         }
 
         private void OnPlaybackCompleted(object sender, EventArgs e)
-        {
-            Log("Playback Completed.");
-            _isFinished = true;
+        {_isFinished = true;
             _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
             RunOnUiThread(() => { if (_movie.ItemType == "Episode") PlayNextEpisode(); else NavigationService.NavigateBack(); });
         }
@@ -1523,7 +1528,7 @@ namespace JellyfinTizen.Screens
 
         public void HandleKey(AppKey key)
         {
-            if (key != AppKey.Unknown) Log($"Key: {key}");
+            if (key == AppKey.Unknown) return;
             switch (key)
             {
                 case AppKey.MediaPlayPause: TogglePause(); ShowOSD(); break;
@@ -1671,9 +1676,7 @@ namespace JellyfinTizen.Screens
         {
             if (_movie.ItemType != "Episode") return;
             try
-            {
-                Log("Switching Episode...");
-                StopPlayback();
+            {StopPlayback();
                 var seasons = await AppState.Jellyfin.GetSeasonsAsync(_movie.SeriesId);
                 if (seasons == null || seasons.Count == 0) { NavigationService.NavigateBack(); return; }
                 seasons.Sort((a, b) => a.IndexNumber.CompareTo(b.IndexNumber));
@@ -1697,7 +1700,7 @@ namespace JellyfinTizen.Screens
                 }
                 NavigationService.NavigateBack();
             }
-            catch (Exception ex) { Log($"Ep Switch Error: {ex.Message}"); NavigationService.NavigateBack(); }
+            catch (Exception ex) {NavigationService.NavigateBack(); }
         }
 
         private void LoadNewMedia(JellyfinMovie newMovie)
@@ -1727,3 +1730,4 @@ namespace JellyfinTizen.Screens
         }
     }
 }
+

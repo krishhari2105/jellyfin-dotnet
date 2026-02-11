@@ -14,7 +14,7 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const int SeasonCardWidth = 260;
         private const int SeasonCardHeight = 390;
-        private const int SeasonCardTextHeight = 56;
+        private const int SeasonCardTextHeight = 80;
         private const int SeasonCardSpacing = 24;
         private const int FocusBorder = 4;
         private const int FocusPad = 20;
@@ -108,14 +108,7 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            var title = new TextLabel(_series.Name)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 64,
-                TextColor = Color.White,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
-            };
+            var title = CreateDetailsTitleView(_series.Name);
 
             var overview = new TextLabel(
                 string.IsNullOrEmpty(_series.Overview)
@@ -142,6 +135,48 @@ namespace JellyfinTizen.Screens
             root.Add(content);
 
             Add(root);
+        }
+
+        private View CreateDetailsTitleView(string fallbackText)
+        {
+            if (!_series.HasLogo)
+                return CreateDetailsTitleLabel(fallbackText);
+
+            var logoUrl = AppState.GetItemLogoUrl(_series.Id, 960);
+            if (string.IsNullOrWhiteSpace(logoUrl))
+                return CreateDetailsTitleLabel(fallbackText);
+
+            var logoContainer = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 140,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
+            var logo = new ImageView
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                ResourceUrl = logoUrl,
+                PreMultipliedAlpha = false,
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            logoContainer.Add(logo);
+            return logoContainer;
+        }
+
+        private static TextLabel CreateDetailsTitleLabel(string text)
+        {
+            return new TextLabel(text)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = 64,
+                TextColor = Color.White,
+                MultiLine = true,
+                LineWrapMode = LineWrapMode.Word
+            };
         }
 
         public override void OnShow()
@@ -316,7 +351,7 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = SeasonCardTextHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 6, 0),
+                Padding = new Extents(8, 8, 12, 0),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical
@@ -327,7 +362,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = 22,
+                PointSize = 26,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,

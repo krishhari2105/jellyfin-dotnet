@@ -86,8 +86,6 @@ namespace JellyfinTizen.Core
             if (!response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"HTTP {response.StatusCode}: {responseContent} for path {path}");
-                
                 var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
                 httpEx.Data["ResponseContent"] = responseContent;
                 throw httpEx;
@@ -103,8 +101,6 @@ namespace JellyfinTizen.Core
             if (!response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"HTTP {response.StatusCode}: {responseContent} for path {path}");
-                
                 var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
                 httpEx.Data["ResponseContent"] = responseContent;
                 throw httpEx;
@@ -335,6 +331,7 @@ namespace JellyfinTizen.Core
                 var hasPrimary = false;
                 var hasThumb = false;
                 var hasBackdrop = false;
+                var hasLogo = false;
 
                 if (item.TryGetProperty("ImageTags", out var imageTags) &&
                     imageTags.ValueKind == JsonValueKind.Object)
@@ -344,6 +341,9 @@ namespace JellyfinTizen.Core
 
                     if (imageTags.TryGetProperty("Thumb", out _))
                         hasThumb = true;
+
+                    if (imageTags.TryGetProperty("Logo", out _))
+                        hasLogo = true;
                 }
 
                 if (item.TryGetProperty("BackdropImageTags", out var backdropTags) &&
@@ -384,7 +384,8 @@ namespace JellyfinTizen.Core
                         : 0,
                     HasPrimary = hasPrimary,
                     HasThumb = hasThumb,
-                    HasBackdrop = hasBackdrop
+                    HasBackdrop = hasBackdrop,
+                    HasLogo = hasLogo
                 });
             }
 
@@ -438,48 +439,21 @@ namespace JellyfinTizen.Core
 
         public async Task PostCapabilitiesAsync()
         {
-            try
-            {
-                // Use the Builder to get the clean profile
-                var profile = ProfileBuilder.BuildTizenProfile();
-                
-                // The server expects a root "Capabilities" property
-                var caps = new
-                {
-                    Capabilities = new ClientCapabilitiesDto
-                    {
-                        DeviceProfile = profile,
-                        SupportedCommands = new List<string> { "Play", "Browse", "GoHome", "GoBack" }
-                    }
-                };
+            // Use the Builder to get the clean profile
+            var profile = ProfileBuilder.BuildTizenProfile();
 
-                // Log the capabilities being sent for debugging
-                var options = new JsonSerializerOptions 
-                { 
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                    WriteIndented = true
-                };
-                var json = JsonSerializer.Serialize(caps, options);
-                Console.WriteLine("Sending capabilities: " + json);
-
-                // This URL tells Jellyfin "Here is what I can do"
-                await PostAsync("/Sessions/Capabilities/Full", caps);
-                Console.WriteLine("Successfully sent capabilities");
-            }
-            catch (Exception ex)
+            // The server expects a root "Capabilities" property
+            var caps = new
             {
-                Console.WriteLine($"Failed to send capabilities: {ex.Message}");
-                if (ex is HttpRequestException httpEx)
+                Capabilities = new ClientCapabilitiesDto
                 {
-                    Console.WriteLine($"HTTP Status: {httpEx.StatusCode}");
-                    if (httpEx.Data.Contains("ResponseContent"))
-                    {
-                        Console.WriteLine($"Response content: {httpEx.Data["ResponseContent"]}");
-                    }
+                    DeviceProfile = profile,
+                    SupportedCommands = new List<string> { "Play", "Browse", "GoHome", "GoBack" }
                 }
-                // Rethrow to allow caller to handle if needed
-                throw;
-            }
+            };
+
+            // This URL tells Jellyfin "Here is what we can do"
+            await PostAsync("/Sessions/Capabilities/Full", caps);
         }
 
         public async Task ReportPlaybackStartAsync(PlaybackProgressInfo info)
@@ -531,6 +505,7 @@ namespace JellyfinTizen.Core
                     var ms = new MediaSourceInfo
                     {
                         Id = src.GetProperty("Id").GetString(),
+                        Name = src.TryGetProperty("Name", out var sourceName) ? sourceName.GetString() : null,
                         SupportsDirectPlay = src.GetProperty("SupportsDirectPlay").GetBoolean(),
                         SupportsTranscoding = src.GetProperty("SupportsTranscoding").GetBoolean(),
                         // TranscodingUrl is only present if transcoding is needed/possible
@@ -551,12 +526,6 @@ namespace JellyfinTizen.Core
                                 Codec = s.TryGetProperty("Codec", out var c) ? c.GetString() : null,
                                 IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean()
                             };
-                            
-                            // Log all subtitle streams for debugging
-                            if (mediaStream.Type == "Subtitle")
-                            {
-                                Console.WriteLine($"Found subtitle stream: Index={mediaStream.Index}, External={mediaStream.IsExternal}, Codec={mediaStream.Codec}, Language={mediaStream.Language}, DisplayTitle={mediaStream.DisplayTitle}");
-                            }
                             
                             ms.MediaStreams.Add(mediaStream);
                         }
@@ -580,11 +549,12 @@ namespace JellyfinTizen.Core
             {
                 foreach (var source in mediaSources.EnumerateArray())
                 {
-                    if (source.TryGetProperty("IsAnamorphic", out var isAna) &&
-                        isAna.ValueKind == JsonValueKind.True)
+                    if (TryGetBool(source, "IsAnamorphic", out var sourceAnamorphic) && sourceAnamorphic)
                     {
                         return true;
                     }
+
+                    var sourceAspect = TryGetAspectRatio(source, "AspectRatio");
 
                     if (source.TryGetProperty("MediaStreams", out var streams) &&
                         streams.ValueKind == JsonValueKind.Array)
@@ -592,11 +562,27 @@ namespace JellyfinTizen.Core
                         foreach (var stream in streams.EnumerateArray())
                         {
                             if (stream.TryGetProperty("Type", out var type) &&
-                                type.GetString() == "Video" &&
-                                stream.TryGetProperty("IsAnamorphic", out var streamIsAna) &&
-                                streamIsAna.ValueKind == JsonValueKind.True)
+                                type.GetString() == "Video")
                             {
-                                return true;
+                                if (TryGetBool(stream, "IsAnamorphic", out var streamAnamorphic) && streamAnamorphic)
+                                    return true;
+
+                                if (TryGetInt32(stream, "Width", out var width) &&
+                                    TryGetInt32(stream, "Height", out var height) &&
+                                    width > 0 &&
+                                    height > 0)
+                                {
+                                    var storageAspect = (double)width / height;
+                                    var displayAspect = TryGetAspectRatio(stream, "AspectRatio") ?? sourceAspect;
+
+                                    if (displayAspect.HasValue)
+                                    {
+                                        // If display aspect meaningfully differs from stored pixel aspect,
+                                        // this is anamorphic-like behavior even if explicit flag is missing.
+                                        if (Math.Abs(displayAspect.Value - storageAspect) > 0.04)
+                                            return true;
+                                    }
+                                }
                             }
                         }
                     }
@@ -604,6 +590,77 @@ namespace JellyfinTizen.Core
             }
 
             return false;
+        }
+
+        private static bool TryGetBool(JsonElement element, string propertyName, out bool value)
+        {
+            value = false;
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return false;
+            if (prop.ValueKind != JsonValueKind.True && prop.ValueKind != JsonValueKind.False)
+                return false;
+
+            value = prop.GetBoolean();
+            return true;
+        }
+
+        private static bool TryGetInt32(JsonElement element, string propertyName, out int value)
+        {
+            value = 0;
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return false;
+            if (prop.ValueKind != JsonValueKind.Number)
+                return false;
+
+            return prop.TryGetInt32(out value);
+        }
+
+        private static double? TryGetAspectRatio(JsonElement element, string propertyName)
+        {
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return null;
+
+            if (prop.ValueKind != JsonValueKind.String)
+                return null;
+
+            var text = prop.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            return ParseAspectRatio(text.Trim());
+        }
+
+        private static double? ParseAspectRatio(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            text = text.Trim();
+
+            int sep = text.IndexOf(':');
+            if (sep < 0)
+                sep = text.IndexOf('/');
+
+            if (sep > 0 && sep < text.Length - 1)
+            {
+                var left = text.Substring(0, sep).Trim();
+                var right = text.Substring(sep + 1).Trim();
+
+                if (double.TryParse(left, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a) &&
+                    double.TryParse(right, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var b) &&
+                    b > 0)
+                {
+                    return a / b;
+                }
+            }
+
+            if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ratio) &&
+                ratio > 0)
+            {
+                return ratio;
+            }
+
+            return null;
         }
 
     }

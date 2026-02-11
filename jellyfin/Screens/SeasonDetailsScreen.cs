@@ -14,7 +14,7 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const int EpisodeCardWidth = 420;
         private const int EpisodeCardHeight = 236;
-        private const int EpisodeCardTextHeight = 64;
+        private const int EpisodeCardTextHeight = 90;
         private const int EpisodeCardSpacing = 30;
         private const int FocusBorder = 4;
         private const int FocusPad = 20;
@@ -325,7 +325,7 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = EpisodeCardTextHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 6, 0),
+                Padding = new Extents(8, 8, 12, 0),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical
@@ -337,7 +337,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = 22,
+                PointSize = 26,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,

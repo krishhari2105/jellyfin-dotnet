@@ -12,6 +12,7 @@ namespace JellyfinTizen.Models
     public class MediaSourceInfo
     {
         public string Id { get; set; }
+        public string Name { get; set; }
         public bool SupportsDirectPlay { get; set; }
         public bool SupportsTranscoding { get; set; }
         public string TranscodingUrl { get; set; }

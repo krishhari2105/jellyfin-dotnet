@@ -9,11 +9,12 @@ namespace JellyfinTizen.Screens
 {
     public class HomeScreen : ScreenBase, IKeyHandler
     {
-        private const int TopBarHeight = 72;
+        private const int TopBarHeight = 80;
         private const int RowsStartY = TopBarHeight + 28;
         private const int SidePadding = 60;
-        private const int FocusBorder = 4;
-        private const int FocusPad = 20;
+        private const int FocusBorder = 5;
+        private const int FocusPad = 24;
+        private const int LibraryTitleImageGap = 12;
         private const float FocusScale = 1.14f;
 
         private readonly List<HomeRowData> _rows;
@@ -40,7 +41,7 @@ namespace JellyfinTizen.Screens
 
         // Jellyfin Blue (#00A4DC)
         private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
-        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.45f);
+        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.58f);
 
         public HomeScreen(List<HomeRowData> rows)
         {
@@ -66,34 +67,47 @@ namespace JellyfinTizen.Screens
                 Padding = new Extents(SidePadding, SidePadding, 16, 0)
             };
 
+            var sharedResPath = Tizen.Applications.Application.Current.DirectoryInfo.SharedResource;
             var title = new TextLabel("Jellyfin")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 46,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = 40,
                 TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Begin
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Center,
+                Ellipsis = false
             };
+            title.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
             _settingsButton = new View
             {
-                WidthSpecification = 180,
-                HeightSpecification = 52,
-                BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                Focusable = true,
-                CornerRadius = 26f
+                WidthSpecification = 50,
+                HeightSpecification = 50,
+                BackgroundColor = Color.Transparent,
+                Focusable = true
             };
 
-            var settingsLabel = new TextLabel("Settings")
+            var avatarUrl = AppState.GetUserAvatarUrl(512);
+            var hasAvatar = !string.IsNullOrWhiteSpace(avatarUrl);
+            var settingsIcon = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 24,
-                TextColor = Color.White
+                ResourceUrl = hasAvatar
+                    ? avatarUrl
+                    : sharedResPath + "settings.png",
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos,
+                Padding = hasAvatar
+                    ? new Extents(0, 0, 0, 0)
+                    : new Extents(10, 10, 10, 10),
+                AlphaMaskURL = sharedResPath + "avatar-mask.png",
+                CropToMask = true,
+                MaskingMode = ImageView.MaskingModeType.MaskingOnLoading
             };
 
-            _settingsButton.Add(settingsLabel);
+            _settingsButton.Add(settingsIcon);
 
             topBar.Add(title);
             topBar.Add(_settingsButton);
@@ -160,7 +174,11 @@ namespace JellyfinTizen.Screens
                 var textHeight = GetCardTextHeight(row.Kind);
                 var cardHeight = rowInfo.CardHeight + textHeight;
                 var rowHeight = rowInfo.RowHeight + textHeight;
+                //var titleImageGap = row.Kind == HomeRowKind.Libraries ? LibraryTitleImageGap : 0;
+                var titleImageGap = 0;
 
+                var viewportTopPadding = (ushort)Math.Min(FocusPad + titleImageGap, (int)ushort.MaxValue);
+                var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - titleImageGap);
                 var rowBlock = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -184,12 +202,12 @@ namespace JellyfinTizen.Screens
                     HeightSpecification = cardHeight + (FocusPad * 2),
                     PositionY = rowInfo.TitleHeight + 10,
                     ClippingMode = ClippingModeType.ClipChildren,
-                    Padding = new Extents(SidePadding, SidePadding, 0, 0)
+                    Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
                 };
 
                 var rowContainer = new View
                 {
-                    PositionY = FocusPad,
+                    PositionY = 0,
                     Layout = new LinearLayout
                     {
                         LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -229,10 +247,10 @@ namespace JellyfinTizen.Screens
         {
             return kind switch
             {
-                HomeRowKind.Libraries => 48,
-                HomeRowKind.NextUp => 64,
-                HomeRowKind.ContinueWatching => 64,
-                _ => 60
+                HomeRowKind.Libraries => 68,
+                HomeRowKind.NextUp => 84,
+                HomeRowKind.ContinueWatching => 84,
+                _ => 80
             };
         }
 
@@ -276,7 +294,6 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = imageHeight,
                 CornerRadius = 16.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren,
                 BackgroundColor = Color.Transparent,
                 Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
                 Layout = new LinearLayout
@@ -325,7 +342,7 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = textHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 6, 0),
+                Padding = new Extents(8, 8, 12, 0),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -337,7 +354,8 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = isLandscapeRow ? 22 : 24,
+                //PointSize = isLandscapeRow ? 26 : 28,
+                PointSize = 26,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
@@ -353,7 +371,7 @@ namespace JellyfinTizen.Screens
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightResizePolicy = ResizePolicyType.FitToChildren,
                     TextColor = new Color(1, 1, 1, 0.75f),
-                    PointSize = 18,
+                    PointSize = 20,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
                     MultiLine = false
@@ -456,8 +474,9 @@ namespace JellyfinTizen.Screens
                 if (frame != null)
                 {
                     frame.BackgroundColor = _focusBorderColor;
-                    frame.BorderlineWidth = 0.0f; // Disable explicit border line
-                    frame.BoxShadow = new Shadow(8.0f, new Color(0.0f, 0.64f, 0.86f, 0.25f), new Vector2(0, 0));
+                    frame.BorderlineWidth = 2.0f;
+                    frame.BorderlineColor = _focusColor;
+                    frame.BoxShadow = new Shadow(12.0f, new Color(0.0f, 0.64f, 0.86f, 0.36f), new Vector2(0, 0));
                 }
             }
             else
@@ -473,6 +492,7 @@ namespace JellyfinTizen.Screens
                 {
                     frame.BackgroundColor = Color.Transparent;
                     frame.BorderlineWidth = 0.0f;
+                    frame.BorderlineColor = Color.Transparent;
                     frame.BoxShadow = null;
                 }
             }
@@ -624,9 +644,9 @@ namespace JellyfinTizen.Screens
             if (focused)
             {
                 _settingsButton.Scale = new Vector3(1.1f, 1.1f, 1f);
-                _settingsButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
-                _settingsButton.BorderlineWidth = 0.0f;
-                _settingsButton.BoxShadow = null;
+                //_settingsButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
+                //_settingsButton.BorderlineWidth = 0.0f;
+                //_settingsButton.BoxShadow = null;
 
                 Highlight(false);
                 FocusManager.Instance.SetCurrentFocusView(_settingsButton);
@@ -634,9 +654,9 @@ namespace JellyfinTizen.Screens
             else
             {
                 _settingsButton.Scale = Vector3.One;
-                _settingsButton.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f);
-                _settingsButton.BorderlineWidth = 0.0f;
-                _settingsButton.BoxShadow = null;
+                //_settingsButton.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f);
+                //_settingsButton.BorderlineWidth = 0.0f;
+                //_settingsButton.BoxShadow = null;
 
                 Highlight(true);
                 FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);

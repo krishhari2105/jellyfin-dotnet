@@ -1,3 +1,5 @@
+using System;
+
 namespace JellyfinTizen.Core
 {
     public static class AppState
@@ -142,6 +144,43 @@ namespace JellyfinTizen.Core
                 ServerUrl = null;
                 Tizen.Applications.Preference.Remove(KeyServerUrl);
             }
+        }
+
+        public static string GetUserAvatarUrl(int size = 96)
+        {
+            if (size <= 0)
+                size = 96;
+
+            if (string.IsNullOrWhiteSpace(ServerUrl) ||
+                string.IsNullOrWhiteSpace(UserId) ||
+                string.IsNullOrWhiteSpace(AccessToken))
+            {
+                return null;
+            }
+
+            var apiKey = Uri.EscapeDataString(AccessToken);
+            return
+                $"{ServerUrl.TrimEnd('/')}/Users/{UserId}/Images/Primary" +
+                $"?width={size}&height={size}" +
+                $"&quality=95&v=2&api_key={apiKey}";
+        }
+
+        public static string GetItemLogoUrl(string itemId, int maxWidth = 900)
+        {
+            if (maxWidth <= 0)
+                maxWidth = 900;
+
+            if (string.IsNullOrWhiteSpace(itemId) ||
+                string.IsNullOrWhiteSpace(ServerUrl) ||
+                string.IsNullOrWhiteSpace(AccessToken))
+            {
+                return null;
+            }
+
+            var apiKey = Uri.EscapeDataString(AccessToken);
+            return
+                $"{ServerUrl.TrimEnd('/')}/Items/{itemId}/Images/Logo/0" +
+                $"?maxWidth={maxWidth}&quality=95&api_key={apiKey}";
         }
     }
 }

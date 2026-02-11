@@ -11,7 +11,6 @@ namespace JellyfinTizen.Core
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
-        private const bool LogKeyEvents = true;
 
         public static void Init(Window window)
         {
@@ -28,17 +27,8 @@ namespace JellyfinTizen.Core
             if (e.Key.State != Key.StateType.Down)
                 return;
 
-            // 1. Log Raw Key to Screen (So you know it works)
-            if (_currentScreen is VideoPlayerScreen player)
-            {
-                player.Log($"[NUI RAW] {e.Key.KeyPressedName}");
-            }
-
             if (!(_currentScreen is IKeyHandler handler))
                 return;
-
-            if (LogKeyEvents)
-                Console.WriteLine($"KeyPressedName={e.Key.KeyPressedName}");
 
             // 2. Map the Key
             var key = e.Key.KeyPressedName switch

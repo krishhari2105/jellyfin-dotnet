@@ -208,7 +208,6 @@ namespace JellyfinTizen.Screens
 
         private void ShowErrorMessage(string message)
         {
-            Console.WriteLine($"ERROR: {message}");
             _errorLabel.Text = message;
             
             // Clear error after 5 seconds

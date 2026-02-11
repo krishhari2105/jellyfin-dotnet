@@ -18,11 +18,17 @@ namespace JellyfinTizen.Screens
         private View _playButton;
         private View _resumeButton;
         private View _subtitleButton;
+        private View _versionButton;
         private readonly List<View> _buttons = new();
         private int _buttonIndex;
         private View _infoColumn;
+        private View _buttonGroup;
+        private View _buttonRowTop;
+        private View _buttonRowBottom;
         
         private List<MediaStream> _subtitleStreams;
+        private List<MediaSourceInfo> _mediaSources = new();
+        private int _selectedMediaSourceIndex = 0;
         private int? _selectedSubtitleIndex = null;
 
         public EpisodeDetailsScreen(JellyfinMovie episode)
@@ -135,33 +141,37 @@ namespace JellyfinTizen.Screens
             overviewViewport.Add(overview);
             _infoColumn.Add(title);
             _infoColumn.Add(overviewViewport);
-            var buttonRow = new View
+            _buttonGroup = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 100,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 Layout = new LinearLayout
                 {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(30, 0)
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 14)
                 },
                 Margin = new Extents(0, 0, 20, 0)
             };
+
+            _buttonRowTop = CreateButtonRow();
+            _buttonRowBottom = CreateButtonRow();
+            _buttonGroup.Add(_buttonRowTop);
+
             _playButton = CreateActionButton("Play", isPrimary: true);
-            _buttons.Add(_playButton);
-            buttonRow.Add(_playButton);
+            _playButton.WidthSpecification = 200;
+
             if (_resumeAvailable)
             {
                 var resumeText = $"Resume ({FormatResumeTime(_episode.PlaybackPositionTicks)})";
                 _resumeButton = CreateActionButton(resumeText, isPrimary: false);
-                _buttons.Add(_resumeButton);
-                buttonRow.Add(_resumeButton);
             }
 
             _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
-            _buttons.Add(_subtitleButton);
-            buttonRow.Add(_subtitleButton);
 
-            _infoColumn.Add(buttonRow);
+            _versionButton = CreateActionButton("Default", isPrimary: false);
+            RebuildActionButtons(includeVersionButton: false);
+
+            _infoColumn.Add(_buttonGroup);
             content.Add(thumbFrame);
             content.Add(_infoColumn);
             root.Add(backdrop);
@@ -172,6 +182,7 @@ namespace JellyfinTizen.Screens
         public override void OnShow()
         {
             _ = LoadSubtitleStreamsAsync();
+            _ = LoadMediaSourcesAsync();
             FocusButton(0);
         }
 
@@ -186,6 +197,35 @@ namespace JellyfinTizen.Screens
             {
                 // Ignore
             }
+        }
+
+        private async Task LoadMediaSourcesAsync()
+        {
+            try
+            {
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id);
+                _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
+            }
+            catch
+            {
+                _mediaSources = new List<MediaSourceInfo>();
+            }
+
+            if (_mediaSources.Count == 0)
+            {
+                _mediaSources.Add(new MediaSourceInfo
+                {
+                    Id = _episode.Id,
+                    Name = "Default"
+                });
+            }
+
+            _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
+            RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
+            UpdateVersionButtonText();
+
+            if (_buttons.Count > 0)
+                FocusButton(_buttonIndex);
         }
 
         public void HandleKey(AppKey key)
@@ -212,9 +252,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = 260,
                 HeightSpecification = 70,
-                BackgroundColor = isPrimary
-                    ? new Color(0.85f, 0.11f, 0.11f, 1f)
-                    : new Color(0.2f, 0.2f, 0.2f, 1f),
+                BackgroundColor = new Color(1, 1, 1, 0.15f),
                 Focusable = true,
                 CornerRadius = 35.0f
             };
@@ -225,10 +263,91 @@ namespace JellyfinTizen.Screens
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 PointSize = 26,
-                TextColor = Color.White
+                TextColor = Color.White,
+                Ellipsis = true
             };
             button.Add(label);
             return button;
+        }
+
+        private static View CreateButtonRow()
+        {
+            return new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 100,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(42, 0)
+                }
+            };
+        }
+
+        private void RebuildActionButtons(bool includeVersionButton)
+        {
+            if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
+                return;
+
+            ClearRowChildren(_buttonRowTop);
+            ClearRowChildren(_buttonRowBottom);
+            _buttons.Clear();
+
+            AddActionButton(_playButton);
+            if (_resumeButton != null)
+                AddActionButton(_resumeButton);
+            AddActionButton(_subtitleButton);
+            if (includeVersionButton)
+                AddActionButton(_versionButton);
+
+            if (_buttonRowBottom.ChildCount > 0)
+            {
+                if (!HasChild(_buttonGroup, _buttonRowBottom))
+                    _buttonGroup.Add(_buttonRowBottom);
+            }
+            else if (HasChild(_buttonGroup, _buttonRowBottom))
+            {
+                _buttonGroup.Remove(_buttonRowBottom);
+            }
+
+            _buttonIndex = Math.Clamp(_buttonIndex, 0, Math.Max(0, _buttons.Count - 1));
+
+            void AddActionButton(View button)
+            {
+                if (button == null)
+                    return;
+
+                var count = _buttons.Count;
+                _buttons.Add(button);
+
+                if (count < 3)
+                    _buttonRowTop.Add(button);
+                else
+                    _buttonRowBottom.Add(button);
+            }
+        }
+
+        private static void ClearRowChildren(View row)
+        {
+            while (row != null && row.ChildCount > 0)
+            {
+                var child = row.GetChildAt(0);
+                row.Remove(child);
+            }
+        }
+
+        private static bool HasChild(View parent, View child)
+        {
+            if (parent == null || child == null)
+                return false;
+
+            foreach (var existing in parent.Children)
+            {
+                if (ReferenceEquals(existing, child))
+                    return true;
+            }
+
+            return false;
         }
         private void MoveFocus(int delta)
         {
@@ -248,15 +367,11 @@ namespace JellyfinTizen.Screens
 
                 if (focused)
                 {
-                    button.BackgroundColor = (i == 0)
-                        ? new Color(0.95f, 0.2f, 0.2f, 1f)
-                        : new Color(0.35f, 0.35f, 0.35f, 1f);
+                    button.BackgroundColor = new Color(0.85f, 0.11f, 0.11f, 1f); 
                 }
                 else
                 {
-                    button.BackgroundColor = (i == 0)
-                        ? new Color(0.85f, 0.11f, 0.11f, 1f)
-                        : new Color(0.2f, 0.2f, 0.2f, 1f);
+                    button.BackgroundColor = new Color(1, 1, 1, 0.15f);
                 }
             }
 
@@ -280,6 +395,11 @@ namespace JellyfinTizen.Screens
             if (_buttons[_buttonIndex] == _subtitleButton)
             {
                 CycleSubtitle();
+                return;
+            }
+            if (_buttons[_buttonIndex] == _versionButton)
+            {
+                CycleMediaSource();
                 return;
             }
         }
@@ -307,6 +427,20 @@ namespace JellyfinTizen.Screens
             UpdateSubtitleButtonText();
         }
 
+        private void CycleMediaSource()
+        {
+            if (_mediaSources == null || _mediaSources.Count <= 1)
+            {
+                UpdateVersionButtonText();
+                return;
+            }
+
+            _selectedMediaSourceIndex = (_selectedMediaSourceIndex + 1) % _mediaSources.Count;
+            _selectedSubtitleIndex = null;
+            UpdateSubtitleButtonText();
+            UpdateVersionButtonText();
+        }
+
         private void UpdateSubtitleButtonText()
         {
             if (_subtitleButton == null) return;
@@ -327,10 +461,54 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private void UpdateVersionButtonText()
+        {
+            if (_versionButton == null || _versionButton.ChildCount == 0)
+                return;
+
+            if (!(_versionButton.GetChildAt(0) is TextLabel label))
+                return;
+
+            var total = _mediaSources?.Count ?? 0;
+            if (total <= 0)
+            {
+                label.Text = "Source";
+                return;
+            }
+
+            _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, total - 1);
+            var sourceName = GetMediaSourceDisplayName(_mediaSources[_selectedMediaSourceIndex], _selectedMediaSourceIndex + 1);
+            label.Text = sourceName;
+        }
+
+        private static string GetMediaSourceDisplayName(MediaSourceInfo source, int fallbackIndex)
+        {
+            if (source == null)
+                return $"Source {fallbackIndex}";
+            if (!string.IsNullOrWhiteSpace(source.Name))
+                return source.Name.Trim();
+            return $"Source {fallbackIndex}";
+        }
+
+        private string GetSelectedMediaSourceId()
+        {
+            if (_mediaSources == null || _mediaSources.Count == 0)
+                return null;
+            if (_selectedMediaSourceIndex < 0 || _selectedMediaSourceIndex >= _mediaSources.Count)
+                return null;
+            return _mediaSources[_selectedMediaSourceIndex]?.Id;
+        }
+
         private void PlayMedia(JellyfinMovie media, int startPositionMs)
         {
             NavigationService.Navigate(
-                new VideoPlayerScreen(media, startPositionMs, _selectedSubtitleIndex, AppState.BurnInSubtitles)
+                new VideoPlayerScreen(
+                    media,
+                    startPositionMs,
+                    _selectedSubtitleIndex,
+                    AppState.BurnInSubtitles,
+                    GetSelectedMediaSourceId()
+                )
             );
         }
         private static int TicksToMs(long ticks)
