@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -39,6 +40,12 @@ namespace JellyfinTizen.Screens
         private int _selectedMediaSourceIndex = 0;
         private int? _selectedSubtitleIndex = null;
         private readonly Dictionary<View, Animation> _focusAnimations = new();
+        private View _metadataContainer;
+        private View _metadataSummaryRow;
+        private TextLabel _metadataSummaryLabel;
+        private View _metadataRatingGroup;
+        private TextLabel _metadataRatingLabel;
+        private View _metadataTagRow;
 
         public MovieDetailsScreen(JellyfinMovie movie)
         {
@@ -110,6 +117,7 @@ namespace JellyfinTizen.Screens
             };
             var titleText = _mediaItem.ItemType == "Episode" ? $"{_mediaItem.SeriesName} - {_mediaItem.Name}" : _mediaItem.Name;
             var title = CreateDetailsTitleView(titleText);
+            _metadataContainer = CreateMetadataView();
             var overview = new TextLabel(
                 string.IsNullOrEmpty(_mediaItem.Overview)
                     ? "No overview available."
@@ -124,7 +132,9 @@ namespace JellyfinTizen.Screens
                 LineWrapMode = LineWrapMode.Word
             };
             _infoColumn.Add(title);
+            _infoColumn.Add(_metadataContainer);
             _infoColumn.Add(overview);
+            UpdateMetadataView();
             if (_mediaItem.ItemType == "Movie" || _mediaItem.ItemType == "Episode")
             {
                 _buttonGroup = new View
@@ -332,6 +342,7 @@ namespace JellyfinTizen.Screens
             _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
             UpdateVersionButtonText();
+            UpdateMetadataView();
 
             if (_buttons.Count > 0)
                 FocusButton(_buttonIndex);
@@ -623,6 +634,7 @@ namespace JellyfinTizen.Screens
             _selectedSubtitleIndex = null;
             UpdateSubtitleButtonText();
             UpdateVersionButtonText();
+            UpdateMetadataView();
         }
 
         private void UpdateSubtitleButtonText()
@@ -683,6 +695,437 @@ namespace JellyfinTizen.Screens
             if (_selectedMediaSourceIndex < 0 || _selectedMediaSourceIndex >= _mediaSources.Count)
                 return null;
             return _mediaSources[_selectedMediaSourceIndex]?.Id;
+        }
+
+        private MediaSourceInfo GetSelectedMediaSource()
+        {
+            if (_mediaSources == null || _mediaSources.Count == 0)
+                return null;
+
+            if (_selectedMediaSourceIndex >= 0 && _selectedMediaSourceIndex < _mediaSources.Count)
+                return _mediaSources[_selectedMediaSourceIndex];
+
+            return _mediaSources[0];
+        }
+
+        private View CreateMetadataView()
+        {
+            var container = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 10)
+                }
+            };
+
+            _metadataSummaryRow = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(18, 0)
+                }
+            };
+
+            _metadataSummaryLabel = new TextLabel
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 28,
+                TextColor = new Color(0.88f, 0.88f, 0.88f, 1f),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            var ratingStar = new TextLabel("\u2605")
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 32,
+                TextColor = new Color(0.95f, 0.78f, 0.29f, 1f),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            _metadataRatingLabel = new TextLabel
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 28,
+                TextColor = new Color(0.92f, 0.92f, 0.92f, 1f),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            _metadataRatingGroup = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FitToChildren,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(8, 0)
+                }
+            };
+
+            _metadataRatingGroup.Add(ratingStar);
+            _metadataRatingGroup.Add(_metadataRatingLabel);
+
+            _metadataSummaryRow.Add(_metadataSummaryLabel);
+            _metadataSummaryRow.Add(_metadataRatingGroup);
+
+            _metadataTagRow = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(12, 0)
+                }
+            };
+
+            container.Add(_metadataSummaryRow);
+            container.Add(_metadataTagRow);
+            return container;
+        }
+
+        private void UpdateMetadataView()
+        {
+            if (_metadataContainer == null || _metadataSummaryLabel == null || _metadataTagRow == null)
+                return;
+
+            var summaryText = BuildSummaryText(_mediaItem);
+            _metadataSummaryLabel.Text = summaryText;
+
+            if (_mediaItem.CommunityRating.HasValue && _mediaItem.CommunityRating.Value > 0)
+            {
+                _metadataRatingLabel.Text = _mediaItem.CommunityRating.Value.ToString("0.0", CultureInfo.InvariantCulture);
+                _metadataRatingGroup.Show();
+            }
+            else
+            {
+                _metadataRatingGroup.Hide();
+            }
+
+            var tags = BuildTechnicalTags(GetSelectedMediaSource());
+            RebuildMetadataTags(tags);
+
+            var hasSummary = !string.IsNullOrWhiteSpace(summaryText);
+            var hasRating = _mediaItem.CommunityRating.HasValue && _mediaItem.CommunityRating.Value > 0;
+            var hasTags = tags.Count > 0;
+
+            if (hasSummary || hasRating)
+                _metadataSummaryRow.Show();
+            else
+                _metadataSummaryRow.Hide();
+
+            if (hasTags)
+                _metadataTagRow.Show();
+            else
+                _metadataTagRow.Hide();
+
+            if (hasSummary || hasRating || hasTags)
+                _metadataContainer.Show();
+            else
+                _metadataContainer.Hide();
+        }
+
+        private void RebuildMetadataTags(List<string> tags)
+        {
+            ClearRowChildren(_metadataTagRow);
+
+            if (tags == null || tags.Count == 0)
+                return;
+
+            foreach (var tag in tags)
+            {
+                var chip = CreateMetadataChip(tag);
+                _metadataTagRow.Add(chip);
+            }
+        }
+
+        private static View CreateMetadataChip(string text)
+        {
+            var chip = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FitToChildren,
+                HeightSpecification = 48,
+                BackgroundColor = new Color(0.14f, 0.16f, 0.20f, 0.74f),
+                CornerRadius = 12.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ClippingMode = ClippingModeType.ClipChildren,
+                Padding = new Extents(12, 12, 8, 8),
+                Margin = new Extents(0, 0, 2, 2),
+                BorderlineWidth = 1.0f,
+                BorderlineColor = new Color(1f, 1f, 1f, 0.14f),
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+
+            var label = new TextLabel(text)
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 18,
+                TextColor = new Color(0.98f, 0.98f, 0.98f, 1f),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            label.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
+
+            chip.Add(label);
+            return chip;
+        }
+
+        private static string BuildSummaryText(JellyfinMovie media)
+        {
+            if (media == null)
+                return string.Empty;
+
+            var parts = new List<string>();
+
+            if (media.ProductionYear > 0)
+                parts.Add(media.ProductionYear.ToString(CultureInfo.InvariantCulture));
+
+            var runtime = FormatRuntimeForMetadata(media.RunTimeTicks);
+            if (!string.IsNullOrWhiteSpace(runtime))
+                parts.Add(runtime);
+
+            if (!string.IsNullOrWhiteSpace(media.OfficialRating))
+                parts.Add(media.OfficialRating.Trim());
+
+            return string.Join("  ", parts);
+        }
+
+        private static string FormatRuntimeForMetadata(long ticks)
+        {
+            if (ticks <= 0)
+                return null;
+
+            var totalMinutes = (int)Math.Round(TimeSpan.FromTicks(ticks).TotalMinutes, MidpointRounding.AwayFromZero);
+            if (totalMinutes <= 0)
+                return null;
+
+            var hours = totalMinutes / 60;
+            var minutes = totalMinutes % 60;
+
+            if (hours <= 0)
+                return $"{totalMinutes}m";
+            if (minutes == 0)
+                return $"{hours}h";
+
+            return $"{hours}h {minutes}m";
+        }
+
+        private static List<string> BuildTechnicalTags(MediaSourceInfo source)
+        {
+            var tags = new List<string>();
+            if (source?.MediaStreams == null || source.MediaStreams.Count == 0)
+                return tags;
+
+            MediaStream videoStream = null;
+            MediaStream audioStream = null;
+
+            foreach (var stream in source.MediaStreams)
+            {
+                if (stream == null)
+                    continue;
+
+                if (videoStream == null &&
+                    string.Equals(stream.Type, "Video", StringComparison.OrdinalIgnoreCase))
+                {
+                    videoStream = stream;
+                }
+                else if (audioStream == null &&
+                         string.Equals(stream.Type, "Audio", StringComparison.OrdinalIgnoreCase))
+                {
+                    audioStream = stream;
+                }
+            }
+
+            AddMetadataTag(tags, GetResolutionTag(videoStream));
+            AddMetadataTag(tags, GetVideoCodecTag(videoStream?.Codec));
+            AddMetadataTag(tags, GetHdrTag(videoStream));
+            AddMetadataTag(tags, GetAudioCodecTag(audioStream));
+            AddMetadataTag(tags, GetAudioChannelTag(audioStream));
+
+            while (tags.Count > 5)
+                tags.RemoveAt(tags.Count - 1);
+
+            return tags;
+        }
+
+        private static string GetResolutionTag(MediaStream stream)
+        {
+            if (stream == null)
+                return null;
+
+            var width = stream.Width.GetValueOrDefault();
+            var height = stream.Height.GetValueOrDefault();
+
+            if (width >= 3800 || height >= 2000)
+                return "4K";
+            if (width >= 1900 || height >= 1000)
+                return "1080p";
+            if (width >= 1200 || height >= 700)
+                return "HD";
+
+            var description = GetStreamSearchText(stream);
+            if (description.Contains("2160"))
+                return "4K";
+            if (description.Contains("1080"))
+                return "1080p";
+            if (description.Contains("720"))
+                return "HD";
+
+            return null;
+        }
+
+        private static string GetVideoCodecTag(string codec)
+        {
+            if (string.IsNullOrWhiteSpace(codec))
+                return null;
+
+            var normalized = codec.Trim().ToLowerInvariant();
+
+            if (normalized.Contains("hevc") || normalized.Contains("h265") || normalized.Contains("x265"))
+                return "HEVC";
+            if (normalized.Contains("h264") || normalized.Contains("avc") || normalized.Contains("x264"))
+                return "H.264";
+            if (normalized.Contains("av1"))
+                return "AV1";
+            if (normalized.Contains("vp9"))
+                return "VP9";
+
+            return codec.Trim().ToUpperInvariant();
+        }
+
+        private static string GetHdrTag(MediaStream stream)
+        {
+            var text = GetStreamSearchText(stream);
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            if (text.Contains("dolby vision") || text.Contains("dovi") || text.Contains("dvhe"))
+                return "Dolby Vision";
+            if (text.Contains("hdr10+"))
+                return "HDR10+";
+            if (text.Contains("hdr10"))
+                return "HDR10";
+            if (text.Contains("hlg"))
+                return "HLG";
+            if (text.Contains("hdr"))
+                return "HDR";
+
+            return null;
+        }
+
+        private static string GetAudioCodecTag(MediaStream stream)
+        {
+            if (stream == null)
+                return null;
+
+            var text = GetStreamSearchText(stream);
+            var codec = stream.Codec?.ToLowerInvariant() ?? string.Empty;
+
+            if (text.Contains("dolby digital plus") || text.Contains("eac3") || codec.Contains("eac3"))
+                return "Dolby Digital+";
+            if (text.Contains("dolby digital") || codec == "ac3" || codec.Contains("ac3"))
+                return "Dolby Digital";
+            if (text.Contains("truehd") || codec.Contains("truehd"))
+                return "TrueHD";
+            if (text.Contains("dts") || codec.Contains("dts"))
+                return "DTS";
+            if (text.Contains("aac") || codec.Contains("aac"))
+                return "AAC";
+            if (text.Contains("flac") || codec.Contains("flac"))
+                return "FLAC";
+            if (text.Contains("opus") || codec.Contains("opus"))
+                return "Opus";
+            if (text.Contains("mp3") || codec.Contains("mp3"))
+                return "MP3";
+
+            if (!string.IsNullOrWhiteSpace(stream.Codec))
+                return stream.Codec.Trim().ToUpperInvariant();
+
+            return null;
+        }
+
+        private static string GetAudioChannelTag(MediaStream stream)
+        {
+            if (stream == null)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(stream.ChannelLayout))
+            {
+                var layout = stream.ChannelLayout.ToLowerInvariant();
+
+                if (layout.Contains("7.1"))
+                    return "7.1";
+                if (layout.Contains("6.1"))
+                    return "6.1";
+                if (layout.Contains("5.1"))
+                    return "5.1";
+                if (layout.Contains("2.0") || layout.Contains("stereo"))
+                    return "2.0";
+                if (layout.Contains("1.0") || layout.Contains("mono"))
+                    return "1.0";
+            }
+
+            if (stream.Channels.HasValue && stream.Channels.Value > 0)
+            {
+                return stream.Channels.Value switch
+                {
+                    8 => "7.1",
+                    7 => "6.1",
+                    6 => "5.1",
+                    2 => "2.0",
+                    1 => "1.0",
+                    _ => $"{stream.Channels.Value}.0"
+                };
+            }
+
+            var text = GetStreamSearchText(stream);
+            if (text.Contains("7.1"))
+                return "7.1";
+            if (text.Contains("6.1"))
+                return "6.1";
+            if (text.Contains("5.1"))
+                return "5.1";
+            if (text.Contains("2.0") || text.Contains("stereo"))
+                return "2.0";
+
+            return null;
+        }
+
+        private static string GetStreamSearchText(MediaStream stream)
+        {
+            if (stream == null)
+                return string.Empty;
+
+            return $"{stream.DisplayTitle} {stream.VideoRange} {stream.ChannelLayout} {stream.Codec}".ToLowerInvariant();
+        }
+
+        private static void AddMetadataTag(List<string> tags, string value)
+        {
+            if (tags == null || string.IsNullOrWhiteSpace(value))
+                return;
+
+            var normalized = value.Trim();
+            foreach (var existing in tags)
+            {
+                if (string.Equals(existing, normalized, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            tags.Add(normalized);
         }
 
         private void PlayMedia(JellyfinMovie media, int startPositionMs)

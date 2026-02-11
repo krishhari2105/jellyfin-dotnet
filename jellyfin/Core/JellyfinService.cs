@@ -181,7 +181,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={libraryId}" +
                 $"&IncludeItemTypes={includeItemTypes}" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks" +
+                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
                 "&SortBy=SortName" +
                 $"&UserId={UserId}";
 
@@ -199,7 +199,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={seriesId}" +
                 "&IncludeItemTypes=Season" +
                 "&Recursive=false" +
-                "&Fields=Overview,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,RunTimeTicks" +
+                "&Fields=Overview,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
                 "&SortBy=IndexNumber" +
                 $"&UserId={UserId}";
 
@@ -217,7 +217,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={seasonId}" +
                 "&IncludeItemTypes=Episode" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks" +
+                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
                 "&SortBy=IndexNumber" +
                 $"&UserId={UserId}";
 
@@ -235,7 +235,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={libraryId}" +
                 $"&IncludeItemTypes={includeItemTypes}" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks" +
+                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
                 "&SortBy=DateCreated" +
                 "&SortOrder=Descending" +
                 $"&Limit={limit}" +
@@ -255,7 +255,7 @@ namespace JellyfinTizen.Core
                 $"/Shows/NextUp?UserId={UserId}" +
                 $"&ParentId={tvLibraryId}" +
                 $"&Limit={limit}" +
-                "&Fields=Overview,SeriesName,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks";
+                "&Fields=Overview,SeriesName,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
 
             var json = await GetAsync(url);
 
@@ -275,7 +275,7 @@ namespace JellyfinTizen.Core
                 "&SortBy=DatePlayed" +
                 "&SortOrder=Descending" +
                 $"&Limit={limit}" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks";
+                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
 
             var json = await GetAsync(url);
 
@@ -367,6 +367,15 @@ namespace JellyfinTizen.Core
                     RunTimeTicks = item.TryGetProperty("RunTimeTicks", out var rt)
                         ? rt.GetInt64()
                         : 0,
+                    ProductionYear = item.TryGetProperty("ProductionYear", out var py) && py.TryGetInt32(out var productionYear)
+                        ? productionYear
+                        : 0,
+                    OfficialRating = item.TryGetProperty("OfficialRating", out var officialRating)
+                        ? officialRating.GetString()
+                        : string.Empty,
+                    CommunityRating = item.TryGetProperty("CommunityRating", out var communityRating) && communityRating.ValueKind == JsonValueKind.Number
+                        ? communityRating.GetDouble()
+                        : null,
                     SeriesName = item.TryGetProperty("SeriesName", out var s)
                         ? s.GetString()
                         : string.Empty,
@@ -414,7 +423,12 @@ namespace JellyfinTizen.Core
                             Language = stream.TryGetProperty("Language", out var l) ? l.GetString() : "Unknown",
                             DisplayTitle = stream.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : "Unknown",
                             Codec = stream.TryGetProperty("Codec", out var c) ? c.GetString() : null,
-                            IsExternal = stream.TryGetProperty("IsExternal", out var e) && e.GetBoolean()
+                            IsExternal = stream.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
+                            Width = null,
+                            Height = null,
+                            VideoRange = null,
+                            Channels = null,
+                            ChannelLayout = null
                         });
                     }
                 }
@@ -524,7 +538,22 @@ namespace JellyfinTizen.Core
                                 Language = s.TryGetProperty("Language", out var l) ? l.GetString() : null,
                                 DisplayTitle = s.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : null,
                                 Codec = s.TryGetProperty("Codec", out var c) ? c.GetString() : null,
-                                IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean()
+                                IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
+                                Width = s.TryGetProperty("Width", out var widthProp) && widthProp.TryGetInt32(out var widthValue)
+                                    ? widthValue
+                                    : null,
+                                Height = s.TryGetProperty("Height", out var heightProp) && heightProp.TryGetInt32(out var heightValue)
+                                    ? heightValue
+                                    : null,
+                                VideoRange = s.TryGetProperty("VideoRange", out var videoRangeProp)
+                                    ? videoRangeProp.GetString()
+                                    : null,
+                                Channels = s.TryGetProperty("Channels", out var channelsProp) && channelsProp.TryGetInt32(out var channelsValue)
+                                    ? channelsValue
+                                    : null,
+                                ChannelLayout = s.TryGetProperty("ChannelLayout", out var channelLayoutProp)
+                                    ? channelLayoutProp.GetString()
+                                    : null
                             };
                             
                             ms.MediaStreams.Add(mediaStream);

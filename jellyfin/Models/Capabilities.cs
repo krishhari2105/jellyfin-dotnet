@@ -100,5 +100,10 @@ namespace JellyfinTizen.Models
         public string DisplayTitle { get; set; }
         public string Codec { get; set; }
         public bool IsExternal { get; set; }
+        public int? Width { get; set; }
+        public int? Height { get; set; }
+        public string VideoRange { get; set; }
+        public int? Channels { get; set; }
+        public string ChannelLayout { get; set; }
     }
 }
