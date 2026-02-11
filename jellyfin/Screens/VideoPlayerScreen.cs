@@ -7,6 +7,7 @@ using Tizen.NUI.Components;
 using Tizen.Applications;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.Utils;
 using System.Threading.Tasks;
 using System.IO;
 using System.Net.Http;
@@ -79,6 +80,18 @@ namespace JellyfinTizen.Screens
         private int _osdButtonCount = 1;
         private int _osdFocusRow = 0; // 0 = Seekbar, 1 = Buttons
         private int _buttonFocusIndex = 0;
+        private Animation _osdAnimation;
+        private Animation _topOsdAnimation;
+        private Animation _subtitleOverlayAnimation;
+        private Animation _audioOverlayAnimation;
+        private Animation _subtitleTextAnimation;
+        private readonly Dictionary<View, Animation> _focusAnimations = new();
+        private int _osdShownY;
+        private int _osdHiddenY;
+        private int _topOsdShownY;
+        private int _topOsdHiddenY;
+        private int _subtitleOverlayBaseX;
+        private int _audioOverlayBaseX;
 
         private const int OffsetButtonIndex = 0;
         private const int PrevButtonIndex = 1;
@@ -86,6 +99,8 @@ namespace JellyfinTizen.Screens
         private const int SubtitleOffsetStepMs = 100;
         private const int SubtitleOffsetLimitMs = 5000;
         private const int SubtitleOffsetTrackWidth = 280;
+        private const int OverlaySlideDistance = 36;
+        private const int OsdSlideDistance = 34;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -135,6 +150,12 @@ namespace JellyfinTizen.Screens
             _reportProgressTimer?.Stop();
             _reportProgressTimer = null;
             ReportProgressToServer();
+            UiAnimator.StopAndDispose(ref _osdAnimation);
+            UiAnimator.StopAndDispose(ref _topOsdAnimation);
+            UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
+            UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
+            UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
+            UiAnimator.StopAndDisposeAll(_focusAnimations);
             StopPlayback();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
@@ -619,8 +640,12 @@ namespace JellyfinTizen.Screens
         private void CreateOSD()
         {
             int sidePadding = 60; int labelWidth = 140; int labelGap = 20; int bottomHeight = 260; int topHeight = 160; int screenWidth = Window.Default.Size.Width;
+            _topOsdShownY = 0;
+            _topOsdHiddenY = -OsdSlideDistance;
+            _osdShownY = Window.Default.Size.Height - bottomHeight;
+            _osdHiddenY = _osdShownY + OsdSlideDistance;
 
-            _topOsd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = topHeight, PositionY = 0 };
+            _topOsd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = topHeight, PositionY = _topOsdHiddenY, Opacity = 0.0f };
             var topGradient = new PropertyMap();
             topGradient.Add(Visual.Property.Type, new PropertyValue((int)Visual.Type.Gradient));
             topGradient.Add(GradientVisualProperty.StartPosition, new PropertyValue(new Vector2(0.0f, -0.5f)));
@@ -639,7 +664,7 @@ namespace JellyfinTizen.Screens
             _topOsd.Add(CreateTopOsdTitleView(sidePadding));
             Add(_topOsd);
 
-            _osd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = bottomHeight, PositionY = Window.Default.Size.Height - bottomHeight };
+            _osd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = bottomHeight, PositionY = _osdHiddenY, Opacity = 0.0f };
             var bottomGradient = new PropertyMap();
             bottomGradient.Add(Visual.Property.Type, new PropertyValue((int)Visual.Type.Gradient));
             bottomGradient.Add(GradientVisualProperty.StartPosition, new PropertyValue(new Vector2(0.0f, -0.5f)));
@@ -781,7 +806,27 @@ namespace JellyfinTizen.Screens
              button.BackgroundColor = focused
                  ? (editing ? new Color(0, 164f / 255f, 220f / 255f, 1f) : new Color(0.85f, 0.11f, 0.11f, 1f))
                  : new Color(1, 1, 1, 0.15f);
-             button.Scale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
+             AnimateFocusScale(button, focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One);
+        }
+
+        private void AnimateFocusScale(View view, Vector3 targetScale)
+        {
+            if (view == null)
+                return;
+
+            if (_focusAnimations.TryGetValue(view, out var existing))
+            {
+                UiAnimator.StopAndDispose(ref existing);
+                _focusAnimations.Remove(view);
+            }
+
+            var animation = UiAnimator.Start(
+                UiAnimator.FocusDurationMs,
+                anim => anim.AnimateTo(view, "Scale", targetScale),
+                () => _focusAnimations.Remove(view)
+            );
+
+            _focusAnimations[view] = animation;
         }
 
         private void CreateSubtitleOffsetTrack(int screenWidth)
@@ -915,7 +960,7 @@ namespace JellyfinTizen.Screens
                     ? new Color(0, 164f / 255f, 220f / 255f, 1f) // Blue when editing
                     : new Color(1, 1, 1, 0.15f); // Default transparent
                 
-                _subtitleOffsetButton.Scale = _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
+                AnimateFocusScale(_subtitleOffsetButton, _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One);
             }
             _osdTimer.Stop();
             _osdTimer.Start();
@@ -930,7 +975,7 @@ namespace JellyfinTizen.Screens
             if (_subtitleOffsetButton != null)
             {
                 _subtitleOffsetButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
-                _subtitleOffsetButton.Scale = Vector3.One;
+                AnimateFocusScale(_subtitleOffsetButton, Vector3.One);
             }
             UpdateOsdFocus();
         }
@@ -1022,7 +1067,8 @@ namespace JellyfinTizen.Screens
 
         private void CreateSubtitleOverlay()
         {
-            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren };
+            _subtitleOverlayBaseX = Window.Default.Size.Width - 500;
+            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = _subtitleOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
             _subtitleOverlay.Hide();
             Add(_subtitleOverlay);
         }
@@ -1040,6 +1086,7 @@ namespace JellyfinTizen.Screens
             if (_subtitleOverlay == null) CreateSubtitleOverlay();
             HideAudioOverlay();
             ExitSubtitleOffsetAdjustMode();
+            var wasVisible = _subtitleOverlayVisible;
 
             // 1. Use Jellyfin Metadata to list ALL tracks (fixes Tizen HLS limitation)
             var subtitleStreams = _currentMediaSource?.MediaStreams?
@@ -1101,6 +1148,29 @@ namespace JellyfinTizen.Screens
             UpdateSubtitleVisuals();
             _subtitleOverlay.Show();
             _subtitleOverlayVisible = true;
+
+            if (!wasVisible)
+            {
+                _subtitleOverlay.PositionX = _subtitleOverlayBaseX + OverlaySlideDistance;
+                _subtitleOverlay.Opacity = 0.0f;
+
+                UiAnimator.Replace(
+                    ref _subtitleOverlayAnimation,
+                    UiAnimator.Start(
+                        UiAnimator.PanelDurationMs,
+                        animation =>
+                        {
+                            animation.AnimateTo(_subtitleOverlay, "PositionX", (float)_subtitleOverlayBaseX);
+                            animation.AnimateTo(_subtitleOverlay, "Opacity", 1.0f);
+                        }
+                    )
+                );
+            }
+            else
+            {
+                _subtitleOverlay.PositionX = _subtitleOverlayBaseX;
+                _subtitleOverlay.Opacity = 1.0f;
+            }
         }
 
         private View CreateSubtitleRow(string text, string indexId)
@@ -1136,7 +1206,7 @@ namespace JellyfinTizen.Screens
                 row.BackgroundColor = Color.Transparent;
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
-                row.Scale = Vector3.One;
+                AnimateFocusScale(row, Vector3.One);
             };
             
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 28, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
@@ -1154,7 +1224,7 @@ namespace JellyfinTizen.Screens
                 var row = _subtitleListContainer.GetChildAt((uint)i);
                 bool selected = (i == _subtitleIndex);
                 row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
-                row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
+                AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null)
                 {
@@ -1243,7 +1313,8 @@ namespace JellyfinTizen.Screens
 
         private void CreateAudioOverlay()
         {
-            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = Window.Default.Size.Width - 500, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren };
+            _audioOverlayBaseX = Window.Default.Size.Width - 500;
+            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = _audioOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
             _audioOverlay.Hide();
             Add(_audioOverlay);
         }
@@ -1254,6 +1325,7 @@ namespace JellyfinTizen.Screens
             if (_audioOverlay == null) CreateAudioOverlay();
             HideSubtitleOverlay();
             ExitSubtitleOffsetAdjustMode();
+            var wasVisible = _audioOverlayVisible;
 
             var audioStreams = _currentMediaSource?.MediaStreams?
                 .Where(s => s.Type == "Audio")
@@ -1301,7 +1373,7 @@ namespace JellyfinTizen.Screens
                         row.BackgroundColor = Color.Transparent;
                         var label = row.GetChildAt(0) as TextLabel;
                         if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
-                        row.Scale = Vector3.One;
+                        AnimateFocusScale(row, Vector3.One);
                     };
                     var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
                     row.Add(label);
@@ -1311,6 +1383,29 @@ namespace JellyfinTizen.Screens
             UpdateAudioVisuals();
             _audioOverlay.Show();
             _audioOverlayVisible = true;
+
+            if (!wasVisible)
+            {
+                _audioOverlay.PositionX = _audioOverlayBaseX + OverlaySlideDistance;
+                _audioOverlay.Opacity = 0.0f;
+
+                UiAnimator.Replace(
+                    ref _audioOverlayAnimation,
+                    UiAnimator.Start(
+                        UiAnimator.PanelDurationMs,
+                        animation =>
+                        {
+                            animation.AnimateTo(_audioOverlay, "PositionX", (float)_audioOverlayBaseX);
+                            animation.AnimateTo(_audioOverlay, "Opacity", 1.0f);
+                        }
+                    )
+                );
+            }
+            else
+            {
+                _audioOverlay.PositionX = _audioOverlayBaseX;
+                _audioOverlay.Opacity = 1.0f;
+            }
         }
 
         private void UpdateAudioVisuals(bool setFocus = true)
@@ -1323,15 +1418,67 @@ namespace JellyfinTizen.Screens
                 var row = _audioListContainer.GetChildAt((uint)i);
                 bool selected = (i == _audioIndex);
                 row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
-                row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
+                AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+                if (selected) focusedView = row;
             }
             if (setFocus && focusedView != null) FocusManager.Instance.SetCurrentFocusView(focusedView);
         }
 
-        private void HideAudioOverlay() { if (_audioOverlay != null) { _audioOverlay.Hide(); _audioOverlayVisible = false; } }
-        private void HideSubtitleOverlay() { if (_subtitleOverlay != null) { _subtitleOverlay.Hide(); _subtitleOverlayVisible = false; } }
+        private void HideAudioOverlay()
+        {
+            if (_audioOverlay == null)
+                return;
+
+            if (!_audioOverlayVisible)
+            {
+                _audioOverlay.Hide();
+                return;
+            }
+
+            _audioOverlayVisible = false;
+
+            UiAnimator.Replace(
+                ref _audioOverlayAnimation,
+                UiAnimator.Start(
+                    UiAnimator.PanelDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(_audioOverlay, "PositionX", _audioOverlayBaseX + OverlaySlideDistance);
+                        animation.AnimateTo(_audioOverlay, "Opacity", 0.0f);
+                    },
+                    () => _audioOverlay.Hide()
+                )
+            );
+        }
+
+        private void HideSubtitleOverlay()
+        {
+            if (_subtitleOverlay == null)
+                return;
+
+            if (!_subtitleOverlayVisible)
+            {
+                _subtitleOverlay.Hide();
+                return;
+            }
+
+            _subtitleOverlayVisible = false;
+
+            UiAnimator.Replace(
+                ref _subtitleOverlayAnimation,
+                UiAnimator.Start(
+                    UiAnimator.PanelDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(_subtitleOverlay, "PositionX", _subtitleOverlayBaseX + OverlaySlideDistance);
+                        animation.AnimateTo(_subtitleOverlay, "Opacity", 0.0f);
+                    },
+                    () => _subtitleOverlay.Hide()
+                )
+            );
+        }
 
         private void OnSubtitleUpdated(object sender, SubtitleUpdatedEventArgs e)
         {
@@ -1414,16 +1561,73 @@ namespace JellyfinTizen.Screens
 
         private void ShowOSD()
         {
-            if (!_osdVisible) _osdFocusRow = 0;
-            _osd.Show(); _osd.Opacity = 1;
-            if (_topOsd != null) { _topOsd.Show(); _topOsd.Opacity = 1; }
+            var wasVisible = _osdVisible;
+            if (!wasVisible) _osdFocusRow = 0;
+
+            _osd.Show();
+            if (_topOsd != null) _topOsd.Show();
+
             if (_subtitleOffsetTrackContainer != null)
             {
                 if (_subtitleOffsetAdjustMode) _subtitleOffsetTrackContainer.Show();
                 else _subtitleOffsetTrackContainer.Hide();
             }
             _osdVisible = true;
-            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 340;
+
+            if (!wasVisible)
+            {
+                _osd.PositionY = _osdHiddenY;
+                _osd.Opacity = 0.0f;
+
+                UiAnimator.Replace(
+                    ref _osdAnimation,
+                    UiAnimator.Start(
+                        UiAnimator.PanelDurationMs,
+                        animation =>
+                        {
+                            animation.AnimateTo(_osd, "PositionY", (float)_osdShownY);
+                            animation.AnimateTo(_osd, "Opacity", 1.0f);
+                        }
+                    )
+                );
+
+                if (_topOsd != null)
+                {
+                    _topOsd.PositionY = _topOsdHiddenY;
+                    _topOsd.Opacity = 0.0f;
+
+                    UiAnimator.Replace(
+                        ref _topOsdAnimation,
+                        UiAnimator.Start(
+                            UiAnimator.PanelDurationMs,
+                            animation =>
+                            {
+                                animation.AnimateTo(_topOsd, "PositionY", (float)_topOsdShownY);
+                                animation.AnimateTo(_topOsd, "Opacity", 1.0f);
+                            }
+                        )
+                    );
+                }
+
+                if (_subtitleText != null)
+                {
+                    UiAnimator.Replace(
+                        ref _subtitleTextAnimation,
+                        UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)(Window.Default.Size.Height - 340), UiAnimator.ScrollDurationMs)
+                    );
+                }
+            }
+            else
+            {
+                _osd.PositionY = _osdShownY;
+                _osd.Opacity = 1.0f;
+                if (_topOsd != null)
+                {
+                    _topOsd.PositionY = _topOsdShownY;
+                    _topOsd.Opacity = 1.0f;
+                }
+            }
+
             UpdateOsdFocus();
             UpdateSubtitleOffsetUI();
             UpdateProgress();
@@ -1459,10 +1663,45 @@ namespace JellyfinTizen.Screens
         private void HideOSD()
         {
             ExitSubtitleOffsetAdjustMode();
-            _osd.Hide(); _osd.Opacity = 0;
-            if (_topOsd != null) { _topOsd.Hide(); _topOsd.Opacity = 0; }
             _osdVisible = false;
-            if (_subtitleText != null) _subtitleText.PositionY = Window.Default.Size.Height - 250;
+
+            UiAnimator.Replace(
+                ref _osdAnimation,
+                UiAnimator.Start(
+                    UiAnimator.PanelDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(_osd, "PositionY", (float)_osdHiddenY);
+                        animation.AnimateTo(_osd, "Opacity", 0.0f);
+                    },
+                    () => _osd.Hide()
+                )
+            );
+
+            if (_topOsd != null)
+            {
+                UiAnimator.Replace(
+                    ref _topOsdAnimation,
+                    UiAnimator.Start(
+                        UiAnimator.PanelDurationMs,
+                        animation =>
+                        {
+                            animation.AnimateTo(_topOsd, "PositionY", (float)_topOsdHiddenY);
+                            animation.AnimateTo(_topOsd, "Opacity", 0.0f);
+                        },
+                        () => _topOsd.Hide()
+                    )
+                );
+            }
+
+            if (_subtitleText != null)
+            {
+                UiAnimator.Replace(
+                    ref _subtitleTextAnimation,
+                    UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)(Window.Default.Size.Height - 250), UiAnimator.ScrollDurationMs)
+                );
+            }
+
             _osdTimer.Stop();
             _progressTimer.Stop();
             if (_isSeeking && _player != null) { _isSeeking = false; _seekPreviewMs = GetPlayPositionMs(); UpdateProgress(); }
@@ -1499,6 +1738,13 @@ namespace JellyfinTizen.Screens
 
         private void StopPlayback()
         {
+            UiAnimator.StopAndDispose(ref _osdAnimation);
+            UiAnimator.StopAndDispose(ref _topOsdAnimation);
+            UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
+            UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
+            UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
+            UiAnimator.StopAndDisposeAll(_focusAnimations);
+
             try 
             {
                 if (_player != null) {

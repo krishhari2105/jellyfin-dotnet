@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Tizen.Applications;
 using Tizen.NUI;
 using JellyfinTizen.Screens;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
@@ -11,6 +12,8 @@ namespace JellyfinTizen.Core
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
+        private static Animation _screenTransitionAnimation;
+        private static bool _isTransitioning;
 
         public static void Init(Window window)
         {
@@ -25,6 +28,9 @@ namespace JellyfinTizen.Core
         private static void OnKeyEvent(object sender, Window.KeyEventArgs e)
         {
             if (e.Key.State != Key.StateType.Down)
+                return;
+
+            if (_isTransitioning)
                 return;
 
             if (!(_currentScreen is IKeyHandler handler))
@@ -73,32 +79,107 @@ namespace JellyfinTizen.Core
             handler.HandleKey(key);
         }
 
-        // ... (Keep Navigate, NavigateBack, ClearStack, HandleBack as they were) ...
-        
-        public static void Navigate(ScreenBase screen, bool addToStack = true)
+        public static void Navigate(ScreenBase screen, bool addToStack = true, bool animated = true)
         {
-            if (_currentScreen != null)
+            if (_window == null || screen == null)
+                return;
+
+            if (_currentScreen == null || !animated || _isTransitioning)
             {
-                _currentScreen.OnHide();
-                _window.Remove(_currentScreen);
-                if (addToStack) _stack.Push(_currentScreen);
-                else _currentScreen.Dispose();
+                NavigateImmediate(screen, addToStack);
+                return;
             }
-            _currentScreen = screen;
-            _window.Add(_currentScreen);
-            _currentScreen.OnShow();
+
+            var outgoing = _currentScreen;
+            var incoming = screen;
+            var slide = GetSlideDistance();
+
+            _isTransitioning = true;
+
+            outgoing.OnHide();
+            if (addToStack) _stack.Push(outgoing);
+
+            incoming.PositionX = slide;
+            incoming.Opacity = 0.0f;
+            _window.Add(incoming);
+            _currentScreen = incoming;
+            incoming.OnShow();
+
+            UiAnimator.Replace(
+                ref _screenTransitionAnimation,
+                UiAnimator.Start(
+                    UiAnimator.ScreenDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(incoming, "PositionX", 0.0f);
+                        animation.AnimateTo(incoming, "Opacity", 1.0f);
+                        animation.AnimateTo(outgoing, "PositionX", -slide * 0.6f);
+                        animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                    },
+                    () =>
+                    {
+                        CleanupOutgoingAfterNavigate(outgoing, addToStack);
+                        _isTransitioning = false;
+                        _screenTransitionAnimation = null;
+                    }
+                )
+            );
         }
 
-        public static void NavigateBack()
+        public static void NavigateBack(bool animated = true)
         {
-            if (_stack.Count == 0) { Application.Current?.Exit(); return; }
-            _currentScreen.OnHide();
-            _window.Remove(_currentScreen);
-            _currentScreen.Dispose();
-            _currentScreen = _stack.Pop();
-            if (_currentScreen == null) return;
-            _window.Add(_currentScreen);
-            _currentScreen.OnShow();
+            if (_stack.Count == 0)
+            {
+                Application.Current?.Exit();
+                return;
+            }
+
+            if (_currentScreen == null || !animated || _isTransitioning)
+            {
+                NavigateBackImmediate();
+                return;
+            }
+
+            var outgoing = _currentScreen;
+            var incoming = _stack.Pop();
+            var slide = GetSlideDistance();
+
+            if (incoming == null)
+            {
+                Application.Current?.Exit();
+                return;
+            }
+
+            _isTransitioning = true;
+
+            outgoing.OnHide();
+
+            incoming.PositionX = -slide * 0.6f;
+            incoming.Opacity = 0.0f;
+            _window.Add(incoming);
+            _currentScreen = incoming;
+            incoming.OnShow();
+
+            UiAnimator.Replace(
+                ref _screenTransitionAnimation,
+                UiAnimator.Start(
+                    UiAnimator.ScreenDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(incoming, "PositionX", 0.0f);
+                        animation.AnimateTo(incoming, "Opacity", 1.0f);
+                        animation.AnimateTo(outgoing, "PositionX", slide);
+                        animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                    },
+                    () =>
+                    {
+                        try { _window.Remove(outgoing); } catch { }
+                        try { outgoing.Dispose(); } catch { }
+                        _isTransitioning = false;
+                        _screenTransitionAnimation = null;
+                    }
+                )
+            );
         }
 
         public static void ClearStack()
@@ -113,6 +194,65 @@ namespace JellyfinTizen.Core
         public static void HandleBack()
         {
             if (_currentScreen is IKeyHandler handler) handler.HandleKey(AppKey.Back);
+        }
+
+        private static void NavigateImmediate(ScreenBase screen, bool addToStack)
+        {
+            if (_currentScreen != null)
+            {
+                _currentScreen.OnHide();
+                _window.Remove(_currentScreen);
+                if (addToStack) _stack.Push(_currentScreen);
+                else _currentScreen.Dispose();
+            }
+
+            _currentScreen = screen;
+            _window.Add(_currentScreen);
+            _currentScreen.OnShow();
+        }
+
+        private static void NavigateBackImmediate()
+        {
+            if (_stack.Count == 0)
+            {
+                Application.Current?.Exit();
+                return;
+            }
+
+            _currentScreen.OnHide();
+            _window.Remove(_currentScreen);
+            _currentScreen.Dispose();
+            _currentScreen = _stack.Pop();
+            if (_currentScreen == null) return;
+            _window.Add(_currentScreen);
+            _currentScreen.OnShow();
+        }
+
+        private static void CleanupOutgoingAfterNavigate(ScreenBase outgoing, bool addToStack)
+        {
+            try { _window.Remove(outgoing); } catch { }
+
+            if (addToStack)
+            {
+                try
+                {
+                    outgoing.PositionX = 0.0f;
+                    outgoing.Opacity = 1.0f;
+                }
+                catch { }
+            }
+            else
+            {
+                try { outgoing.Dispose(); } catch { }
+            }
+        }
+
+        private static float GetSlideDistance()
+        {
+            if (_window == null)
+                return UiAnimator.ScreenSlideDistance;
+
+            return Math.Max(UiAnimator.ScreenSlideDistance, _window.Size.Width * 0.08f);
         }
     }
 }

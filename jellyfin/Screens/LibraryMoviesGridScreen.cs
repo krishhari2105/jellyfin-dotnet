@@ -4,6 +4,7 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
@@ -24,6 +25,7 @@ namespace JellyfinTizen.Screens
         private const int TopGlowPadBoost = 8;
         private const float FocusScale = 1.14f;
         private const int CardTextHeight = 80;
+        private const int SettingsPanelSlideDistance = 36;
 
         // Jellyfin Blue (#00A4DC)
         private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
@@ -34,6 +36,7 @@ namespace JellyfinTizen.Screens
         private readonly List<List<View>> _grid = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
+        private readonly Dictionary<View, Animation> _focusAnimations = new();
 
         private View _verticalContainer;
 
@@ -48,6 +51,12 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _settingsOptions = new();
         private int _settingsIndex;
         private bool _settingsVisible;
+        private int _settingsPanelBaseX;
+
+        private Animation _horizontalScrollAnimation;
+        private Animation _verticalScrollAnimation;
+        private Animation _settingsPanelAnimation;
+        private Animation _settingsButtonAnimation;
 
         public LibraryMoviesGridScreen(string libraryName, List<JellyfinMovie> movies)
         {
@@ -163,6 +172,7 @@ namespace JellyfinTizen.Screens
 
                 var rowContainer = new View
                 {
+                    PositionX = SidePadding,
                     PositionY = 0,
                     Layout = new LinearLayout
                     {
@@ -205,12 +215,35 @@ namespace JellyfinTizen.Screens
 
             _settingsFocused = false;
             _settingsVisible = false;
-            _settingsPanel?.Hide();
+            ResetSettingsPanelVisualState();
 
             Highlight(true);
             FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
             ScrollHorizontalIfNeeded();
             ScrollVerticalIfNeeded();
+        }
+
+        public override void OnHide()
+        {
+            UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
+            UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
+            UiAnimator.StopAndDispose(ref _settingsPanelAnimation);
+            UiAnimator.StopAndDispose(ref _settingsButtonAnimation);
+            UiAnimator.StopAndDisposeAll(_focusAnimations);
+        }
+
+        private void ResetSettingsPanelVisualState()
+        {
+            UiAnimator.StopAndDispose(ref _settingsPanelAnimation);
+
+            if (_settingsPanel == null)
+            {
+                return;
+            }
+
+            _settingsPanel.Opacity = 0.0f;
+            _settingsPanel.PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance;
+            _settingsPanel.Hide();
         }
 
         private int CalculateColumns()
@@ -402,7 +435,7 @@ namespace JellyfinTizen.Screens
             var frame = GetCardFrame(card);
             var content = GetCardContent(card);
             if (content != null)
-                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+                AnimateCardScale(content, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
 
             card.Scale = Vector3.One;
             card.PositionZ = focused ? 20 : 0;
@@ -425,6 +458,28 @@ namespace JellyfinTizen.Screens
                     frame.BoxShadow = null;
                 }
             }
+        }
+
+        private void AnimateCardScale(View content, Vector3 targetScale)
+        {
+            if (content == null)
+            {
+                return;
+            }
+
+            if (_focusAnimations.TryGetValue(content, out var existing))
+            {
+                UiAnimator.StopAndDispose(ref existing);
+                _focusAnimations.Remove(content);
+            }
+
+            var animation = UiAnimator.Start(
+                UiAnimator.FocusDurationMs,
+                anim => anim.AnimateTo(content, "Scale", targetScale),
+                () => _focusAnimations.Remove(content)
+            );
+
+            _focusAnimations[content] = animation;
         }
 
         private View GetCardFrame(View card)
@@ -469,20 +524,20 @@ namespace JellyfinTizen.Screens
         private void FocusSettings(bool focused)
         {
             _settingsFocused = focused;
+            var targetScale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
 
-            //_settingsButton.Scale = focused ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
+            UiAnimator.Replace(
+                ref _settingsButtonAnimation,
+                UiAnimator.AnimateTo(_settingsButton, "Scale", targetScale, UiAnimator.FocusDurationMs)
+            );
 
             if (focused)
             {
-                _settingsButton.Scale = new Vector3(1.1f, 1.1f, 1f);
-                //_settingsButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
                 Highlight(false);
                 FocusManager.Instance.SetCurrentFocusView(_settingsButton);
             }
             else
             {
-                _settingsButton.Scale = Vector3.One;
-                //_settingsButton.BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f);
                 Highlight(true);
                 FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
             }
@@ -490,12 +545,14 @@ namespace JellyfinTizen.Screens
 
         private void CreateSettingsPanel()
         {
+            _settingsPanelBaseX = Window.Default.Size.Width - 520;
+
             _settingsPanel = new View
             {
                 WidthSpecification = 420,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
                 BackgroundColor = new Color(0, 0, 0, 1.0f),
-                PositionX = Window.Default.Size.Width - 520,
+                PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance,
                 PositionY = TopBarHeight + 16,
                 PositionZ = TopBarZ + 5,
                 CornerRadius = 14f,
@@ -511,6 +568,7 @@ namespace JellyfinTizen.Screens
                 }
             };
 
+            _settingsPanel.Opacity = 0.0f;
             _settingsPanel.Hide();
 
             var title = new TextLabel("Settings")
@@ -579,13 +637,40 @@ namespace JellyfinTizen.Screens
             _settingsVisible = true;
             _settingsIndex = 0;
             UpdateSettingsHighlight();
+
+            _settingsPanel.PositionX = _settingsPanelBaseX + SettingsPanelSlideDistance;
+            _settingsPanel.Opacity = 0.0f;
             _settingsPanel.Show();
+
+            UiAnimator.Replace(
+                ref _settingsPanelAnimation,
+                UiAnimator.Start(
+                    UiAnimator.PanelDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(_settingsPanel, "PositionX", (float)_settingsPanelBaseX);
+                        animation.AnimateTo(_settingsPanel, "Opacity", 1.0f);
+                    }
+                )
+            );
         }
 
         private void HideSettingsPanel()
         {
             _settingsVisible = false;
-            _settingsPanel.Hide();
+
+            UiAnimator.Replace(
+                ref _settingsPanelAnimation,
+                UiAnimator.Start(
+                    UiAnimator.PanelDurationMs,
+                    animation =>
+                    {
+                        animation.AnimateTo(_settingsPanel, "PositionX", _settingsPanelBaseX + SettingsPanelSlideDistance);
+                        animation.AnimateTo(_settingsPanel, "Opacity", 0.0f);
+                    },
+                    () => _settingsPanel.Hide()
+                )
+            );
         }
 
         private void HandleSettingsPanelKey(AppKey key)
@@ -675,27 +760,38 @@ namespace JellyfinTizen.Screens
             var rowContainer = _rowContainers[_rowIndex];
             var viewport = _viewports[_rowIndex];
             var focused = _grid[_rowIndex][_colIndex];
+            var targetX = rowContainer.PositionX;
 
-            // FIX: Add this block to align the grid with the Title/Padding at the start
             if (_colIndex == 0)
             {
-                rowContainer.PositionX = SidePadding;
+                targetX = SidePadding;
+            }
+            else
+            {
+                var offset = -rowContainer.PositionX;
+                var viewportWidth = viewport.SizeWidth;
+
+                var left = focused.PositionX;
+                var right = left + PosterWidth;
+
+                var visibleLeft = offset;
+                var visibleRight = offset + viewportWidth;
+
+                if (right > visibleRight)
+                    targetX -= (right - visibleRight + Spacing);
+                else if (left < visibleLeft)
+                    targetX += (visibleLeft - left + Spacing);
+            }
+
+            if (Math.Abs(targetX - rowContainer.PositionX) < 0.5f)
+            {
                 return;
             }
 
-            var offset = -rowContainer.PositionX;
-            var viewportWidth = viewport.SizeWidth;
-
-            var left = focused.PositionX;
-            var right = left + PosterWidth;
-
-            var visibleLeft = offset;
-            var visibleRight = offset + viewportWidth;
-
-            if (right > visibleRight)
-                rowContainer.PositionX -= (right - visibleRight + Spacing);
-            else if (left < visibleLeft)
-                rowContainer.PositionX += (visibleLeft - left + Spacing);
+            UiAnimator.Replace(
+                ref _horizontalScrollAnimation,
+                UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
+            );
         }
 
         private void ScrollVerticalIfNeeded()
@@ -704,6 +800,7 @@ namespace JellyfinTizen.Screens
             var rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
 
             var currentOffset = -_verticalContainer.PositionY + ContentStartY;
+            var targetY = _verticalContainer.PositionY;
 
             var rowTop = _rowIndex * rowHeight;
             var rowBottom = rowTop + rowHeight;
@@ -715,17 +812,27 @@ namespace JellyfinTizen.Screens
             if (rowBottom > visibleBottom)
             {
                 var delta = rowBottom - visibleBottom;
-                _verticalContainer.PositionY -= delta;
+                targetY -= delta;
             }
             // Scroll up only when row hits top edge
             else if (rowTop < visibleTop)
             {
                 var delta = visibleTop - rowTop;
-                _verticalContainer.PositionY += delta;
+                targetY += delta;
             }
 
-            if (_verticalContainer.PositionY > ContentStartY)
-                _verticalContainer.PositionY = ContentStartY;
+            if (targetY > ContentStartY)
+                targetY = ContentStartY;
+
+            if (Math.Abs(targetY - _verticalContainer.PositionY) < 0.5f)
+            {
+                return;
+            }
+
+            UiAnimator.Replace(
+                ref _verticalScrollAnimation,
+                UiAnimator.AnimateTo(_verticalContainer, "PositionY", targetY, UiAnimator.ScrollDurationMs)
+            );
         }
 
 

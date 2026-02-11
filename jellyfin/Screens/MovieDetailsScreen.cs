@@ -6,6 +6,7 @@ using Tizen.NUI.BaseComponents;
 using Tizen.NUI.Components;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
@@ -13,6 +14,8 @@ namespace JellyfinTizen.Screens
     {
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
+        private const float ButtonFocusScale = 1.08f;
+        private const float EpisodeFocusScale = 1.03f;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -35,6 +38,7 @@ namespace JellyfinTizen.Screens
         private List<MediaSourceInfo> _mediaSources = new();
         private int _selectedMediaSourceIndex = 0;
         private int? _selectedSubtitleIndex = null;
+        private readonly Dictionary<View, Animation> _focusAnimations = new();
 
         public MovieDetailsScreen(JellyfinMovie movie)
         {
@@ -173,6 +177,11 @@ namespace JellyfinTizen.Screens
                 _ = LoadMediaSourcesAsync();
                 FocusButton(0);
             }
+        }
+
+        public override void OnHide()
+        {
+            UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
         private View CreateDetailsTitleView(string fallbackText)
@@ -387,12 +396,14 @@ namespace JellyfinTizen.Screens
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
             {
                 _episodeViews[_episodeIndex].BackgroundColor = Color.Transparent;
+                AnimateScale(_episodeViews[_episodeIndex], Vector3.One);
             }
             _episodeIndex = index;
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
             {
                 // Lighter grey for better visibility, no border to keep corners rounded
                 _episodeViews[_episodeIndex].BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1.0f);
+                AnimateScale(_episodeViews[_episodeIndex], new Vector3(EpisodeFocusScale, EpisodeFocusScale, 1f));
                 FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
             }
         }
@@ -513,7 +524,7 @@ namespace JellyfinTizen.Screens
             {
                 var focused = i == _buttonIndex;
                 var button = _buttons[i];
-                button.Scale = focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One;
+                AnimateScale(button, focused ? new Vector3(ButtonFocusScale, ButtonFocusScale, 1f) : Vector3.One);
                 
                 // Add focused look
                 if (focused)
@@ -530,6 +541,26 @@ namespace JellyfinTizen.Screens
             {
                 FocusManager.Instance.SetCurrentFocusView(_buttons[_buttonIndex]);
             }
+        }
+
+        private void AnimateScale(View view, Vector3 targetScale)
+        {
+            if (view == null)
+                return;
+
+            if (_focusAnimations.TryGetValue(view, out var existing))
+            {
+                UiAnimator.StopAndDispose(ref existing);
+                _focusAnimations.Remove(view);
+            }
+
+            var animation = UiAnimator.Start(
+                UiAnimator.FocusDurationMs,
+                anim => anim.AnimateTo(view, "Scale", targetScale),
+                () => _focusAnimations.Remove(view)
+            );
+
+            _focusAnimations[view] = animation;
         }
         private void ActivateFocusedButton()
         {

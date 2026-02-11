@@ -5,6 +5,7 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
@@ -28,8 +29,10 @@ namespace JellyfinTizen.Screens
         private View _episodeRowContainer;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
+        private readonly Dictionary<View, Animation> _focusAnimations = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
+        private Animation _episodeScrollAnimation;
 
         public SeasonDetailsScreen(JellyfinMovie season)
         {
@@ -171,6 +174,12 @@ namespace JellyfinTizen.Screens
 
                 FocusEpisode(targetIndex);
             }
+        }
+
+        public override void OnHide()
+        {
+            UiAnimator.StopAndDispose(ref _episodeScrollAnimation);
+            UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
         private async Task LoadEpisodesAsync()
@@ -425,7 +434,7 @@ namespace JellyfinTizen.Screens
             var content = GetCardContent(card);
 
             if (content != null)
-                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+                AnimateCardScale(content, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
 
             card.Scale = Vector3.One;
             card.PositionZ = focused ? 20 : 0;
@@ -446,6 +455,28 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private void AnimateCardScale(View content, Vector3 targetScale)
+        {
+            if (content == null)
+            {
+                return;
+            }
+
+            if (_focusAnimations.TryGetValue(content, out var existing))
+            {
+                UiAnimator.StopAndDispose(ref existing);
+                _focusAnimations.Remove(content);
+            }
+
+            var animation = UiAnimator.Start(
+                UiAnimator.FocusDurationMs,
+                anim => anim.AnimateTo(content, "Scale", targetScale),
+                () => _focusAnimations.Remove(content)
+            );
+
+            _focusAnimations[content] = animation;
+        }
+
         private void ScrollEpisodesIfNeeded()
         {
             if (_episodeRowContainer == null || _episodeViewport == null || _episodeViews.Count == 0)
@@ -453,7 +484,7 @@ namespace JellyfinTizen.Screens
 
             if (_episodeIndex == 0)
             {
-                _episodeRowContainer.PositionX = 0;
+                AnimateEpisodeRowTo(0);
                 return;
             }
 
@@ -466,11 +497,32 @@ namespace JellyfinTizen.Screens
 
             var visibleLeft = offset;
             var visibleRight = offset + viewportWidth;
+            var targetX = _episodeRowContainer.PositionX;
 
             if (right > visibleRight)
-                _episodeRowContainer.PositionX -= (right - visibleRight + EpisodeCardSpacing);
+                targetX -= (right - visibleRight + EpisodeCardSpacing);
             else if (left < visibleLeft)
-                _episodeRowContainer.PositionX += (visibleLeft - left + EpisodeCardSpacing);
+                targetX += (visibleLeft - left + EpisodeCardSpacing);
+
+            AnimateEpisodeRowTo(targetX);
+        }
+
+        private void AnimateEpisodeRowTo(float targetX)
+        {
+            if (_episodeRowContainer == null)
+            {
+                return;
+            }
+
+            if (Math.Abs(targetX - _episodeRowContainer.PositionX) < 0.5f)
+            {
+                return;
+            }
+
+            UiAnimator.Replace(
+                ref _episodeScrollAnimation,
+                UiAnimator.AnimateTo(_episodeRowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
+            );
         }
 
         private View GetCardFrame(View card)
