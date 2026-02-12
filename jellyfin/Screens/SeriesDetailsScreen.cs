@@ -417,8 +417,9 @@ namespace JellyfinTizen.Screens
                     MoveSeasonFocus(1);
                     break;
                 case AppKey.Enter:
-                    NavigationService.Navigate(
-                        new SeasonDetailsScreen(_seasons[_seasonIndex])
+                    NavigationService.NavigateWithLoading(
+                        () => new SeasonDetailsScreen(_seasons[_seasonIndex]),
+                        "Loading season..."
                     );
                     break;
                 case AppKey.Back:

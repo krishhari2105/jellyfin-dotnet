@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -40,11 +41,24 @@ namespace JellyfinTizen.Screens
         private View _metadataRatingGroup;
         private TextLabel _metadataRatingLabel;
         private View _metadataTagRow;
+        private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
+        private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
+        private readonly bool _hasPrefetchedSubtitleStreams;
+        private readonly bool _hasPrefetchedMediaSources;
 
-        public EpisodeDetailsScreen(JellyfinMovie episode)
+        public EpisodeDetailsScreen(
+            JellyfinMovie episode,
+            List<MediaStream> prefetchedSubtitleStreams = null,
+            List<MediaSourceInfo> prefetchedMediaSources = null)
         {
             _episode = episode;
             _resumeAvailable = episode.PlaybackPositionTicks > 0;
+            if (prefetchedSubtitleStreams != null)
+                _subtitleStreams = prefetchedSubtitleStreams;
+            if (prefetchedMediaSources != null)
+                _mediaSources = prefetchedMediaSources;
+            _hasPrefetchedSubtitleStreams = prefetchedSubtitleStreams != null;
+            _hasPrefetchedMediaSources = prefetchedMediaSources != null;
             var root = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -121,10 +135,12 @@ namespace JellyfinTizen.Screens
             var title = new TextLabel(titleText)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 140,
                 PointSize = 64,
                 TextColor = Color.White,
                 MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
+                LineWrapMode = LineWrapMode.Word,
+                VerticalAlignment = VerticalAlignment.Top
             };
 
             _metadataContainer = CreateMetadataView();
@@ -142,12 +158,13 @@ namespace JellyfinTizen.Screens
             )
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
                 PointSize = 32,
                 TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
-                Ellipsis = false
+                Ellipsis = false,
+                VerticalAlignment = VerticalAlignment.Top
             };
 
             overviewViewport.Add(overview);
@@ -170,6 +187,7 @@ namespace JellyfinTizen.Screens
             _buttonRowTop = CreateButtonRow();
             _buttonRowBottom = CreateButtonRow();
             _buttonGroup.Add(_buttonRowTop);
+            _buttonGroup.Add(_buttonRowBottom);
 
             _playButton = CreateActionButton("Play", isPrimary: true);
             _playButton.WidthSpecification = 200;
@@ -183,7 +201,10 @@ namespace JellyfinTizen.Screens
             _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
 
             _versionButton = CreateActionButton("Default", isPrimary: false);
-            RebuildActionButtons(includeVersionButton: false);
+            RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
+            UpdateVersionButtonText();
+            UpdateSubtitleButtonText();
+            UpdateMetadataView();
 
             _infoColumn.Add(_buttonGroup);
             content.Add(thumbFrame);
@@ -195,8 +216,10 @@ namespace JellyfinTizen.Screens
         }
         public override void OnShow()
         {
-            _ = LoadSubtitleStreamsAsync();
-            _ = LoadMediaSourcesAsync();
+            if (!_hasPrefetchedSubtitleStreams)
+                _ = LoadSubtitleStreamsAsync();
+            if (!_hasPrefetchedMediaSources)
+                _ = LoadMediaSourcesAsync();
             FocusButton(0);
         }
 
@@ -319,16 +342,6 @@ namespace JellyfinTizen.Screens
             AddActionButton(_subtitleButton);
             if (includeVersionButton)
                 AddActionButton(_versionButton);
-
-            if (_buttonRowBottom.ChildCount > 0)
-            {
-                if (!HasChild(_buttonGroup, _buttonRowBottom))
-                    _buttonGroup.Add(_buttonRowBottom);
-            }
-            else if (HasChild(_buttonGroup, _buttonRowBottom))
-            {
-                _buttonGroup.Remove(_buttonRowBottom);
-            }
 
             _buttonIndex = Math.Clamp(_buttonIndex, 0, Math.Max(0, _buttons.Count - 1));
 
@@ -556,7 +569,7 @@ namespace JellyfinTizen.Screens
             var container = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                HeightSpecification = 114,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -567,7 +580,7 @@ namespace JellyfinTizen.Screens
             _metadataSummaryRow = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                HeightSpecification = 38,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -622,11 +635,12 @@ namespace JellyfinTizen.Screens
             _metadataTagRow = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                HeightSpecification = 56,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(12, 0)
+                    CellPadding = new Size2D(12, 0),
+                    HorizontalAlignment = HorizontalAlignment.Begin
                 }
             };
 
@@ -641,7 +655,7 @@ namespace JellyfinTizen.Screens
                 return;
 
             var summaryText = BuildSummaryText(_episode);
-            _metadataSummaryLabel.Text = summaryText;
+            _metadataSummaryLabel.Text = string.IsNullOrWhiteSpace(summaryText) ? " " : summaryText;
 
             if (_episode.CommunityRating.HasValue && _episode.CommunityRating.Value > 0)
             {
@@ -656,24 +670,9 @@ namespace JellyfinTizen.Screens
             var tags = BuildTechnicalTags(GetSelectedMediaSource());
             RebuildMetadataTags(tags);
 
-            var hasSummary = !string.IsNullOrWhiteSpace(summaryText);
-            var hasRating = _episode.CommunityRating.HasValue && _episode.CommunityRating.Value > 0;
-            var hasTags = tags.Count > 0;
-
-            if (hasSummary || hasRating)
-                _metadataSummaryRow.Show();
-            else
-                _metadataSummaryRow.Hide();
-
-            if (hasTags)
-                _metadataTagRow.Show();
-            else
-                _metadataTagRow.Hide();
-
-            if (hasSummary || hasRating || hasTags)
-                _metadataContainer.Show();
-            else
-                _metadataContainer.Hide();
+            _metadataSummaryRow.Show();
+            _metadataTagRow.Show();
+            _metadataContainer.Show();
         }
 
         private void RebuildMetadataTags(List<string> tags)
@@ -692,11 +691,21 @@ namespace JellyfinTizen.Screens
 
         private static View CreateMetadataChip(string text)
         {
+            bool isDolbyVisionChip =
+                string.Equals(text, DolbyVisionChipToken, StringComparison.Ordinal) ||
+                string.Equals(text?.Trim(), "Dolby Vision", StringComparison.OrdinalIgnoreCase);
+            bool isDolbyAudioChip = !isDolbyVisionChip &&
+                !string.IsNullOrWhiteSpace(text) &&
+                text.StartsWith(DolbyAudioChipPrefix, StringComparison.Ordinal);
+            string chipLabelText = isDolbyAudioChip
+                ? text.Substring(DolbyAudioChipPrefix.Length).Trim()
+                : text;
+
             var chip = new View
             {
                 WidthResizePolicy = ResizePolicyType.FitToChildren,
                 HeightSpecification = 48,
-                BackgroundColor = new Color(0.14f, 0.16f, 0.20f, 0.74f),
+                BackgroundColor = new Color(0.22f, 0.22f, 0.22f, 1.0f),
                 CornerRadius = 12.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 ClippingMode = ClippingModeType.ClipChildren,
@@ -712,11 +721,35 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            var label = new TextLabel(text)
+            if (isDolbyVisionChip || isDolbyAudioChip)
+            {
+                string iconFile = isDolbyVisionChip ? "dolby_vision.png" : "dolby_audio.png";
+                string iconPath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
+                if (File.Exists(iconPath))
+                {
+                    int iconWidth = isDolbyVisionChip ? 130 : 24;
+                    int iconHeight = 20;
+                    chip.Add(new ImageView
+                    {
+                        WidthSpecification = iconWidth,
+                        HeightSpecification = iconHeight,
+                        ResourceUrl = iconPath,
+                        PreMultipliedAlpha = false,
+                        FittingMode = FittingModeType.ShrinkToFit,
+                        SamplingMode = SamplingModeType.BoxThenLanczos,
+                        Margin = isDolbyVisionChip ? new Extents(0, 0, 0, 0) : new Extents(0, 8, 0, 0)
+                    });
+                }
+            }
+
+            if (isDolbyVisionChip)
+                return chip;
+
+            var label = new TextLabel(chipLabelText)
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                PointSize = 18,
+                PointSize = 20,
                 TextColor = new Color(0.98f, 0.98f, 0.98f, 1f),
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center
@@ -795,9 +828,9 @@ namespace JellyfinTizen.Screens
 
             AddMetadataTag(tags, GetResolutionTag(videoStream));
             AddMetadataTag(tags, GetVideoCodecTag(videoStream?.Codec));
-            AddMetadataTag(tags, GetHdrTag(videoStream));
+            AddMetadataTag(tags, GetDolbyVisionChipTag(videoStream) ?? GetHdrTag(videoStream));
             AddMetadataTag(tags, GetAudioCodecTag(audioStream));
-            AddMetadataTag(tags, GetAudioChannelTag(audioStream));
+            AddMetadataTag(tags, GetDolbyAudioChipTag(audioStream) ?? GetAudioChannelTag(audioStream));
 
             while (tags.Count > 5)
                 tags.RemoveAt(tags.Count - 1);
@@ -856,8 +889,6 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
-            if (text.Contains("dolby vision") || text.Contains("dovi") || text.Contains("dvhe"))
-                return "Dolby Vision";
             if (text.Contains("hdr10+"))
                 return "HDR10+";
             if (text.Contains("hdr10"))
@@ -897,6 +928,42 @@ namespace JellyfinTizen.Screens
 
             if (!string.IsNullOrWhiteSpace(stream.Codec))
                 return stream.Codec.Trim().ToUpperInvariant();
+
+            return null;
+        }
+
+        private static string GetDolbyVisionChipTag(MediaStream stream)
+        {
+            var text = GetStreamSearchText(stream);
+            if (string.IsNullOrWhiteSpace(text))
+                return null;
+
+            if (text.Contains("dolby vision") || text.Contains("dovi") || text.Contains("dvhe"))
+                return DolbyVisionChipToken;
+
+            return null;
+        }
+
+        private static string GetDolbyAudioChipTag(MediaStream stream)
+        {
+            if (stream == null)
+                return null;
+
+            var text = GetStreamSearchText(stream);
+            var codec = stream.Codec?.ToLowerInvariant() ?? string.Empty;
+            bool isDolbyAudio = text.Contains("dolby") ||
+                                codec.Contains("eac3") ||
+                                codec.Contains("ac3") ||
+                                codec.Contains("truehd");
+            if (!isDolbyAudio)
+                return null;
+
+            if (text.Contains("atmos"))
+                return $"{DolbyAudioChipPrefix}Atmos";
+
+            var channels = GetAudioChannelTag(stream);
+            if (channels == "5.1" || channels == "7.1")
+                return $"{DolbyAudioChipPrefix}{channels}";
 
             return null;
         }

@@ -26,6 +26,12 @@ namespace JellyfinTizen.Screens
         private const float FocusScale = 1.08f;
         private const bool UseLightweightFocusMode = true;
         private const int CardTextHeight = 80;
+        private const int RowBuildBatchSize = 2;
+        private const int PosterVisibleRowBuffer = 1;
+        private const int PosterKeepLowRowBuffer = 3;
+        private const int PosterRefreshIntervalMs = 260;
+        private const int BuildTickMs = 20;
+        private const int HighQualityDelayMs = 320;
 
         // Jellyfin Blue (#00A4DC)
         private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
@@ -37,6 +43,7 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
         private readonly Dictionary<View, Animation> _focusAnimations = new();
+        private readonly Dictionary<ImageView, PosterLoadState> _posterStates = new();
 
         private View _verticalContainer;
 
@@ -55,6 +62,28 @@ namespace JellyfinTizen.Screens
 
         private Animation _horizontalScrollAnimation;
         private Animation _verticalScrollAnimation;
+        private Timer _buildTimer;
+        private Timer _posterRefreshTimer;
+        private Timer _highQualityDelayTimer;
+        private int _nextMovieIndexToBuild;
+        private int _nextRowY;
+        private bool _isGridBuildCompleted;
+        private bool _allowHighQualityUpgrade;
+
+        private sealed class PosterLoadState
+        {
+            public string LowUrl;
+            public string HighUrl;
+            public int Row;
+            public PosterQuality Quality;
+        }
+
+        private enum PosterQuality
+        {
+            Unloaded = 0,
+            Low = 1,
+            High = 2
+        }
 
         public LibraryMoviesGridScreen(string libraryName, List<JellyfinMovie> movies)
         {
@@ -143,27 +172,30 @@ namespace JellyfinTizen.Screens
             root.Add(_verticalContainer);
             root.Add(topBar);
 
-            BuildGrid();
-
             Add(root);
             CreateSettingsPanel();
         }
 
-        private void BuildGrid()
+        private void BuildGridBatch(int rowsToBuild)
         {
-            int index = 0;
-            int y = 0;
-
-            while (index < _movies.Count)
+            if (_isGridBuildCompleted || rowsToBuild <= 0)
             {
-                var cardHeight = PosterHeight + CardTextHeight;
+                return;
+            }
+
+            var cardHeight = PosterHeight + CardTextHeight;
+            var rowHeight = cardHeight + (FocusPad * 2) + RowSpacing;
+            int builtRows = 0;
+
+            while (_nextMovieIndexToBuild < _movies.Count && builtRows < rowsToBuild)
+            {
                 var viewportTopPadding = (ushort)Math.Min(FocusPad + TopGlowPadBoost, (int)ushort.MaxValue);
                 var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - TopGlowPadBoost);
                 var viewport = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightSpecification = cardHeight + (FocusPad * 2),
-                    PositionY = y,
+                    PositionY = _nextRowY,
                     ClippingMode = ClippingModeType.ClipChildren,
                     Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
                 };
@@ -181,9 +213,10 @@ namespace JellyfinTizen.Screens
 
                 var row = new List<View>();
 
-                for (int i = 0; i < _moviesPerRow && index < _movies.Count; i++, index++)
+                int rowNumber = _grid.Count;
+                for (int i = 0; i < _moviesPerRow && _nextMovieIndexToBuild < _movies.Count; i++, _nextMovieIndexToBuild++)
                 {
-                    var card = CreatePosterCard(_movies[index]);
+                    var card = CreatePosterCard(_movies[_nextMovieIndexToBuild], rowNumber);
                     row.Add(card);
                     rowContainer.Add(card);
                 }
@@ -195,12 +228,27 @@ namespace JellyfinTizen.Screens
                 _rowContainers.Add(rowContainer);
                 _viewports.Add(viewport);
 
-                y += cardHeight + (FocusPad * 2) + RowSpacing;
+                _nextRowY += rowHeight;
+                builtRows++;
+            }
+
+            if (_nextMovieIndexToBuild >= _movies.Count)
+            {
+                _isGridBuildCompleted = true;
+                _buildTimer?.Stop();
             }
         }
 
         public override void OnShow()
         {
+            if (_movies == null || _movies.Count == 0)
+                return;
+
+            _allowHighQualityUpgrade = false;
+            if (_grid.Count == 0)
+            {
+                BuildGridBatch(1);
+            }
             if (_grid.Count == 0 || _grid[0].Count == 0)
                 return;
 
@@ -219,6 +267,10 @@ namespace JellyfinTizen.Screens
             FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
             ScrollHorizontalIfNeeded();
             ScrollVerticalIfNeeded();
+            EnsureVisiblePostersLoaded();
+            StartBuildTimer();
+            StartPosterRefreshTimer();
+            StartHighQualityDelayTimer();
         }
 
         public override void OnHide()
@@ -226,6 +278,9 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
             UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
+            _buildTimer?.Stop();
+            _posterRefreshTimer?.Stop();
+            _highQualityDelayTimer?.Stop();
         }
 
         private void ResetSettingsPanelVisualState()
@@ -247,7 +302,7 @@ namespace JellyfinTizen.Screens
             return Math.Max(1, usable / (PosterWidth + Spacing));
         }
 
-        private View CreatePosterCard(JellyfinMovie movie)
+        private View CreatePosterCard(JellyfinMovie movie, int rowNumber)
         {
             var wrapper = new View
             {
@@ -300,36 +355,22 @@ namespace JellyfinTizen.Screens
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
-            var apiKey = Uri.EscapeDataString(AppState.AccessToken);
-            var serverUrl = AppState.Jellyfin.ServerUrl;
-            string posterUrl = null;
-
-            if (movie.HasPrimary)
-            {
-                posterUrl =
-                    $"{serverUrl}/Items/{movie.Id}/Images/Primary/0" +
-                    $"?maxWidth={PosterWidth}&quality=90&api_key={apiKey}";
-            }
-            else if (movie.HasThumb)
-            {
-                posterUrl =
-                    $"{serverUrl}/Items/{movie.Id}/Images/Thumb/0" +
-                    $"?maxWidth={PosterWidth}&quality=90&api_key={apiKey}";
-            }
-            else if (movie.HasBackdrop)
-            {
-                posterUrl =
-                    $"{serverUrl}/Items/{movie.Id}/Images/Backdrop/0" +
-                    $"?maxWidth={PosterWidth}&quality=85&api_key={apiKey}";
-            }
+            BuildPosterUrls(movie, out var posterLowUrl, out var posterHighUrl);
 
             var poster = new ImageView
             {
                 Name = "CardImage",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
+                ResourceUrl = null,
                 PreMultipliedAlpha = false   // 🔑 CRITICAL on Tizen
+            };
+            _posterStates[poster] = new PosterLoadState
+            {
+                LowUrl = posterLowUrl,
+                HighUrl = posterHighUrl,
+                Row = rowNumber,
+                Quality = PosterQuality.Unloaded
             };
 
             var titleText = new TextLabel(movie.Name)
@@ -367,6 +408,155 @@ namespace JellyfinTizen.Screens
             return wrapper;
         }
 
+        private void BuildPosterUrls(JellyfinMovie movie, out string lowUrl, out string highUrl)
+        {
+            lowUrl = null;
+            highUrl = null;
+
+            var apiKey = Uri.EscapeDataString(AppState.AccessToken);
+            var serverUrl = AppState.Jellyfin.ServerUrl;
+
+            string basePath = null;
+            int highQuality = 90;
+            if (movie.HasPrimary)
+            {
+                basePath = $"{serverUrl}/Items/{movie.Id}/Images/Primary/0";
+            }
+            else if (movie.HasThumb)
+            {
+                basePath = $"{serverUrl}/Items/{movie.Id}/Images/Thumb/0";
+            }
+            else if (movie.HasBackdrop)
+            {
+                basePath = $"{serverUrl}/Items/{movie.Id}/Images/Backdrop/0";
+                highQuality = 85;
+            }
+
+            if (string.IsNullOrWhiteSpace(basePath))
+                return;
+
+            int lowWidth = Math.Max(120, PosterWidth / 2);
+            lowUrl = $"{basePath}?maxWidth={lowWidth}&quality=52&api_key={apiKey}";
+            highUrl = $"{basePath}?maxWidth={PosterWidth}&quality={highQuality}&api_key={apiKey}";
+        }
+
+        private void StartBuildTimer()
+        {
+            if (_isGridBuildCompleted)
+                return;
+
+            _buildTimer ??= new Timer(BuildTickMs);
+            _buildTimer.Stop();
+            _buildTimer.Tick -= OnBuildTimerTick;
+            _buildTimer.Tick += OnBuildTimerTick;
+            _buildTimer.Start();
+        }
+
+        private bool OnBuildTimerTick(object sender, Timer.TickEventArgs e)
+        {
+            BuildGridBatch(RowBuildBatchSize);
+            EnsureVisiblePostersLoaded();
+
+            if (_isGridBuildCompleted)
+            {
+                _buildTimer?.Stop();
+                return false;
+            }
+
+            return true;
+        }
+
+        private void StartPosterRefreshTimer()
+        {
+            _posterRefreshTimer ??= new Timer(PosterRefreshIntervalMs);
+            _posterRefreshTimer.Stop();
+            _posterRefreshTimer.Tick -= OnPosterRefreshTick;
+            _posterRefreshTimer.Tick += OnPosterRefreshTick;
+            _posterRefreshTimer.Start();
+        }
+
+        private bool OnPosterRefreshTick(object sender, Timer.TickEventArgs e)
+        {
+            EnsureVisiblePostersLoaded();
+            return true;
+        }
+
+        private void StartHighQualityDelayTimer()
+        {
+            _highQualityDelayTimer ??= new Timer(HighQualityDelayMs);
+            _highQualityDelayTimer.Stop();
+            _highQualityDelayTimer.Tick -= OnHighQualityDelayTick;
+            _highQualityDelayTimer.Tick += OnHighQualityDelayTick;
+            _highQualityDelayTimer.Start();
+        }
+
+        private bool OnHighQualityDelayTick(object sender, Timer.TickEventArgs e)
+        {
+            _highQualityDelayTimer?.Stop();
+            _allowHighQualityUpgrade = true;
+            EnsureVisiblePostersLoaded();
+            return false;
+        }
+
+        private void EnsureVisiblePostersLoaded()
+        {
+            if (_posterStates.Count == 0 || _grid.Count == 0)
+                return;
+
+            int rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
+            int visibleTop = (int)(-_verticalContainer.PositionY + ContentStartY);
+            int visibleBottom = visibleTop + Window.Default.Size.Height;
+
+            int firstVisibleRow = Math.Max(0, (visibleTop / rowHeight) - PosterVisibleRowBuffer);
+            int lastVisibleRow = Math.Min(_grid.Count - 1, (visibleBottom / rowHeight) + PosterVisibleRowBuffer);
+
+            int keepLowMin = Math.Max(0, firstVisibleRow - PosterKeepLowRowBuffer);
+            int keepLowMax = Math.Min(_grid.Count - 1, lastVisibleRow + PosterKeepLowRowBuffer);
+
+            foreach (var pair in _posterStates)
+            {
+                var image = pair.Key;
+                var state = pair.Value;
+                bool isVisibleRange = state.Row >= firstVisibleRow && state.Row <= lastVisibleRow;
+                bool keepLowRange = state.Row >= keepLowMin && state.Row <= keepLowMax;
+
+                if (isVisibleRange)
+                {
+                    if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
+                    {
+                        image.ResourceUrl = state.LowUrl;
+                        state.Quality = PosterQuality.Low;
+                    }
+
+                    if (_allowHighQualityUpgrade &&
+                        state.Quality == PosterQuality.Low &&
+                        !string.IsNullOrWhiteSpace(state.HighUrl))
+                    {
+                        image.ResourceUrl = state.HighUrl;
+                        state.Quality = PosterQuality.High;
+                    }
+                }
+                else if (keepLowRange)
+                {
+                    if (state.Quality == PosterQuality.High && !string.IsNullOrWhiteSpace(state.LowUrl))
+                    {
+                        image.ResourceUrl = state.LowUrl;
+                        state.Quality = PosterQuality.Low;
+                    }
+                    else if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
+                    {
+                        image.ResourceUrl = state.LowUrl;
+                        state.Quality = PosterQuality.Low;
+                    }
+                }
+                else if (state.Quality != PosterQuality.Unloaded)
+                {
+                    image.ResourceUrl = null;
+                    state.Quality = PosterQuality.Unloaded;
+                }
+            }
+        }
+
 
         public void HandleKey(AppKey key)
         {
@@ -393,6 +583,13 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
+            if (_grid.Count == 0)
+            {
+                if (key == AppKey.Back)
+                    NavigationService.NavigateBack();
+                return;
+            }
+
             switch (key)
             {
                 case AppKey.Right: Move(0, 1); break;
@@ -411,6 +608,9 @@ namespace JellyfinTizen.Screens
 
         private void Move(int rowDelta, int colDelta)
         {
+            if (_grid.Count == 0 || _grid[0].Count == 0)
+                return;
+
             Highlight(false);
 
             _rowIndex = Math.Clamp(_rowIndex + rowDelta, 0, _grid.Count - 1);
@@ -421,6 +621,7 @@ namespace JellyfinTizen.Screens
 
             ScrollHorizontalIfNeeded();
             ScrollVerticalIfNeeded();
+            EnsureVisiblePostersLoaded();
         }
 
         private void Highlight(bool focused)
@@ -688,7 +889,10 @@ namespace JellyfinTizen.Screens
             if (_settingsIndex == 0)
             {
                 HideSettingsPanel();
-                NavigationService.Navigate(new SettingsScreen());
+                NavigationService.NavigateWithLoading(
+                    () => new SettingsScreen(),
+                    "Loading settings..."
+                );
                 return;
             }
 
@@ -728,8 +932,9 @@ namespace JellyfinTizen.Screens
         {
             HideSettingsPanel();
             AppState.ClearSession(clearServer: true);
-            NavigationService.Navigate(
-                new ServerSetupScreen(),
+            NavigationService.NavigateWithLoading(
+                () => new ServerSetupScreen(),
+                "Loading server setup...",
                 addToStack: false
             );
         }
@@ -778,6 +983,7 @@ namespace JellyfinTizen.Screens
                 ref _horizontalScrollAnimation,
                 UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
             );
+            EnsureVisiblePostersLoaded();
         }
 
         private void ScrollVerticalIfNeeded()
@@ -826,6 +1032,7 @@ namespace JellyfinTizen.Screens
                 ref _verticalScrollAnimation,
                 UiAnimator.AnimateTo(_verticalContainer, "PositionY", targetY, UiAnimator.ScrollDurationMs)
             );
+            EnsureVisiblePostersLoaded();
         }
 
 
@@ -840,20 +1047,23 @@ namespace JellyfinTizen.Screens
 
             if (movie.ItemType == "Series")
             {
-                NavigationService.Navigate(
-                    new SeriesDetailsScreen(movie)
+                NavigationService.NavigateWithLoading(
+                    () => new SeriesDetailsScreen(movie),
+                    "Loading details..."
                 );
             }
             else if (movie.ItemType == "Episode")
             {
-                NavigationService.Navigate(
-                    new EpisodeDetailsScreen(movie)
+                NavigationService.NavigateWithLoading(
+                    () => new EpisodeDetailsLoadingScreen(movie),
+                    "Loading details..."
                 );
             }
             else // Movie
             {
-                NavigationService.Navigate(
-                    new MovieDetailsScreen(movie)
+                NavigationService.NavigateWithLoading(
+                    () => new MovieDetailsScreen(movie),
+                    "Loading details..."
                 );
             }
         }

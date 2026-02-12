@@ -18,7 +18,7 @@ files:
   - jellyfin.csproj
   - jellyfin.cs
   - tizen-manifest.xml
-  - shared/res/jellyfin.png
+  - shared/res
 
 # project dependencies
 deps: []

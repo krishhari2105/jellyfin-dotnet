@@ -97,8 +97,9 @@ namespace JellyfinTizen.Screens
         var userName =
         ((TextLabel)_userViews[index].Children[0]).Text;
 
-        NavigationService.Navigate(
-        new PasswordScreen(userName)
+        NavigationService.NavigateWithLoading(
+        () => new PasswordScreen(userName),
+        "Loading sign in..."
         );
         }
 

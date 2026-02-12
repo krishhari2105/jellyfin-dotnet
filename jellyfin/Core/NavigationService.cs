@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Tizen.Applications;
 using Tizen.NUI;
 using JellyfinTizen.Screens;
@@ -9,10 +10,6 @@ namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
-        private const int ScreenDurationLiteMs = 170;
-        private const float ScreenSlideDistanceLite = 56f;
-        private const float ScreenSlideRatioLite = 0.035f;
-
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
@@ -88,7 +85,7 @@ namespace JellyfinTizen.Core
             if (_window == null || screen == null)
                 return;
 
-            if (_currentScreen == null || !animated || _isTransitioning)
+            if (_currentScreen == null || _isTransitioning)
             {
                 NavigateImmediate(screen, addToStack);
                 return;
@@ -96,6 +93,12 @@ namespace JellyfinTizen.Core
 
             var outgoing = _currentScreen;
             var incoming = screen;
+            if (!ShouldAnimateTransition(outgoing, incoming, animated))
+            {
+                NavigateImmediate(screen, addToStack);
+                return;
+            }
+
             var transition = GetTransitionSpec(outgoing, incoming);
             var slide = transition.SlideDistance;
 
@@ -131,6 +134,53 @@ namespace JellyfinTizen.Core
             );
         }
 
+        public static async void NavigateWithLoading(
+            Func<ScreenBase> screenFactory,
+            string message = "Loading...",
+            bool addToStack = true,
+            bool animated = true,
+            int minDisplayMs = 220)
+        {
+            if (_window == null || screenFactory == null)
+                return;
+
+            if (_currentScreen is LoadingScreen)
+            {
+                var immediate = screenFactory();
+                Navigate(immediate, addToStack, animated);
+                return;
+            }
+
+            var loadingScreen = new LoadingScreen(message);
+            var shownAt = DateTime.UtcNow;
+            Navigate(loadingScreen, addToStack: addToStack, animated: false);
+
+            await Task.Yield();
+
+            ScreenBase target;
+            try
+            {
+                target = screenFactory();
+            }
+            catch
+            {
+                if (ReferenceEquals(_currentScreen, loadingScreen))
+                    NavigateBack(animated: false);
+                return;
+            }
+
+            var elapsedMs = (DateTime.UtcNow - shownAt).TotalMilliseconds;
+            if (elapsedMs < minDisplayMs)
+            {
+                await Task.Delay((int)(minDisplayMs - elapsedMs));
+            }
+
+            if (!ReferenceEquals(_currentScreen, loadingScreen))
+                return;
+
+            Navigate(target, addToStack: false, animated: animated);
+        }
+
         public static void NavigateBack(bool animated = true)
         {
             if (_stack.Count == 0)
@@ -139,7 +189,14 @@ namespace JellyfinTizen.Core
                 return;
             }
 
-            if (_currentScreen == null || !animated || _isTransitioning)
+            if (_currentScreen == null || _isTransitioning)
+            {
+                NavigateBackImmediate();
+                return;
+            }
+
+            var incomingCandidate = _stack.Peek();
+            if (!ShouldAnimateTransition(_currentScreen, incomingCandidate, animated))
             {
                 NavigateBackImmediate();
                 return;
@@ -263,26 +320,20 @@ namespace JellyfinTizen.Core
 
         private static (int DurationMs, float SlideDistance) GetTransitionSpec(ScreenBase outgoing, ScreenBase incoming)
         {
-            if (UseFullTransitionProfile(outgoing, incoming))
-            {
-                return (UiAnimator.ScreenDurationMs, GetSlideDistance());
-            }
+            return (UiAnimator.ScreenDurationMs, GetSlideDistance());
+        }
 
-            return (ScreenDurationLiteMs, GetLiteSlideDistance());
+        private static bool ShouldAnimateTransition(ScreenBase outgoing, ScreenBase incoming, bool animated)
+        {
+            return animated && UseFullTransitionProfile(outgoing, incoming);
         }
 
         private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
         {
             return (outgoing is MovieDetailsScreen && incoming is VideoPlayerScreen) ||
-                   (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen);
-        }
-
-        private static float GetLiteSlideDistance()
-        {
-            if (_window == null)
-                return ScreenSlideDistanceLite;
-
-            return Math.Max(ScreenSlideDistanceLite, _window.Size.Width * ScreenSlideRatioLite);
+                   (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen) ||
+                   (outgoing is EpisodeDetailsScreen && incoming is VideoPlayerScreen) ||
+                   (outgoing is VideoPlayerScreen && incoming is EpisodeDetailsScreen);
         }
     }
 }

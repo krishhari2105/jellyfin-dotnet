@@ -13,7 +13,7 @@ namespace JellyfinTizen.Screens
     {
         // ==================== TEMPORARY AUTO-LOGIN CONFIGURATION ====================
         // Set to true to enable auto-login for testing, false to disable
-        private static readonly bool ENABLE_AUTO_LOGIN = true;
+        private static readonly bool ENABLE_AUTO_LOGIN = false;
         private const string TEST_SERVER_URL = "http://192.168.1.3:8096";
         private const string TEST_USERNAME = "Samsung";
         private const string TEST_PASSWORD = "2233";

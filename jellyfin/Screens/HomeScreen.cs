@@ -700,20 +700,23 @@ namespace JellyfinTizen.Screens
             {
                 if (item.Media.ItemType == "Series")
                 {
-                    NavigationService.Navigate(
-                        new SeriesDetailsScreen(item.Media)
+                    NavigationService.NavigateWithLoading(
+                        () => new SeriesDetailsScreen(item.Media),
+                        "Loading details..."
                     );
                 }
                 else if (item.Media.ItemType == "Episode")
                 {
-                    NavigationService.Navigate(
-                        new EpisodeDetailsScreen(item.Media)
+                    NavigationService.NavigateWithLoading(
+                        () => new EpisodeDetailsLoadingScreen(item.Media),
+                        "Loading details..."
                     );
                 }
                 else // Movie
                 {
-                    NavigationService.Navigate(
-                        new MovieDetailsScreen(item.Media)
+                    NavigationService.NavigateWithLoading(
+                        () => new MovieDetailsScreen(item.Media),
+                        "Loading details..."
                     );
                 }
             }
@@ -721,6 +724,7 @@ namespace JellyfinTizen.Screens
 
         private async void OpenLibrary(JellyfinLibrary lib)
         {
+            var loadingShownAt = DateTime.UtcNow;
             NavigationService.Navigate(
                 new LoadingScreen("Loading items...")
             );
@@ -730,10 +734,16 @@ namespace JellyfinTizen.Screens
                 : "Movie";
 
             var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, includeTypes);
+            var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
+            if (elapsedMs < 280)
+            {
+                await System.Threading.Tasks.Task.Delay((int)(280 - elapsedMs));
+            }
 
             NavigationService.Navigate(
                 new LibraryMoviesGridScreen(lib.Name, items),
-                addToStack: false
+                addToStack: false,
+                animated: false
             );
         }
 
@@ -895,7 +905,10 @@ namespace JellyfinTizen.Screens
             if (_settingsIndex == 0)
             {
                 HideSettingsPanel();
-                NavigationService.Navigate(new SettingsScreen());
+                NavigationService.NavigateWithLoading(
+                    () => new SettingsScreen(),
+                    "Loading settings..."
+                );
                 return;
             }
 
@@ -935,8 +948,9 @@ namespace JellyfinTizen.Screens
         {
             HideSettingsPanel();
             AppState.ClearSession(clearServer: true);
-            NavigationService.Navigate(
-                new ServerSetupScreen(),
+            NavigationService.NavigateWithLoading(
+                () => new ServerSetupScreen(),
+                "Loading server setup...",
                 addToStack: false
             );
         }

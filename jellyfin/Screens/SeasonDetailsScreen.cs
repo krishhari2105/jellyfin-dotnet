@@ -392,8 +392,9 @@ namespace JellyfinTizen.Screens
                     MoveEpisodeFocus(1);
                     break;
                 case AppKey.Enter:
-                    NavigationService.Navigate(
-                        new EpisodeDetailsScreen(_episodes[_episodeIndex])
+                    NavigationService.NavigateWithLoading(
+                        () => new EpisodeDetailsLoadingScreen(_episodes[_episodeIndex]),
+                        "Loading episode..."
                     );
                     break;
                 case AppKey.Back:

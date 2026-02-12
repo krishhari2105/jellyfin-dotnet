@@ -51,6 +51,20 @@ namespace JellyfinTizen.Screens
         private Timer _reportProgressTimer;
         private bool _isFinished;
         private View _progressThumb;
+        private Timer _seekCommitTimer;
+        private int _pendingSeekDeltaSeconds;
+        private bool _isQueuedDirectionalSeekActive;
+        private int _hiddenSeekBurstDirection;
+        private int _hiddenSeekBurstCount;
+        private DateTime _hiddenSeekLastPressUtc = DateTime.MinValue;
+        private View _seekFeedbackContainer;
+        private ImageView _seekFeedbackIcon;
+        private TextLabel _seekFeedbackLabel;
+        private View _playPauseFeedbackContainer;
+        private ImageView _playFeedbackIcon;
+        private ImageView _pauseFeedbackIcon;
+        private Timer _playPauseFeedbackTimer;
+        private Animation _playPauseFadeAnimation;
         private View _subtitleListContainer;
         private ScrollableBase _subtitleScrollView;
         private View _audioListContainer;
@@ -71,7 +85,6 @@ namespace JellyfinTizen.Screens
         private View _subtitleOffsetButton;
         private View _audioButton;
         private View _subtitleButton;
-        private View _prevButton;
         private View _nextButton;
         private View _subtitleOffsetTrackContainer;
         private View _subtitleOffsetThumb;
@@ -87,6 +100,7 @@ namespace JellyfinTizen.Screens
         private Animation _subtitleOverlayAnimation;
         private Animation _audioOverlayAnimation;
         private Animation _subtitleTextAnimation;
+        private Animation _seekFeedbackAnimation;
         private readonly Dictionary<View, Animation> _focusAnimations = new();
         private int _osdShownY;
         private int _osdHiddenY;
@@ -94,16 +108,22 @@ namespace JellyfinTizen.Screens
         private int _topOsdHiddenY;
         private int _subtitleOverlayBaseX;
         private int _audioOverlayBaseX;
+        private readonly string _sharedResPath = Application.Current.DirectoryInfo.SharedResource;
 
         private const int AudioButtonIndex = 0;
         private const int SubtitleButtonIndex = 1;
-        private const int PrevButtonIndex = 2;
-        private const int NextButtonIndex = 3;
+        private const int NextButtonIndex = 2;
         private const int SubtitleOffsetStepMs = 100;
         private const int SubtitleOffsetLimitMs = 5000;
         private const int SubtitleOffsetTrackWidth = 280;
         private const int OverlaySlideDistance = 36;
         private const int OsdSlideDistance = 34;
+        private const int SeekStepSeconds = 10;
+        private const int SeekCommitDelayMs = 700;
+        private const int HiddenSeekBurstWindowMs = 500;
+        private const int HiddenSeekLongPressCountThreshold = 4;
+        private const int HiddenSeekLongPressRepeatMs = 130;
+        private const int HiddenSeekLongPressRepeatCount = 3;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -158,7 +178,10 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
             UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
             UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
+            UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
+            _seekCommitTimer?.Stop();
+            _seekCommitTimer = null;
             StopPlayback();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
@@ -703,11 +726,21 @@ namespace JellyfinTizen.Screens
             progressRow.Add(_durationLabel);
             progressRow.Add(_progressThumb);
 
-            _controlsContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 155, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center, CellPadding = new Size2D(32, 0) } };
-            _audioButton = CreateOsdButton("Audio");
-            _subtitleButton = CreateOsdButton("Subtitles");
-            _prevButton = CreateOsdButton("Prev");
-            _nextButton = CreateOsdButton("Next");
+            _controlsContainer = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 80,
+                PositionY = 155,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    CellPadding = new Size2D(36, 0)
+                }
+            };
+            _audioButton = CreateOsdButton("audio.png", "Audio", 168);
+            _subtitleButton = CreateOsdButton("sub.png", "Subtitles", 206);
+            _nextButton = CreateOsdButton("next.png", "Next Episode", 242);
 
             _controlsContainer.Add(_audioButton);
             _controlsContainer.Add(_subtitleButton);
@@ -716,9 +749,8 @@ namespace JellyfinTizen.Screens
 
             if (_movie.ItemType == "Episode")
             {
-                _controlsContainer.Add(_prevButton);
                 _controlsContainer.Add(_nextButton);
-                _osdButtonCount = 4;
+                _osdButtonCount = 3;
             }
 
             CreateSubtitleOffsetTrack(screenWidth);
@@ -728,6 +760,8 @@ namespace JellyfinTizen.Screens
             _osd.Add(_subtitleOffsetTrackContainer);
             _osd.Add(_controlsContainer);
             Add(_osd);
+            CreateSeekFeedback();
+            CreatePlayPauseFeedback();
 
             CreateAudioOverlay();
             CreateSubtitleOverlay();
@@ -800,21 +834,311 @@ namespace JellyfinTizen.Screens
                 : _movie.Name;
         }
 
-        private View CreateOsdButton(string text)
+        private View CreateOsdButton(string iconFile, string text, int width)
         {
-            var btn = new View { WidthSpecification = 150, HeightSpecification = 60, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 30.0f };
-            var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 24 };
-            btn.Add(label);
+            var btn = new View
+            {
+                WidthSpecification = width,
+                HeightSpecification = 60,
+                BackgroundColor = new Color(1f, 1f, 1f, 0.10f),
+                CornerRadius = 28.0f
+            };
+
+            var content = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    CellPadding = new Size2D(10, 0)
+                }
+            };
+
+            var icon = new ImageView
+            {
+                WidthSpecification = 28,
+                HeightSpecification = 28,
+                ResourceUrl = ResolveFreshIconPath(iconFile),
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            var label = new TextLabel(text)
+            {
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextColor = Color.White,
+                PointSize = 26
+            };
+
+            content.Add(icon);
+            content.Add(label);
+            btn.Add(content);
             return btn;
         }
 
-        private void SetButtonVisual(View button, bool focused, bool editing = false)
+        private string ResolveFreshIconPath(string iconFile)
+        {
+            string fallback = System.IO.Path.Combine(_sharedResPath, iconFile);
+
+            try
+            {
+                var candidates = new List<string>();
+
+                string sharedPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.SharedResource, iconFile);
+                if (File.Exists(sharedPath))
+                    candidates.Add(sharedPath);
+
+                string appResPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Resource, iconFile);
+                if (File.Exists(appResPath))
+                    candidates.Add(appResPath);
+
+                if (candidates.Count == 0)
+                    return fallback;
+
+                string sourcePath = candidates[0];
+                DateTime sourceWrite = File.GetLastWriteTimeUtc(sourcePath);
+                for (int i = 1; i < candidates.Count; i++)
+                {
+                    DateTime currentWrite = File.GetLastWriteTimeUtc(candidates[i]);
+                    if (currentWrite > sourceWrite)
+                    {
+                        sourceWrite = currentWrite;
+                        sourcePath = candidates[i];
+                    }
+                }
+
+                string cacheDir = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, "icon-cache");
+                Directory.CreateDirectory(cacheDir);
+
+                string name = System.IO.Path.GetFileNameWithoutExtension(iconFile);
+                string ext = System.IO.Path.GetExtension(iconFile);
+                string versionedPath = System.IO.Path.Combine(cacheDir, $"{name}_{sourceWrite.Ticks}{ext}");
+
+                if (!File.Exists(versionedPath))
+                    File.Copy(sourcePath, versionedPath, overwrite: true);
+
+                return versionedPath;
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        private void CreateSeekFeedback()
+        {
+            int screenWidth = Window.Default.Size.Width;
+            int screenHeight = Window.Default.Size.Height;
+
+            _seekFeedbackContainer = new View
+            {
+                WidthSpecification = 180,
+                HeightSpecification = 180,
+                PositionX = (int)(screenWidth * 0.70f) - 90,
+                PositionY = (screenHeight / 2) - 90,
+                BackgroundColor = new Color(0f, 0f, 0f, 0.28f),
+                CornerRadius = 24.0f,
+                Opacity = 0.0f,
+                Scale = Vector3.One
+            };
+
+            var content = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    CellPadding = new Size2D(0, 10)
+                }
+            };
+
+            _seekFeedbackIcon = new ImageView
+            {
+                WidthSpecification = 74,
+                HeightSpecification = 74,
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            _seekFeedbackLabel = new TextLabel("10s")
+            {
+                HeightSpecification = 44,
+                PointSize = 24,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            content.Add(_seekFeedbackIcon);
+            content.Add(_seekFeedbackLabel);
+            _seekFeedbackContainer.Add(content);
+            _seekFeedbackContainer.Hide();
+            Add(_seekFeedbackContainer);
+        }
+
+        private void ShowSeekFeedback(int direction, int seekSeconds)
+        {
+            if (_seekFeedbackContainer == null || _seekFeedbackIcon == null || _seekFeedbackLabel == null)
+                return;
+
+            _seekFeedbackIcon.ResourceUrl = direction > 0
+                ? _sharedResPath + "forward.png"
+                : _sharedResPath + "reverse.png";
+            _seekFeedbackLabel.Text = $"{Math.Abs(seekSeconds)}s";
+            _seekFeedbackContainer.PositionX = direction > 0
+                ? (int)(Window.Default.Size.Width * 0.70f) - 90
+                : (int)(Window.Default.Size.Width * 0.30f) - 90;
+
+            _seekFeedbackContainer.Show();
+            _seekFeedbackContainer.Opacity = 0.86f;
+            _seekFeedbackContainer.Scale = new Vector3(0.98f, 0.98f, 1f);
+
+            UiAnimator.Replace(
+                ref _seekFeedbackAnimation,
+                UiAnimator.Start(
+                    130,
+                    animation =>
+                    {
+                        animation.AnimateTo(_seekFeedbackContainer, "Opacity", 1.0f);
+                        animation.AnimateTo(_seekFeedbackContainer, "Scale", new Vector3(1.06f, 1.06f, 1f));
+                    }
+                )
+            );
+        }
+
+        private void HideSeekFeedback()
+        {
+            if (_seekFeedbackContainer == null)
+                return;
+
+            UiAnimator.Replace(
+                ref _seekFeedbackAnimation,
+                UiAnimator.Start(
+                    140,
+                    animation =>
+                    {
+                        animation.AnimateTo(_seekFeedbackContainer, "Opacity", 0.0f);
+                        animation.AnimateTo(_seekFeedbackContainer, "Scale", new Vector3(0.98f, 0.98f, 1f));
+                    },
+                    () => _seekFeedbackContainer.Hide()
+                )
+            );
+        }
+
+        private void CreatePlayPauseFeedback()
+        {
+            int screenWidth = Window.Default.Size.Width;
+            int screenHeight = Window.Default.Size.Height;
+
+            _playPauseFeedbackContainer = new View
+            {
+                WidthSpecification = 140,
+                HeightSpecification = 140,
+                PositionX = (screenWidth / 2) - 70,
+                PositionY = (screenHeight / 2) - 70,
+                BackgroundColor = new Color(0f, 0f, 0f, 0.34f),
+                CornerRadius = 70.0f,
+                Opacity = 0.0f,
+                Scale = new Vector3(0.9f, 0.9f, 1f)
+            };
+
+            _playFeedbackIcon = new ImageView
+            {
+                WidthSpecification = 90,
+                HeightSpecification = 90,
+                PositionX = 25,
+                PositionY = 25,
+                ResourceUrl = _sharedResPath + "play.png",
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            _pauseFeedbackIcon = new ImageView
+            {
+                WidthSpecification = 90,
+                HeightSpecification = 90,
+                PositionX = 25,
+                PositionY = 25,
+                ResourceUrl = _sharedResPath + "pause.png",
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            _playPauseFeedbackContainer.Add(_playFeedbackIcon);
+            _playPauseFeedbackContainer.Add(_pauseFeedbackIcon);
+            _playFeedbackIcon.Hide();
+            _pauseFeedbackIcon.Hide();
+            _playPauseFeedbackContainer.Hide();
+            Add(_playPauseFeedbackContainer);
+        }
+
+        private void ShowPlayPauseFeedback(bool isPaused)
+        {
+            if (_playPauseFeedbackContainer == null || _playFeedbackIcon == null || _pauseFeedbackIcon == null)
+                return;
+
+            if (isPaused)
+            {
+                _playFeedbackIcon.Hide();
+                _pauseFeedbackIcon.Show();
+            }
+            else
+            {
+                _pauseFeedbackIcon.Hide();
+                _playFeedbackIcon.Show();
+            }
+
+            _playPauseFeedbackContainer.Show();
+            _playPauseFeedbackContainer.Opacity = 0.0f;
+            _playPauseFeedbackContainer.Scale = Vector3.One;
+
+            UiAnimator.Replace(
+                ref _playPauseFadeAnimation,
+                UiAnimator.Start(
+                    130,
+                    animation => animation.AnimateTo(_playPauseFeedbackContainer, "Opacity", 1.0f)
+                )
+            );
+
+            _playPauseFeedbackTimer ??= new Timer(600);
+            _playPauseFeedbackTimer.Stop();
+            _playPauseFeedbackTimer.Tick -= OnPlayPauseFeedbackTimerTick;
+            _playPauseFeedbackTimer.Tick += OnPlayPauseFeedbackTimerTick;
+            _playPauseFeedbackTimer.Start();
+        }
+
+        private bool OnPlayPauseFeedbackTimerTick(object sender, Timer.TickEventArgs e)
+        {
+            _playPauseFeedbackTimer?.Stop();
+            if (_playPauseFeedbackContainer != null)
+            {
+                UiAnimator.Replace(
+                    ref _playPauseFadeAnimation,
+                    UiAnimator.Start(
+                        180,
+                        animation => animation.AnimateTo(_playPauseFeedbackContainer, "Opacity", 0.0f),
+                        () => _playPauseFeedbackContainer.Hide()
+                    )
+                );
+            }
+            return false;
+        }
+
+        private void SetButtonVisual(View button, bool focused)
         {
              if (button == null) return;
              button.BackgroundColor = focused
-                 ? (editing ? new Color(0, 164f / 255f, 220f / 255f, 1f) : new Color(0.85f, 0.11f, 0.11f, 1f))
-                 : new Color(1, 1, 1, 0.15f);
-             AnimateFocusScale(button, focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One);
+                 ? new Color(0.82f, 0.82f, 0.82f, 0.34f)
+                 : new Color(1f, 1f, 1f, 0.10f);
+             AnimateFocusScale(button, focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One);
         }
 
         private void AnimateFocusScale(View view, Vector3 targetScale)
@@ -949,7 +1273,7 @@ namespace JellyfinTizen.Screens
             {
                 _player.SetSubtitleOffset(_subtitleOffsetMs);
             }
-            catch (Exception ex)
+            catch (Exception)
             {}
         }
 
@@ -1030,6 +1354,31 @@ namespace JellyfinTizen.Screens
 
         private void BeginSeek() { if (_player != null) { _isSeeking = true; _seekPreviewMs = GetPlayPositionMs(); } }
 
+        private async Task CommitSeekAsync(int visualHoldMs = 0)
+        {
+            if (!_isSeeking || _player == null) return;
+            try
+            {
+                if (visualHoldMs > 0)
+                {
+                    await Task.Delay(visualHoldMs);
+                }
+                var seekTask = _player.SetPlayPositionAsync(_seekPreviewMs, false);
+                await Task.WhenAny(seekTask, Task.Delay(3000));
+            }
+            catch {}
+            finally
+            {
+                _isSeeking = false;
+                _pendingSeekDeltaSeconds = 0;
+                _isQueuedDirectionalSeekActive = false;
+                _hiddenSeekBurstCount = 0;
+                _hiddenSeekBurstDirection = 0;
+                HideSeekFeedback();
+                UpdateProgress();
+            }
+        }
+
         private void Scrub(int seconds)
         {
             if (!_isSeeking) BeginSeek();
@@ -1039,16 +1388,113 @@ namespace JellyfinTizen.Screens
             ShowOSD();
         }
 
-        private async void CommitSeek()
+        private void CancelQueuedDirectionalSeek()
         {
-            if (!_isSeeking || _player == null) return;
-            try
+            _seekCommitTimer?.Stop();
+            _pendingSeekDeltaSeconds = 0;
+            _isQueuedDirectionalSeekActive = false;
+            _hiddenSeekBurstCount = 0;
+            _hiddenSeekBurstDirection = 0;
+            HideSeekFeedback();
+        }
+
+        private void HandleHiddenDirectionalSeek(int direction)
+        {
+            if (_player == null || direction == 0)
+                return;
+
+            var now = DateTime.UtcNow;
+            var elapsedMs = _hiddenSeekLastPressUtc == DateTime.MinValue
+                ? double.MaxValue
+                : (now - _hiddenSeekLastPressUtc).TotalMilliseconds;
+
+            // If the next repeat arrives only after the 0.5s window, treat as long-press behavior.
+            if (_isQueuedDirectionalSeekActive &&
+                direction == _hiddenSeekBurstDirection &&
+                elapsedMs > HiddenSeekBurstWindowMs)
             {
-                var seekTask = _player.SetPlayPositionAsync(_seekPreviewMs, false);
-                await Task.WhenAny(seekTask, Task.Delay(3000));
+                CancelQueuedDirectionalSeek();
+                _isSeeking = false;
+                Scrub(direction * 30);
+                _hiddenSeekLastPressUtc = now;
+                return;
             }
-            catch {}
-            finally { _isSeeking = false; }
+
+            if (_isSeeking && !_isQueuedDirectionalSeekActive)
+            {
+                Scrub(direction * 30);
+                return;
+            }
+
+            bool isBurst = direction == _hiddenSeekBurstDirection &&
+                           (now - _hiddenSeekLastPressUtc).TotalMilliseconds <= HiddenSeekBurstWindowMs;
+
+            if (isBurst) _hiddenSeekBurstCount++;
+            else
+            {
+                _hiddenSeekBurstDirection = direction;
+                _hiddenSeekBurstCount = 1;
+            }
+            _hiddenSeekLastPressUtc = now;
+
+            // Repeated very-fast events are likely a held key repeat (long press).
+            if (isBurst &&
+                elapsedMs <= HiddenSeekLongPressRepeatMs &&
+                _hiddenSeekBurstCount >= HiddenSeekLongPressRepeatCount)
+            {
+                CancelQueuedDirectionalSeek();
+                _isSeeking = false;
+                Scrub(direction * 30);
+                return;
+            }
+
+            if (_hiddenSeekBurstCount >= HiddenSeekLongPressCountThreshold)
+            {
+                CancelQueuedDirectionalSeek();
+                _isSeeking = false;
+                Scrub(direction * 30);
+                return;
+            }
+
+            QueueDirectionalSeek(direction);
+        }
+
+        private void QueueDirectionalSeek(int direction)
+        {
+            if (_player == null || direction == 0)
+                return;
+
+            if (!_isSeeking)
+                BeginSeek();
+
+            _isQueuedDirectionalSeekActive = true;
+            _pendingSeekDeltaSeconds += direction * SeekStepSeconds;
+            _seekPreviewMs += direction * SeekStepSeconds * 1000;
+            _seekPreviewMs = Math.Clamp(_seekPreviewMs, 0, GetDuration());
+
+            if (_pendingSeekDeltaSeconds == 0)
+            {
+                _isSeeking = false;
+                CancelQueuedDirectionalSeek();
+                UpdateProgress();
+                return;
+            }
+
+            ShowSeekFeedback(Math.Sign(_pendingSeekDeltaSeconds), _pendingSeekDeltaSeconds);
+            UpdatePreviewBar();
+
+            _seekCommitTimer ??= new Timer(SeekCommitDelayMs);
+            _seekCommitTimer.Stop();
+            _seekCommitTimer.Tick -= OnSeekCommitTimerTick;
+            _seekCommitTimer.Tick += OnSeekCommitTimerTick;
+            _seekCommitTimer.Start();
+        }
+
+        private bool OnSeekCommitTimerTick(object sender, Timer.TickEventArgs e)
+        {
+            _seekCommitTimer?.Stop();
+            _ = CommitSeekAsync(220);
+            return false;
         }
 
         private int GetDuration()
@@ -1154,6 +1600,7 @@ namespace JellyfinTizen.Screens
             }
 
             UpdateSubtitleVisuals();
+            ScrollSubtitleSelectionIntoView();
             _subtitleOverlay.Show();
             _subtitleOverlayVisible = true;
 
@@ -1188,34 +1635,9 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60,
                 BackgroundColor = Color.Transparent, CornerRadius = 8.0f,
                 Margin = new Extents(20, 20, 5, 5),
-                Focusable = true
+                Focusable = false
             };
             row.Name = indexId; 
-            
-            row.FocusGained += (s, e) => {
-                // When Tizen moves focus here, sync our internal index and visuals
-                if (_subtitleListContainer != null)
-                {
-                    // Find index of this row
-                    for (int i = 0; i < _subtitleListContainer.ChildCount; i++)
-                    {
-                        if (_subtitleListContainer.GetChildAt((uint)i) == row)
-                        {
-                            _subtitleIndex = i;
-                            UpdateSubtitleVisuals(false); // Update colors only
-                            break;
-                        }
-                    }
-                }
-            };
-
-            row.FocusLost += (s, e) =>
-            {
-                row.BackgroundColor = Color.Transparent;
-                var label = row.GetChildAt(0) as TextLabel;
-                if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
-                AnimateFocusScale(row, Vector3.One);
-            };
             
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 28, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
             row.Add(label);
@@ -1226,7 +1648,6 @@ namespace JellyfinTizen.Screens
         {
             if (_subtitleListContainer == null) return;
             int count = (int)_subtitleListContainer.ChildCount;
-            View focusedView = null;
             for (int i = 0; i < count; i++)
             {
                 var row = _subtitleListContainer.GetChildAt((uint)i);
@@ -1238,12 +1659,8 @@ namespace JellyfinTizen.Screens
                 {
                     label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
                 }
-                if (selected)
-                {
-                    focusedView = row;
-                }
             }
-            if (setFocus && focusedView != null) FocusManager.Instance.SetCurrentFocusView(focusedView);
+            // Keep subtitle selection fully manual; FocusManager + ScrollableBase can crash on some TVs.
         }
 
         private void MoveSubtitleSelection(int delta)
@@ -1252,7 +1669,36 @@ namespace JellyfinTizen.Screens
             int count = (int)_subtitleListContainer.ChildCount;
             if (count == 0) return;
             _subtitleIndex = Math.Clamp(_subtitleIndex + delta, 0, count - 1);
-            ShowSubtitleOverlay();
+            UpdateSubtitleVisuals(setFocus: false);
+            ScrollSubtitleSelectionIntoView();
+        }
+
+        private void ScrollSubtitleSelectionIntoView()
+        {
+            if (_subtitleListContainer == null || _subtitleScrollView == null)
+                return;
+
+            int count = (int)_subtitleListContainer.ChildCount;
+            if (count <= 0 || _subtitleIndex < 0 || _subtitleIndex >= count)
+                return;
+
+            var selected = _subtitleListContainer.GetChildAt((uint)_subtitleIndex);
+            int rowTop = (int)Math.Round(selected.PositionY);
+            int rowBottom = rowTop + (int)Math.Round(selected.SizeHeight);
+
+            int viewportHeight = _subtitleScrollView.SizeHeight > 0
+                ? (int)Math.Round(_subtitleScrollView.SizeHeight)
+                : 320;
+            int currentTop = (int)(-_subtitleListContainer.PositionY);
+            int currentBottom = currentTop + viewportHeight;
+
+            int nextTop = currentTop;
+            if (rowBottom > currentBottom)
+                nextTop = rowBottom - viewportHeight + 8;
+            else if (rowTop < currentTop)
+                nextTop = Math.Max(0, rowTop - 8);
+
+            _subtitleListContainer.PositionY = -nextTop;
         }
 
         private async void SelectSubtitle()
@@ -1356,39 +1802,15 @@ namespace JellyfinTizen.Screens
                     var codec = !string.IsNullOrEmpty(stream.Codec) ? stream.Codec.ToUpper() : "AUDIO";
                     var displayText = $"{lang} | {codec}";
 
-                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 8.0f, Margin = new Extents(20, 20, 5, 5), Focusable = true };
+                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 8.0f, Margin = new Extents(20, 20, 5, 5), Focusable = false };
                     row.Name = stream.Index.ToString();
-                    
-                    // Handle focus events to remove default blue border
-                    row.FocusGained += (s, e) => {
-                        // When Tizen moves focus here, sync our internal index and visuals
-                        if (_audioListContainer != null)
-                        {
-                            for (int i = 0; i < _audioListContainer.ChildCount; i++)
-                            {
-                                if (_audioListContainer.GetChildAt((uint)i) == row)
-                                {
-                                    _audioIndex = i;
-                                    UpdateAudioVisuals(false); // Update colors only
-                                    break;
-                                }
-                            }
-                        }
-                    };
-
-                    row.FocusLost += (s, e) =>
-                    {
-                        row.BackgroundColor = Color.Transparent;
-                        var label = row.GetChildAt(0) as TextLabel;
-                        if (label != null) label.TextColor = new Color(1, 1, 1, 0.6f);
-                        AnimateFocusScale(row, Vector3.One);
-                    };
                     var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
                     row.Add(label);
                     _audioListContainer.Add(row);
                 }
             }
             UpdateAudioVisuals();
+            ScrollAudioSelectionIntoView();
             _audioOverlay.Show();
             _audioOverlayVisible = true;
 
@@ -1420,7 +1842,6 @@ namespace JellyfinTizen.Screens
         {
             if (_audioListContainer == null) return;
             int count = (int)_audioListContainer.ChildCount;
-            View focusedView = null;
             for (int i = 0; i < count; i++)
             {
                 var row = _audioListContainer.GetChildAt((uint)i);
@@ -1429,9 +1850,36 @@ namespace JellyfinTizen.Screens
                 AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
-                if (selected) focusedView = row;
             }
-            if (setFocus && focusedView != null) FocusManager.Instance.SetCurrentFocusView(focusedView);
+            // Keep audio selection fully manual; device FocusManager + ScrollableBase can crash on some TVs.
+        }
+
+        private void ScrollAudioSelectionIntoView()
+        {
+            if (_audioListContainer == null || _audioScrollView == null)
+                return;
+
+            int count = (int)_audioListContainer.ChildCount;
+            if (count <= 0 || _audioIndex < 0 || _audioIndex >= count)
+                return;
+
+            var selected = _audioListContainer.GetChildAt((uint)_audioIndex);
+            int rowTop = (int)Math.Round(selected.PositionY);
+            int rowBottom = rowTop + (int)Math.Round(selected.SizeHeight);
+
+            int viewportHeight = _audioScrollView.SizeHeight > 0
+                ? (int)Math.Round(_audioScrollView.SizeHeight)
+                : 420;
+            int currentTop = (int)(-_audioListContainer.PositionY);
+            int currentBottom = currentTop + viewportHeight;
+
+            int nextTop = currentTop;
+            if (rowBottom > currentBottom)
+                nextTop = rowBottom - viewportHeight + 8;
+            else if (rowTop < currentTop)
+                nextTop = Math.Max(0, rowTop - 8);
+
+            _audioListContainer.PositionY = -nextTop;
         }
 
         private void HideAudioOverlay()
@@ -1521,7 +1969,8 @@ namespace JellyfinTizen.Screens
             int count = (int)_audioListContainer.ChildCount;
             if (count <= 0) return; 
             _audioIndex = Math.Clamp(_audioIndex + delta, 0, count - 1); 
-            ShowAudioOverlay(); 
+            UpdateAudioVisuals(setFocus: false);
+            ScrollAudioSelectionIntoView();
         }
 
         private void SelectAudioTrack() 
@@ -1654,7 +2103,6 @@ namespace JellyfinTizen.Screens
 
             SetButtonVisual(_audioButton, buttonRowFocused && _buttonFocusIndex == AudioButtonIndex);
             SetButtonVisual(_subtitleButton, buttonRowFocused && _buttonFocusIndex == SubtitleButtonIndex);
-            SetButtonVisual(_prevButton, buttonRowFocused && _buttonFocusIndex == PrevButtonIndex);
             SetButtonVisual(_nextButton, buttonRowFocused && _buttonFocusIndex == NextButtonIndex);
 
             if (_subtitleOffsetCenterMarker != null)
@@ -1748,7 +2196,17 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
             UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
             UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
+            UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
+            UiAnimator.StopAndDispose(ref _playPauseFadeAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
+            _playPauseFeedbackTimer?.Stop();
+            _seekCommitTimer?.Stop();
+            _pendingSeekDeltaSeconds = 0;
+            _isQueuedDirectionalSeekActive = false;
+            _isSeeking = false;
+            _seekPreviewMs = 0;
+            _seekFeedbackContainer?.Hide();
+            _playPauseFeedbackContainer?.Hide();
 
             try 
             {
@@ -1782,14 +2240,36 @@ namespace JellyfinTizen.Screens
             if (key == AppKey.Unknown) return;
             switch (key)
             {
-                case AppKey.MediaPlayPause: TogglePause(); ShowOSD(); break;
-                case AppKey.MediaPlay: if (_player != null && _player.State == PlayerState.Paused) { TogglePause(); ShowOSD(); } break;
-                case AppKey.MediaPause: if (_player != null && _player.State == PlayerState.Playing) { TogglePause(); ShowOSD(); } break;
+                case AppKey.MediaPlayPause:
+                {
+                    bool pausedNow = TogglePause();
+                    if (_osdVisible || pausedNow) ShowOSD();
+                    break;
+                }
+                case AppKey.MediaPlay:
+                    if (_player != null && _player.State == PlayerState.Paused)
+                    {
+                        TogglePause();
+                        if (_osdVisible) ShowOSD();
+                    }
+                    break;
+                case AppKey.MediaPause:
+                    if (_player != null && _player.State == PlayerState.Playing)
+                    {
+                        bool pausedNow = TogglePause();
+                        if (_osdVisible || pausedNow) ShowOSD();
+                    }
+                    break;
                 case AppKey.MediaStop: NavigationService.NavigateBack(); break;
                 case AppKey.MediaNext: PlayNextEpisode(); break;
-                case AppKey.MediaPrevious: PlayPreviousEpisode(); break;
-                case AppKey.MediaRewind: Scrub(-10); break;
-                case AppKey.MediaFastForward: Scrub(30); break;
+                case AppKey.MediaRewind:
+                    if (_osdVisible) Scrub(-30);
+                    else HandleHiddenDirectionalSeek(-1);
+                    break;
+                case AppKey.MediaFastForward:
+                    if (_osdVisible) Scrub(30);
+                    else HandleHiddenDirectionalSeek(1);
+                    break;
                 case AppKey.Enter:
                     if (_audioOverlayVisible) SelectAudioTrack();
                     else if (_subtitleOverlayVisible) 
@@ -1804,9 +2284,13 @@ namespace JellyfinTizen.Screens
                             SelectSubtitle();
                         }
                     }
-                    else if (_isSeeking) CommitSeek();
+                    else if (_isSeeking) _ = CommitSeekAsync();
                     else if (_osdVisible) { if (_osdFocusRow == 1) ActivateOsdButton(); else { TogglePause(); _osdTimer.Stop(); _osdTimer.Start(); } }
-                    else { TogglePause(); ShowOSD(); }
+                    else
+                    {
+                        bool pausedNow = TogglePause();
+                        if (pausedNow) ShowOSD();
+                    }
                     break;
                 case AppKey.Left:
                     if (_audioOverlayVisible)
@@ -1814,9 +2298,10 @@ namespace JellyfinTizen.Screens
                         // Let FocusManager handle audio overlay navigation.
                     }
                     else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(-SubtitleOffsetStepMs);
-                    // else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1); // Let FocusManager handle navigation.
+                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1);
                     else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(-1);
-                    else Scrub(-30);
+                    else if (_osdVisible) Scrub(-30);
+                    else HandleHiddenDirectionalSeek(-1);
                     break;
                 case AppKey.Right:
                     if (_audioOverlayVisible)
@@ -1824,27 +2309,24 @@ namespace JellyfinTizen.Screens
                         // Let FocusManager handle audio overlay navigation.
                     }
                     else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(SubtitleOffsetStepMs);
-                    // else if (_subtitleOverlayVisible) MoveSubtitleSelection(1); // Let FocusManager handle navigation.
+                    else if (_subtitleOverlayVisible) MoveSubtitleSelection(1);
                     else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(1);
-                    else Scrub(30);
+                    else if (_osdVisible) Scrub(30);
+                    else HandleHiddenDirectionalSeek(1);
                     break;
                 case AppKey.Up:
                     if (_audioOverlayVisible)
                     {
-                        // Let FocusManager handle audio overlay navigation.
+                        MoveAudioSelection(-1);
                     }
                     else if (_subtitleOverlayVisible) 
                     {
                         if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
-                        else 
+                        else if (_subtitleIndex == 0)
                         {
-                            // Check if we're at the first subtitle, then toggle offset adjust mode
-                            if (_subtitleIndex == 0)
-                            {
-                                ToggleSubtitleOffsetAdjustMode();
-                            }
-                            // else: Do nothing, let FocusManager move focus up naturally
+                            ToggleSubtitleOffsetAdjustMode();
                         }
+                        else MoveSubtitleSelection(-1);
                     }
                     else if (_osdVisible) MoveOsdRow(-1);
                     else ShowOSD();
@@ -1852,12 +2334,12 @@ namespace JellyfinTizen.Screens
                 case AppKey.Down:
                     if (_audioOverlayVisible)
                     {
-                        // Let FocusManager handle audio overlay navigation.
+                        MoveAudioSelection(1);
                     }
                     else if (_subtitleOverlayVisible) 
                     {
                         if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
-                        // else MoveSubtitleSelection(1); // Let FocusManager move focus down naturally.
+                        else MoveSubtitleSelection(1);
                     }
                     else if (_osdVisible) MoveOsdRow(1);
                     else ShowOSD();
@@ -1870,7 +2352,12 @@ namespace JellyfinTizen.Screens
                     }
                     else if (_audioOverlayVisible) HideAudioOverlay();
                     else if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
-                    else if (_isSeeking) { _isSeeking = false; UpdateProgress(); }
+                    else if (_isSeeking)
+                    {
+                        CancelQueuedDirectionalSeek();
+                        _isSeeking = false;
+                        HideOSD();
+                    }
                     else if (_osdVisible) HideOSD();
                     else NavigationService.NavigateBack();
                     break;
@@ -1913,9 +2400,6 @@ namespace JellyfinTizen.Screens
                 case SubtitleButtonIndex:
                     ShowSubtitleOverlay();
                     break;
-                case PrevButtonIndex:
-                    if (_movie.ItemType == "Episode") PlayPreviousEpisode();
-                    break;
                 case NextButtonIndex:
                     if (_movie.ItemType == "Episode") PlayNextEpisode();
                     break;
@@ -1923,11 +2407,6 @@ namespace JellyfinTizen.Screens
         }
         
         private async void PlayNextEpisode() { await SwitchEpisode(1); }
-        private async void PlayPreviousEpisode()
-        {
-            if (_player != null && GetPlayPositionMs() > 30000) { await _player.SetPlayPositionAsync(0, false); _isSeeking = false; _seekPreviewMs = 0; UpdateProgress(); return; }
-            await SwitchEpisode(-1);
-        }
 
         private async Task SwitchEpisode(int offset)
         {
@@ -1957,7 +2436,7 @@ namespace JellyfinTizen.Screens
                 }
                 NavigationService.NavigateBack();
             }
-            catch (Exception ex) {NavigationService.NavigateBack(); }
+            catch (Exception) {NavigationService.NavigateBack(); }
         }
 
         private void LoadNewMedia(JellyfinMovie newMovie)
@@ -1979,12 +2458,24 @@ namespace JellyfinTizen.Screens
             ShowOSD();
         }
 
-        private void TogglePause()
+        private bool TogglePause()
         {
-            if (_player == null) return;
-            if (_player.State == PlayerState.Playing) { _player.Pause(); ReportProgressToServer(force: true); }
-            else if (_player.State == PlayerState.Paused) { _player.Start(); ReportProgressToServer(force: true); }
+            if (_player == null) return false;
+            if (_player.State == PlayerState.Playing)
+            {
+                _player.Pause();
+                ShowPlayPauseFeedback(isPaused: true);
+                ReportProgressToServer(force: true);
+                return true;
+            }
+            else if (_player.State == PlayerState.Paused)
+            {
+                _player.Start();
+                ShowPlayPauseFeedback(isPaused: false);
+                ReportProgressToServer(force: true);
+                return false;
+            }
+            return false;
         }
     }
 }
-

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Tizen.NUI;
@@ -39,13 +41,12 @@ namespace JellyfinTizen.Screens
                     return;
 
                 _navigated = true;
-                AppState.ClearSession(clearServer: false);
                 try
                 {
                     Tizen.Applications.CoreApplication.Post(() =>
                     {
                         NavigationService.Navigate(
-                            new ServerSetupScreen(),
+                            new StartupScreen(),
                             addToStack: false
                         );
                     });
@@ -53,17 +54,17 @@ namespace JellyfinTizen.Screens
                 catch
                 {
                     NavigationService.Navigate(
-                        new ServerSetupScreen(),
+                        new StartupScreen(),
                         addToStack: false
                     );
                 }
-            }, null, 12000, Timeout.Infinite);
+            }, null, 25000, Timeout.Infinite);
 
             try
             {
                 var libs = await WithTimeout(
                     AppState.Jellyfin.GetLibrariesAsync(AppState.UserId),
-                    10000
+                    20000
                 );
 
                 var rows = await BuildHomeRowsAsync(libs);
@@ -79,13 +80,23 @@ namespace JellyfinTizen.Screens
                     );
                 }
             }
-            catch
+            catch (Exception ex)
             {
                 if (_navigated)
                     return;
 
                 _navigated = true;
                 _fallbackTimer?.Dispose();
+
+                if (!IsSessionExpired(ex))
+                {
+                    NavigationService.Navigate(
+                        new StartupScreen(),
+                        addToStack: false
+                    );
+                    return;
+                }
+
                 AppState.ClearSession(clearServer: false);
                 NavigationService.Navigate(
                     new LoadingScreen("Session expired. Please sign in."),
@@ -96,7 +107,7 @@ namespace JellyfinTizen.Screens
                 {
                     var users = await WithTimeout(
                         AppState.Jellyfin.GetPublicUsersAsync(),
-                        10000
+                        12000
                     );
                     NavigationService.Navigate(
                         new UserSelectScreen(users),
@@ -270,6 +281,29 @@ namespace JellyfinTizen.Screens
                 throw new TimeoutException("Home load network request timed out.");
 
             return await task;
+        }
+
+        private static bool IsSessionExpired(Exception ex)
+        {
+            if (ex is HttpRequestException httpEx)
+            {
+                if (httpEx.StatusCode == HttpStatusCode.Unauthorized ||
+                    httpEx.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    return true;
+                }
+            }
+
+            var message = ex?.Message ?? string.Empty;
+            if (message.IndexOf("401", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("403", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("unauthorized", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                message.IndexOf("forbidden", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            return false;
         }
 
     }
