@@ -24,7 +24,7 @@ namespace JellyfinTizen.Screens
         private const int FocusPad = 20;
         private const int TopGlowPadBoost = 8;
         private const float FocusScale = 1.08f;
-        private const bool UseLightweightFocusMode = true;
+        private static readonly bool UseLightweightFocusMode = true;
         private const int CardTextHeight = 80;
         private const int RowBuildBatchSize = 2;
         private const int PosterVisibleRowBuffer = 1;

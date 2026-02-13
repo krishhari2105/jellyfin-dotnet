@@ -12,7 +12,7 @@ using ThreadingTimer = System.Threading.Timer;
 
 namespace JellyfinTizen.Screens
 {
-    public class HomeLoadingScreen : ScreenBase
+    public class HomeLoadingScreen : ScreenBase, IKeyHandler
     {
         private bool _navigated;
         private ThreadingTimer _fallbackTimer;
@@ -41,23 +41,13 @@ namespace JellyfinTizen.Screens
                     return;
 
                 _navigated = true;
-                try
-                {
-                    Tizen.Applications.CoreApplication.Post(() =>
-                    {
-                        NavigationService.Navigate(
-                            new StartupScreen(),
-                            addToStack: false
-                        );
-                    });
-                }
-                catch
+                NavigateOnUiThread(() =>
                 {
                     NavigationService.Navigate(
-                        new StartupScreen(),
+                        new ServerSetupScreen(),
                         addToStack: false
                     );
-                }
+                });
             }, null, 25000, Timeout.Infinite);
 
             try
@@ -90,18 +80,24 @@ namespace JellyfinTizen.Screens
 
                 if (!IsSessionExpired(ex))
                 {
-                    NavigationService.Navigate(
-                        new StartupScreen(),
-                        addToStack: false
-                    );
+                    NavigateOnUiThread(() =>
+                    {
+                        NavigationService.Navigate(
+                            new ServerSetupScreen(),
+                            addToStack: false
+                        );
+                    });
                     return;
                 }
 
                 AppState.ClearSession(clearServer: false);
-                NavigationService.Navigate(
-                    new LoadingScreen("Session expired. Please sign in."),
-                    addToStack: false
-                );
+                NavigateOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LoadingScreen("Session expired. Please sign in."),
+                        addToStack: false
+                    );
+                });
 
                 try
                 {
@@ -109,17 +105,23 @@ namespace JellyfinTizen.Screens
                         AppState.Jellyfin.GetPublicUsersAsync(),
                         12000
                     );
-                    NavigationService.Navigate(
-                        new UserSelectScreen(users),
-                        addToStack: false
-                    );
+                    NavigateOnUiThread(() =>
+                    {
+                        NavigationService.Navigate(
+                            new UserSelectScreen(users),
+                            addToStack: false
+                        );
+                    });
                 }
                 catch
                 {
-                    NavigationService.Navigate(
-                        new ServerSetupScreen(),
-                        addToStack: false
-                    );
+                    NavigateOnUiThread(() =>
+                    {
+                        NavigationService.Navigate(
+                            new ServerSetupScreen(),
+                            addToStack: false
+                        );
+                    });
                 }
             }
         }
@@ -304,6 +306,37 @@ namespace JellyfinTizen.Screens
             }
 
             return false;
+        }
+
+        private static void NavigateOnUiThread(Action navigationAction)
+        {
+            if (navigationAction == null)
+                return;
+
+            try
+            {
+                Tizen.Applications.CoreApplication.Post(navigationAction);
+            }
+            catch
+            {
+                navigationAction();
+            }
+        }
+
+        public void HandleKey(AppKey key)
+        {
+            if (key != AppKey.Back || _navigated)
+                return;
+
+            _navigated = true;
+            _fallbackTimer?.Dispose();
+            NavigateOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new ServerSetupScreen(),
+                    addToStack: false
+                );
+            });
         }
 
     }

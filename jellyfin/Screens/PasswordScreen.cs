@@ -141,9 +141,12 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrEmpty(password))
                 return;
 
-            NavigationService.Navigate(
-                new LoadingScreen("Signing in...")
-            );
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new LoadingScreen("Signing in...")
+                );
+            });
 
             try
             {
@@ -163,18 +166,24 @@ namespace JellyfinTizen.Screens
                     AppState.Username
                 );
 
-                NavigationService.ClearStack();
-                NavigationService.Navigate(
-                    new HomeLoadingScreen(),
-                    addToStack: false
-                );
+                RunOnUiThread(() =>
+                {
+                    NavigationService.ClearStack();
+                    NavigationService.Navigate(
+                        new HomeLoadingScreen(),
+                        addToStack: false
+                    );
+                });
             }
             catch
             {
-                // Return to password screen with clear password and show error
-                _passwordInput.Text = string.Empty;
-                NavigationService.NavigateBack();
-                ShowErrorMessage("Invalid password. Please try again.");
+                RunOnUiThread(() =>
+                {
+                    // Return to password screen with clear password and show error
+                    _passwordInput.Text = string.Empty;
+                    NavigationService.NavigateBack();
+                    ShowErrorMessage("Invalid password. Please try again.");
+                });
             }
         }
 
@@ -186,7 +195,7 @@ namespace JellyfinTizen.Screens
             var timer = new System.Timers.Timer(5000);
             timer.Elapsed += (sender, e) =>
             {
-                _errorLabel.Text = string.Empty;
+                RunOnUiThread(() => _errorLabel.Text = string.Empty);
                 timer.Stop();
                 timer.Dispose();
             };

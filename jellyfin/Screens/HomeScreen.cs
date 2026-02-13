@@ -17,7 +17,7 @@ namespace JellyfinTizen.Screens
         private const int FocusPad = 24;
         private const int LibraryTitleImageGap = 12;
         private const float FocusScale = 1.08f;
-        private const bool UseLightweightFocusMode = true;
+        private static readonly bool UseLightweightFocusMode = true;
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
@@ -725,9 +725,12 @@ namespace JellyfinTizen.Screens
         private async void OpenLibrary(JellyfinLibrary lib)
         {
             var loadingShownAt = DateTime.UtcNow;
-            NavigationService.Navigate(
-                new LoadingScreen("Loading items...")
-            );
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new LoadingScreen("Loading items...")
+                );
+            });
 
             var includeTypes = lib.CollectionType == "tvshows"
                 ? "Series"
@@ -740,11 +743,14 @@ namespace JellyfinTizen.Screens
                 await System.Threading.Tasks.Task.Delay((int)(280 - elapsedMs));
             }
 
-            NavigationService.Navigate(
-                new LibraryMoviesGridScreen(lib.Name, items),
-                addToStack: false,
-                animated: false
-            );
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new LibraryMoviesGridScreen(lib.Name, items),
+                    addToStack: false,
+                    animated: false
+                );
+            });
         }
 
         private void FocusSettings(bool focused)
@@ -932,16 +938,22 @@ namespace JellyfinTizen.Screens
             HideSettingsPanel();
             AppState.ClearSession(clearServer: false);
 
-            NavigationService.Navigate(
-                new LoadingScreen("Fetching users..."),
-                addToStack: false
-            );
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new LoadingScreen("Fetching users..."),
+                    addToStack: false
+                );
+            });
 
             var users = await AppState.Jellyfin.GetPublicUsersAsync();
-            NavigationService.Navigate(
-                new UserSelectScreen(users),
-                addToStack: false
-            );
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(
+                    new UserSelectScreen(users),
+                    addToStack: false
+                );
+            });
         }
 
         private void SwitchServer()

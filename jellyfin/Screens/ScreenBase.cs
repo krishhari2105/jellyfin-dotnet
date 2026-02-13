@@ -1,3 +1,5 @@
+using System;
+using Tizen.Applications;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 
@@ -15,5 +17,20 @@ namespace JellyfinTizen.Screens
 
         public virtual void OnShow() { }
         public virtual void OnHide() { }
+
+        protected void RunOnUiThread(Action action)
+        {
+            if (action == null)
+                return;
+
+            try
+            {
+                CoreApplication.Post(action);
+            }
+            catch
+            {
+                action();
+            }
+        }
     }
 }

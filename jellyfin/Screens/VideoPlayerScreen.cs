@@ -79,6 +79,7 @@ namespace JellyfinTizen.Screens
         private int? _externalSubtitleIndex = null;
         private string _externalSubtitleMediaSourceId = null;
         private string _externalSubtitleCodec = null;
+        private bool _suppressPlaybackCompletedNavigation;
 
         // OSD Controls
         private View _controlsContainer;
@@ -191,6 +192,7 @@ namespace JellyfinTizen.Screens
         {
             try
             {
+                _suppressPlaybackCompletedNavigation = false;
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
@@ -198,8 +200,8 @@ namespace JellyfinTizen.Screens
                 _activeSubtitleCueIndex = -1;
                 _player = new Player();
 
-                _player.ErrorOccurred += (s, e) => { };
-                _player.BufferingProgressChanged += (s, e) => { };
+                _player.ErrorOccurred += OnPlayerErrorOccurred;
+                _player.BufferingProgressChanged += OnBufferingProgressChanged;
                 _player.PlaybackCompleted += OnPlaybackCompleted;
                 _player.SubtitleUpdated += OnSubtitleUpdated;
 
@@ -768,9 +770,19 @@ namespace JellyfinTizen.Screens
             CreateSubtitleText();
             
             _osdTimer = new Timer(5000);
-            _osdTimer.Tick += (_, __) => { HideOSD(); return false; };
+            _osdTimer.Tick += OnOsdTimerTick;
             _progressTimer = new Timer(500);
             _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
+        }
+
+        private bool OnOsdTimerTick(object sender, Timer.TickEventArgs e)
+        {
+            // Never auto-hide while seek preview is active; otherwise preview can snap back to current time.
+            if (_isSeeking || _isQueuedDirectionalSeekActive)
+                return true;
+
+            HideOSD();
+            return false;
         }
 
         private View CreateTopOsdTitleView(int sidePadding)
@@ -1961,7 +1973,6 @@ namespace JellyfinTizen.Screens
             });
         }
 
-        private void RunOnUiThread(Action action) { try { CoreApplication.Post(action); } catch { action(); } }
         
         private void MoveAudioSelection(int delta) 
         { 
@@ -2157,7 +2168,6 @@ namespace JellyfinTizen.Screens
 
             _osdTimer.Stop();
             _progressTimer.Stop();
-            if (_isSeeking && _player != null) { _isSeeking = false; _seekPreviewMs = GetPlayPositionMs(); UpdateProgress(); }
         }
 
         private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
@@ -2184,13 +2194,19 @@ namespace JellyfinTizen.Screens
         }
 
         private void OnPlaybackCompleted(object sender, EventArgs e)
-        {_isFinished = true;
+        {
+            if (_suppressPlaybackCompletedNavigation)
+                return;
+
+            _suppressPlaybackCompletedNavigation = true;
+            _isFinished = true;
             _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
             RunOnUiThread(() => { if (_movie.ItemType == "Episode") PlayNextEpisode(); else NavigationService.NavigateBack(); });
         }
 
         private void StopPlayback()
         {
+            _suppressPlaybackCompletedNavigation = true;
             UiAnimator.StopAndDispose(ref _osdAnimation);
             UiAnimator.StopAndDispose(ref _topOsdAnimation);
             UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
@@ -2222,6 +2238,9 @@ namespace JellyfinTizen.Screens
                 try { _progressTimer?.Stop(); } catch { }
                 try { _osdTimer?.Stop(); } catch { }
                 try { _subtitleRenderTimer?.Stop(); } catch { }
+                try { _player.PlaybackCompleted -= OnPlaybackCompleted; } catch { }
+                try { _player.ErrorOccurred -= OnPlayerErrorOccurred; } catch { }
+                try { _player.BufferingProgressChanged -= OnBufferingProgressChanged; } catch { }
                 _player.SubtitleUpdated -= OnSubtitleUpdated;
                 _subtitleHideTimer?.Stop();
                 _subtitleText?.Hide();
@@ -2233,6 +2252,14 @@ namespace JellyfinTizen.Screens
                 try { _player.Dispose(); } catch { }
                 _player = null;
             } catch { }
+        }
+
+        private void OnPlayerErrorOccurred(object sender, PlayerErrorOccurredEventArgs e)
+        {
+        }
+
+        private void OnBufferingProgressChanged(object sender, BufferingProgressChangedEventArgs e)
+        {
         }
 
         public void HandleKey(AppKey key)

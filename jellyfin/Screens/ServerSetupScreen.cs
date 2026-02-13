@@ -84,6 +84,14 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            if (string.IsNullOrWhiteSpace(_serverInput.Text))
+            {
+                var saved = AppState.ServerUrl;
+                if (!string.IsNullOrWhiteSpace(saved))
+                {
+                    _serverInput.Text = saved;
+                }
+            }
             FocusManager.Instance.SetCurrentFocusView(_serverInput);
         }
 
@@ -148,20 +156,29 @@ namespace JellyfinTizen.Screens
 
             AppState.SaveServer(validatedUrl);
             AppState.Jellyfin.Connect(validatedUrl);
-            NavigationService.Navigate(new LoadingScreen("Fetching users..."));
+            RunOnUiThread(() =>
+            {
+                NavigationService.Navigate(new LoadingScreen("Fetching users..."));
+            });
 
             try
             {
                 var users = await AppState.Jellyfin.GetPublicUsersAsync();
-                NavigationService.Navigate(
-                    new UserSelectScreen(users),
-                    addToStack: true
-                );
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new UserSelectScreen(users),
+                        addToStack: true
+                    );
+                });
             }
             catch
             {
-                NavigationService.NavigateBack();
-                ShowErrorMessage("Failed to connect. Please try again.");
+                RunOnUiThread(() =>
+                {
+                    NavigationService.NavigateBack();
+                    ShowErrorMessage("Failed to connect. Please try again.");
+                });
             }
         }
 
@@ -214,7 +231,7 @@ namespace JellyfinTizen.Screens
             var timer = new System.Timers.Timer(5000);
             timer.Elapsed += (sender, e) =>
             {
-                _errorLabel.Text = string.Empty;
+                RunOnUiThread(() => _errorLabel.Text = string.Empty);
                 timer.Stop();
                 timer.Dispose();
             };

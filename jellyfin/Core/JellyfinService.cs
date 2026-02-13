@@ -113,6 +113,23 @@ namespace JellyfinTizen.Core
             return JsonSerializer.Deserialize<List<JellyfinUser>>(json);
         }
 
+        public async Task<(string userId, string username)> GetCurrentUserAsync()
+        {
+            var json = await GetAsync("/Users/Me");
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var userId = root.TryGetProperty("Id", out var idProp)
+                ? idProp.GetString()
+                : null;
+            var username = root.TryGetProperty("Name", out var nameProp)
+                ? nameProp.GetString()
+                : null;
+
+            return (userId, username);
+        }
+
         public async Task<(string accessToken, string userId)> AuthenticateAsync(
         string username,
         string password)
@@ -508,36 +525,42 @@ namespace JellyfinTizen.Core
             
             var response = new PlaybackInfoResponse
             {
-                PlaySessionId = root.GetProperty("PlaySessionId").GetString(),
+                PlaySessionId = root.TryGetProperty("PlaySessionId", out var playSessionIdProp)
+                    ? playSessionIdProp.GetString()
+                    : null,
                 MediaSources = new List<MediaSourceInfo>()
             };
 
-            if (root.TryGetProperty("MediaSources", out var sources))
+            if (root.TryGetProperty("MediaSources", out var sources) && sources.ValueKind == JsonValueKind.Array)
             {
                 foreach (var src in sources.EnumerateArray())
                 {
                     var ms = new MediaSourceInfo
                     {
-                        Id = src.GetProperty("Id").GetString(),
-                        Name = src.TryGetProperty("Name", out var sourceName) ? sourceName.GetString() : null,
-                        SupportsDirectPlay = src.GetProperty("SupportsDirectPlay").GetBoolean(),
-                        SupportsTranscoding = src.GetProperty("SupportsTranscoding").GetBoolean(),
+                        Id = TryGetString(src, "Id") ?? itemId,
+                        Name = TryGetString(src, "Name"),
+                        SupportsDirectPlay = TryGetBool(src, "SupportsDirectPlay", out var supportsDirectPlay) && supportsDirectPlay,
+                        SupportsTranscoding = TryGetBool(src, "SupportsTranscoding", out var supportsTranscoding) && supportsTranscoding,
                         // TranscodingUrl is only present if transcoding is needed/possible
-                        TranscodingUrl = src.TryGetProperty("TranscodingUrl", out var tUrl) ? tUrl.GetString() : null,
+                        TranscodingUrl = TryGetString(src, "TranscodingUrl"),
                         MediaStreams = new List<MediaStream>()
                     };
 
-                    if (src.TryGetProperty("MediaStreams", out var streams))
+                    if (src.TryGetProperty("MediaStreams", out var streams) && streams.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var s in streams.EnumerateArray())
                         {
+                            var type = TryGetString(s, "Type");
+                            if (string.IsNullOrWhiteSpace(type))
+                                continue;
+
                             var mediaStream = new MediaStream
                             {
-                                Index = s.GetProperty("Index").GetInt32(),
-                                Type = s.GetProperty("Type").GetString(),
-                                Language = s.TryGetProperty("Language", out var l) ? l.GetString() : null,
-                                DisplayTitle = s.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : null,
-                                Codec = s.TryGetProperty("Codec", out var c) ? c.GetString() : null,
+                                Index = TryGetInt32(s, "Index", out var indexValue) ? indexValue : -1,
+                                Type = type,
+                                Language = TryGetString(s, "Language"),
+                                DisplayTitle = TryGetString(s, "DisplayTitle"),
+                                Codec = TryGetString(s, "Codec"),
                                 IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
                                 Width = s.TryGetProperty("Width", out var widthProp) && widthProp.TryGetInt32(out var widthValue)
                                     ? widthValue
@@ -564,6 +587,17 @@ namespace JellyfinTizen.Core
             }
 
             return response;
+        }
+
+        private static string TryGetString(JsonElement element, string propertyName)
+        {
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return null;
+
+            if (prop.ValueKind != JsonValueKind.String)
+                return null;
+
+            return prop.GetString();
         }
 
         public async Task<bool> GetIsAnamorphicAsync(string itemId)

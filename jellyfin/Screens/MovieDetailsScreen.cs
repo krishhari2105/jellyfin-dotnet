@@ -818,7 +818,7 @@ namespace JellyfinTizen.Screens
 
         private void RebuildMetadataTags(List<string> tags)
         {
-            ClearRowChildren(_metadataTagRow);
+            DisposeRowChildren(_metadataTagRow);
 
             if (tags == null || tags.Count == 0)
                 return;
@@ -827,6 +827,16 @@ namespace JellyfinTizen.Screens
             {
                 var chip = CreateMetadataChip(tag);
                 _metadataTagRow.Add(chip);
+            }
+        }
+
+        private static void DisposeRowChildren(View row)
+        {
+            while (row != null && row.ChildCount > 0)
+            {
+                var child = row.GetChildAt(0);
+                row.Remove(child);
+                try { child.Dispose(); } catch { }
             }
         }
 
