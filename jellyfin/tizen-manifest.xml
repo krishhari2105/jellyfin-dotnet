@@ -1,5 +1,5 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns="http://tizen.org/ns/packages" api-version="9.0" package="org.tizen.jellyfin.dotnet" version="1.0.0">
+<manifest xmlns="http://tizen.org/ns/packages" api-version="9.0" package="org.tizen.jellyfin.dotnet" version="1.0.1">
   <profile name="common" />
   <privileges>
     <privilege>http://tizen.org/privilege/internet</privilege>

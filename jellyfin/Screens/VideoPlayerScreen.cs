@@ -65,6 +65,17 @@ namespace JellyfinTizen.Screens
         private ImageView _pauseFeedbackIcon;
         private Timer _playPauseFeedbackTimer;
         private Animation _playPauseFadeAnimation;
+        private View _trickplayPreviewContainer;
+        private ImageView _trickplayPreviewImage;
+        private TrickplayInfo _trickplayInfo;
+        private int _trickplayLastThumbnailIndex = -1;
+        private int _trickplayLastTileIndex = -1;
+        private int _trickplayUpdateToken;
+        private string _trickplayCacheDir;
+        private readonly Dictionary<int, string> _trickplayTileCache = new();
+        private readonly Dictionary<int, Task<string>> _trickplayTileDownloads = new();
+        private readonly object _trickplayTileLock = new();
+        private HttpClient _trickplayHttpClient;
         private View _subtitleListContainer;
         private ScrollableBase _subtitleScrollView;
         private View _audioListContainer;
@@ -125,6 +136,10 @@ namespace JellyfinTizen.Screens
         private const int HiddenSeekLongPressCountThreshold = 4;
         private const int HiddenSeekLongPressRepeatMs = 130;
         private const int HiddenSeekLongPressRepeatCount = 3;
+        private const int TrickplayPreviewWidth = 320;
+        private const int TrickplayPreviewHeight = 180;
+        private const int TrickplayPreviewBorderPx = 2;
+        private const int TrickplayPreviewGapToSeekbar = 18;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -151,6 +166,7 @@ namespace JellyfinTizen.Screens
             _initialSubtitleIndex = subtitleStreamIndex;
             _burnIn = burnIn;
             _preferredMediaSourceId = preferredMediaSourceId;
+            _trickplayCacheDir = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, "trickplay-cache");
 
             // CRITICAL: Ensure the window is transparent so the video plane is visible.
             Window.Default.BackgroundColor = Color.Transparent;
@@ -233,6 +249,7 @@ namespace JellyfinTizen.Screens
                 }
 
                 ApplyDisplayModeForCurrentVideo();
+                _ = LoadTrickplayInfoAsync();
 
                 string streamUrl = "";
                 var apiKey = AppState.AccessToken;
@@ -762,6 +779,7 @@ namespace JellyfinTizen.Screens
             _osd.Add(_subtitleOffsetTrackContainer);
             _osd.Add(_controlsContainer);
             Add(_osd);
+            CreateTrickplayPreview();
             CreateSeekFeedback();
             CreatePlayPauseFeedback();
 
@@ -940,6 +958,36 @@ namespace JellyfinTizen.Screens
             {
                 return fallback;
             }
+        }
+
+        private void CreateTrickplayPreview()
+        {
+            _trickplayPreviewContainer = new View
+            {
+                WidthSpecification = TrickplayPreviewWidth + (TrickplayPreviewBorderPx * 2),
+                HeightSpecification = TrickplayPreviewHeight + (TrickplayPreviewBorderPx * 2),
+                BackgroundColor = Color.White,
+                CornerRadius = 12.0f,
+                ClippingMode = ClippingModeType.ClipChildren,
+                PositionY = Window.Default.Size.Height - 460,
+                Opacity = 1.0f
+            };
+
+            _trickplayPreviewImage = new ImageView
+            {
+                WidthSpecification = TrickplayPreviewWidth,
+                HeightSpecification = TrickplayPreviewHeight,
+                PositionX = TrickplayPreviewBorderPx,
+                PositionY = TrickplayPreviewBorderPx,
+                FittingMode = FittingModeType.Fill,
+                SamplingMode = SamplingModeType.BoxThenLanczos,
+                PreMultipliedAlpha = false,
+                CornerRadius = 10.0f
+            };
+
+            _trickplayPreviewContainer.Add(_trickplayPreviewImage);
+            _trickplayPreviewContainer.Hide();
+            Add(_trickplayPreviewContainer);
         }
 
         private void CreateSeekFeedback()
@@ -1352,6 +1400,7 @@ namespace JellyfinTizen.Screens
                 _progressFill.WidthSpecification = fillWidth;
                 _previewFill.WidthSpecification = 0;
                 if (_progressThumb != null) _progressThumb.PositionX = trackStartX + fillWidth - 12;
+                HideTrickplayPreview();
             }
 
             _currentTimeLabel.Text = FormatTime(position);
@@ -1364,7 +1413,15 @@ namespace JellyfinTizen.Screens
             return t.Hours > 0 ? $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes:D2}:{t.Seconds:D2}";
         }
 
-        private void BeginSeek() { if (_player != null) { _isSeeking = true; _seekPreviewMs = GetPlayPositionMs(); } }
+        private void BeginSeek()
+        {
+            if (_player == null)
+                return;
+
+            _isSeeking = true;
+            _seekPreviewMs = GetPlayPositionMs();
+            UpdatePreviewBar();
+        }
 
         private async Task CommitSeekAsync(int visualHoldMs = 0)
         {
@@ -1387,6 +1444,7 @@ namespace JellyfinTizen.Screens
                 _hiddenSeekBurstCount = 0;
                 _hiddenSeekBurstDirection = 0;
                 HideSeekFeedback();
+                HideTrickplayPreview();
                 UpdateProgress();
             }
         }
@@ -1408,6 +1466,7 @@ namespace JellyfinTizen.Screens
             _hiddenSeekBurstCount = 0;
             _hiddenSeekBurstDirection = 0;
             HideSeekFeedback();
+            HideTrickplayPreview();
         }
 
         private void HandleHiddenDirectionalSeek(int direction)
@@ -1529,6 +1588,199 @@ namespace JellyfinTizen.Screens
             if (dur <= 0) return;
             float ratio = Math.Clamp((float)_seekPreviewMs / dur, 0f, 1f);
             _previewFill.WidthSpecification = (int)Math.Floor(_progressTrack.Size.Width * ratio);
+            UpdateTrickplayPreviewPosition();
+            _ = UpdateTrickplayPreviewAsync();
+        }
+
+        private async Task LoadTrickplayInfoAsync()
+        {
+            try
+            {
+                _trickplayInfo = await AppState.Jellyfin.GetTrickplayInfoAsync(_movie.Id);
+                _trickplayLastThumbnailIndex = -1;
+                _trickplayLastTileIndex = -1;
+                _trickplayUpdateToken++;
+                if (_trickplayInfo == null)
+                    HideTrickplayPreview();
+            }
+            catch
+            {
+                _trickplayInfo = null;
+                HideTrickplayPreview();
+            }
+        }
+
+        private async Task UpdateTrickplayPreviewAsync()
+        {
+            if (!_isSeeking || !_osdVisible || _trickplayInfo == null || _trickplayPreviewImage == null || _trickplayPreviewContainer == null)
+            {
+                HideTrickplayPreview();
+                return;
+            }
+
+            int intervalMs = Math.Max(1, _trickplayInfo.IntervalMs);
+            int thumbIndex = Math.Max(0, _seekPreviewMs / intervalMs);
+            if (_trickplayInfo.ThumbnailCount > 0)
+                thumbIndex = Math.Min(thumbIndex, _trickplayInfo.ThumbnailCount - 1);
+
+            int thumbsPerTile = Math.Max(1, _trickplayInfo.TileWidth * _trickplayInfo.TileHeight);
+            int tileIndex = thumbIndex / thumbsPerTile;
+            int cellIndex = thumbIndex % thumbsPerTile;
+            int col = cellIndex % _trickplayInfo.TileWidth;
+            int row = cellIndex / _trickplayInfo.TileWidth;
+
+            float cellWidth = 1f / _trickplayInfo.TileWidth;
+            float cellHeight = 1f / _trickplayInfo.TileHeight;
+            var pixelArea = new Vector4(col * cellWidth, row * cellHeight, cellWidth, cellHeight);
+
+            RunOnUiThread(() =>
+            {
+                _trickplayPreviewImage.PixelArea = pixelArea;
+                UpdateTrickplayPreviewPosition();
+                _trickplayPreviewContainer.Show();
+            });
+
+            if (thumbIndex == _trickplayLastThumbnailIndex && tileIndex == _trickplayLastTileIndex)
+                return;
+
+            _trickplayLastThumbnailIndex = thumbIndex;
+            int token = ++_trickplayUpdateToken;
+
+            var tilePath = await GetOrDownloadTrickplayTileAsync(tileIndex);
+            if (string.IsNullOrWhiteSpace(tilePath))
+                return;
+
+            if (token != _trickplayUpdateToken || !_isSeeking)
+                return;
+
+            _trickplayLastTileIndex = tileIndex;
+            RunOnUiThread(() =>
+            {
+                _trickplayPreviewImage.ResourceUrl = tilePath;
+                _trickplayPreviewImage.PreMultipliedAlpha = false;
+                _trickplayPreviewImage.PixelArea = pixelArea;
+            });
+
+            _ = GetOrDownloadTrickplayTileAsync(tileIndex + 1);
+        }
+
+        private async Task<string> GetOrDownloadTrickplayTileAsync(int tileIndex)
+        {
+            if (_trickplayInfo == null || tileIndex < 0)
+                return null;
+
+            lock (_trickplayTileLock)
+            {
+                if (_trickplayTileCache.TryGetValue(tileIndex, out var cachedPath) &&
+                    File.Exists(cachedPath))
+                {
+                    return cachedPath;
+                }
+            }
+
+            Task<string> downloadTask;
+            lock (_trickplayTileLock)
+            {
+                if (!_trickplayTileDownloads.TryGetValue(tileIndex, out downloadTask))
+                {
+                    downloadTask = DownloadTrickplayTileAsync(tileIndex);
+                    _trickplayTileDownloads[tileIndex] = downloadTask;
+                }
+
+            }
+
+            var path = await downloadTask;
+
+            lock (_trickplayTileLock)
+            {
+                _trickplayTileDownloads.Remove(tileIndex);
+                if (!string.IsNullOrWhiteSpace(path))
+                    _trickplayTileCache[tileIndex] = path;
+            }
+
+            return path;
+        }
+
+        private async Task<string> DownloadTrickplayTileAsync(int tileIndex)
+        {
+            if (_trickplayInfo == null || string.IsNullOrWhiteSpace(_movie?.Id) || string.IsNullOrWhiteSpace(AppState.ServerUrl))
+                return null;
+
+            try
+            {
+                Directory.CreateDirectory(_trickplayCacheDir);
+
+                string mediaSourceId = _currentMediaSource?.Id ?? "default";
+                string fileName = $"{_movie.Id}_{mediaSourceId}_{_trickplayInfo.Width}_{tileIndex}.jpg";
+                foreach (var c in System.IO.Path.GetInvalidFileNameChars())
+                    fileName = fileName.Replace(c, '_');
+
+                string localPath = System.IO.Path.Combine(_trickplayCacheDir, fileName);
+                if (File.Exists(localPath) && new FileInfo(localPath).Length > 0)
+                    return localPath;
+
+                var serverUrl = AppState.ServerUrl.TrimEnd('/');
+                var token = Uri.EscapeDataString(AppState.AccessToken ?? string.Empty);
+                var url = $"{serverUrl}/Videos/{_movie.Id}/Trickplay/{_trickplayInfo.Width}/{tileIndex}.jpg?api_key={token}";
+                if (!string.IsNullOrWhiteSpace(_currentMediaSource?.Id))
+                    url += $"&MediaSourceId={Uri.EscapeDataString(_currentMediaSource.Id)}";
+
+                _trickplayHttpClient ??= new HttpClient();
+                var bytes = await _trickplayHttpClient.GetByteArrayAsync(url);
+                if (bytes == null || bytes.Length < 64)
+                    return null;
+
+                await File.WriteAllBytesAsync(localPath, bytes);
+                return localPath;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private void UpdateTrickplayPreviewPosition()
+        {
+            if (_trickplayPreviewContainer == null)
+                return;
+
+            int duration = GetDuration();
+            if (duration <= 0)
+                return;
+
+            int trackStartX = 60 + 140 + 20;
+            int trackWidth = Window.Default.Size.Width - (2 * trackStartX);
+            float ratio = Math.Clamp((float)_seekPreviewMs / duration, 0f, 1f);
+            int trackX = trackStartX + (int)Math.Floor(trackWidth * ratio);
+
+            int previewWidth = TrickplayPreviewWidth + (TrickplayPreviewBorderPx * 2);
+            int previewX = trackX - (previewWidth / 2);
+            int minX = 20;
+            int maxX = Window.Default.Size.Width - previewWidth - 20;
+            _trickplayPreviewContainer.PositionX = Math.Clamp(previewX, minX, Math.Max(minX, maxX));
+
+            int seekBarY = _osdShownY + 90 + 22;
+            int previewHeight = TrickplayPreviewHeight + (TrickplayPreviewBorderPx * 2);
+            _trickplayPreviewContainer.PositionY = seekBarY - previewHeight - TrickplayPreviewGapToSeekbar;
+        }
+
+        private void HideTrickplayPreview()
+        {
+            RunOnUiThread(() => _trickplayPreviewContainer?.Hide());
+        }
+
+        private void ResetTrickplayState()
+        {
+            _trickplayInfo = null;
+            _trickplayLastThumbnailIndex = -1;
+            _trickplayLastTileIndex = -1;
+            _trickplayUpdateToken++;
+            HideTrickplayPreview();
+            lock (_trickplayTileLock)
+            {
+                _trickplayTileCache.Clear();
+                _trickplayTileDownloads.Clear();
+            }
         }
 
         private void CreateSubtitleOverlay()
@@ -2168,6 +2420,7 @@ namespace JellyfinTizen.Screens
 
             _osdTimer.Stop();
             _progressTimer.Stop();
+            HideTrickplayPreview();
         }
 
         private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
@@ -2222,7 +2475,11 @@ namespace JellyfinTizen.Screens
             _isSeeking = false;
             _seekPreviewMs = 0;
             _seekFeedbackContainer?.Hide();
+            HideTrickplayPreview();
             _playPauseFeedbackContainer?.Hide();
+            ResetTrickplayState();
+            _trickplayHttpClient?.Dispose();
+            _trickplayHttpClient = null;
 
             try 
             {
@@ -2481,6 +2738,7 @@ namespace JellyfinTizen.Screens
             _subtitleCues.Clear();
             _activeSubtitleCueIndex = -1;
             StopSubtitleRenderTimer();
+            ResetTrickplayState();
             StartPlayback();
             ShowOSD();
         }

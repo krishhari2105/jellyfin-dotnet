@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Linq;
 using JellyfinTizen.Models;
 
 
@@ -589,6 +590,89 @@ namespace JellyfinTizen.Core
             return response;
         }
 
+        public async Task<TrickplayInfo> GetTrickplayInfoAsync(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                return null;
+
+            var json = await GetAsync($"/Items/{itemId}?Fields=Trickplay");
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("Trickplay", out var trickplayRoot) ||
+                trickplayRoot.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var variants = new List<TrickplayInfo>();
+            foreach (var profile in trickplayRoot.EnumerateObject())
+            {
+                if (TryParseTrickplayVariant(profile.Value, out var directVariant))
+                {
+                    variants.Add(directVariant);
+                    continue;
+                }
+
+                if (profile.Value.ValueKind != JsonValueKind.Object)
+                    continue;
+
+                foreach (var nested in profile.Value.EnumerateObject())
+                {
+                    if (TryParseTrickplayVariant(nested.Value, out var nestedVariant))
+                        variants.Add(nestedVariant);
+                }
+            }
+
+            if (variants.Count == 0)
+                return null;
+
+            var preferred = variants
+                .Where(v => v.Width >= 240 && v.Width <= 640)
+                .OrderBy(v => Math.Abs(v.Width - 320))
+                .FirstOrDefault();
+
+            return preferred ?? variants.OrderBy(v => v.Width).FirstOrDefault();
+        }
+
+        private static bool TryParseTrickplayVariant(JsonElement element, out TrickplayInfo variant)
+        {
+            variant = null;
+            if (element.ValueKind != JsonValueKind.Object)
+                return false;
+
+            if (!TryGetInt32Loose(element, "Width", out var width) || width <= 0)
+                return false;
+
+            if (!TryGetInt32Loose(element, "Height", out var height))
+                height = 0;
+
+            if (!TryGetInt32Loose(element, "TileWidth", out var tileWidth) || tileWidth <= 0)
+                return false;
+
+            if (!TryGetInt32Loose(element, "TileHeight", out var tileHeight) || tileHeight <= 0)
+                return false;
+
+            if (!TryGetInt32Loose(element, "Interval", out var intervalMs) || intervalMs <= 0)
+                return false;
+
+            TryGetInt32Loose(element, "ThumbnailCount", out var thumbnailCount);
+            TryGetInt32Loose(element, "Bandwidth", out var bandwidth);
+
+            variant = new TrickplayInfo
+            {
+                Width = width,
+                Height = height,
+                TileWidth = tileWidth,
+                TileHeight = tileHeight,
+                ThumbnailCount = thumbnailCount,
+                IntervalMs = intervalMs,
+                Bandwidth = bandwidth
+            };
+
+            return true;
+        }
+
         private static string TryGetString(JsonElement element, string propertyName)
         {
             if (!element.TryGetProperty(propertyName, out var prop))
@@ -676,6 +760,21 @@ namespace JellyfinTizen.Core
                 return false;
 
             return prop.TryGetInt32(out value);
+        }
+
+        private static bool TryGetInt32Loose(JsonElement element, string propertyName, out int value)
+        {
+            value = 0;
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return false;
+
+            if (prop.ValueKind == JsonValueKind.Number)
+                return prop.TryGetInt32(out value);
+
+            if (prop.ValueKind == JsonValueKind.String)
+                return int.TryParse(prop.GetString(), out value);
+
+            return false;
         }
 
         private static double? TryGetAspectRatio(JsonElement element, string propertyName)
