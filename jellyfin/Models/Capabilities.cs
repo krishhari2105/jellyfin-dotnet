@@ -99,6 +99,7 @@ namespace JellyfinTizen.Models
         public string Language { get; set; }
         public string DisplayTitle { get; set; }
         public string Codec { get; set; }
+        public string DeliveryUrl { get; set; }
         public bool IsExternal { get; set; }
         public int? Width { get; set; }
         public int? Height { get; set; }
