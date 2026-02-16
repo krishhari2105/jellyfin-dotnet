@@ -109,6 +109,8 @@ namespace JellyfinTizen.Core
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "vtt", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "ass", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "ssa", Method = "Encode" });
+                profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgs", Method = "Encode" });
+                profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgssub", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "mov_text", Method = "Encode" });
             }
             else
@@ -121,6 +123,8 @@ namespace JellyfinTizen.Core
                     new SubtitleProfile { Format = "ass", Method = "External" },
                     new SubtitleProfile { Format = "ssa", Method = "External" },
                     new SubtitleProfile { Format = "mov_text", Method = "External" },
+                    new SubtitleProfile { Format = "pgs", Method = "External" },
+                    new SubtitleProfile { Format = "pgssub", Method = "External" },
                     // Keep Embed as secondary option for DirectPlay compatibility
                     new SubtitleProfile { Format = "vtt", Method = "Embed" },
                     new SubtitleProfile { Format = "srt", Method = "Embed" },

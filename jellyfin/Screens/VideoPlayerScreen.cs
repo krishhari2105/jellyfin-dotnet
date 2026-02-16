@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Tizen.Multimedia;
 using Tizen.NUI;
@@ -42,10 +42,9 @@ namespace JellyfinTizen.Screens
         private int _subtitleIndex;
         private bool _subtitleOverlayVisible;
         private bool _subtitleEnabled;
+        private ImageView _subtitleImage;
         private TextLabel _subtitleText;
         private Timer _subtitleHideTimer;
-        private int _subtitleTextBaseY;
-        private int _subtitleTextOsdY;
         private Timer _subtitleRenderTimer;
         private List<SubtitleCue> _subtitleCues = new List<SubtitleCue>();
         private bool _useParsedSubtitleRenderer;
@@ -130,7 +129,6 @@ namespace JellyfinTizen.Screens
         private const int SubtitleOffsetStepMs = 100;
         private const int SubtitleOffsetLimitMs = 5000;
         private const int SubtitleOffsetTrackWidth = 280;
-        private const int SubtitleOsdLiftPx = 100;
         private const int OverlaySlideDistance = 36;
         private const int OsdSlideDistance = 34;
         private const int SeekStepSeconds = 10;
@@ -143,11 +141,25 @@ namespace JellyfinTizen.Screens
         private const int TrickplayPreviewHeight = 180;
         private const int TrickplayPreviewBorderPx = 2;
         private const int TrickplayPreviewGapToSeekbar = 18;
+        private const int PgsHideGraceMs = 0;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
         private int? _overrideAudioIndex = null;
         private bool _isAnamorphicVideo;
+        private bool _isPgs;
+        private List<PgsCue> _pgsCues = new List<PgsCue>();
+        private int _pgsRenderToken;
+        private string _lastPgsCachePath;
+        private int _pgsHideGraceUntilMs;
+        private readonly Dictionary<int, PgsCachedCue> _pgsCueCache = new();
+
+        private struct PgsCue
+        {
+            public long StartMs;
+            public long EndMs;
+            public long FileOffset;
+        }
 
         private struct SubtitleCue
         {
@@ -215,7 +227,12 @@ namespace JellyfinTizen.Screens
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
+                _isPgs = false;
                 _subtitleCues.Clear();
+                _pgsCues.Clear();
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
                 _activeSubtitleCueIndex = -1;
                 _player = new Player();
 
@@ -363,6 +380,17 @@ namespace JellyfinTizen.Screens
                 var source = new MediaUriSource(streamUrl);
                 _player.SetSource(source);
 
+                if (!_burnIn && _initialSubtitleIndex.HasValue)
+                {
+                    try 
+                    {
+                        var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
+                        if (subStream != null)
+                            await DownloadAndSetSubtitle(mediaSource.Id, _initialSubtitleIndex.Value, subStream.Codec);
+                    }
+                    catch { }
+                }
+
                 await _player.PrepareAsync();
                 ApplyDisplayModeForCurrentVideo();
 
@@ -370,23 +398,22 @@ namespace JellyfinTizen.Screens
                 try { _ = _player.AudioTrackInfo.GetCount(); } catch { }
                 try 
                 {
-                    if (!_burnIn && _initialSubtitleIndex.HasValue)
+                    int subCount = _player.SubtitleTrackInfo.GetCount();
+                    if (_initialSubtitleIndex.HasValue && subCount > 0 && string.IsNullOrEmpty(_externalSubtitlePath))
                     {
-                        var selectedSubStream = mediaSource.MediaStreams?
-                            .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
-                        if (selectedSubStream != null)
+                        var embeddedSubs = mediaSource.MediaStreams?
+                            .Where(s => s.Type == "Subtitle" && !s.IsExternal)
+                            .OrderBy(s => s.Index)
+                            .ToList();
+
+                        if (embeddedSubs != null)
                         {
-                            bool useNativeEmbedded = _playMethod == "DirectPlay" && !selectedSubStream.IsExternal;
-                            if (useNativeEmbedded)
+                            int tizenIndex = embeddedSubs.FindIndex(s => s.Index == _initialSubtitleIndex.Value);
+                            if (tizenIndex != -1 && tizenIndex < subCount)
                             {
-                                if (!TrySelectNativeEmbeddedSubtitle(_initialSubtitleIndex.Value))
-                                {
-                                    await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
-                                }
-                            }
-                            else
-                            {
-                                await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
+                                _player.SubtitleTrackInfo.Selected = tizenIndex;
+                                _subtitleIndex = tizenIndex + 1;
+                                _subtitleEnabled = true;
                             }
                         }
                     }
@@ -411,305 +438,154 @@ namespace JellyfinTizen.Screens
             catch { }
         }
 
-        private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, MediaStream subtitleStream)
+        private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, int subtitleIndex, string _codec)
         {
             try
             {
-                if (subtitleStream == null) return false;
-                ApplySubtitleTextStyle();
+                string codec = (_codec ?? string.Empty).ToLowerInvariant();
+                string fallbackExt = "srt";
+                var formatCandidates = new List<string>();
 
-                int subtitleIndex = subtitleStream.Index;
-                var apiKey = AppState.AccessToken;
-                var downloadUrl = BuildSubtitleDeliveryUrl(subtitleStream, mediaSourceId, subtitleIndex, "srt");
-                if (string.IsNullOrEmpty(downloadUrl))
+                if (codec.Contains("pgs"))
                 {
-                    return false;
+                    fallbackExt = "sup";
+                    formatCandidates.Add("sup");
+                    formatCandidates.Add("pgssub");
+                    formatCandidates.Add("pgs");
+                }
+                else if (codec.Contains("ass") || codec.Contains("ssa"))
+                {
+                    fallbackExt = "ssa";
+                    formatCandidates.Add("ssa");
+                    formatCandidates.Add("ass");
+                }
+                else if (codec.Contains("vtt"))
+                {
+                    fallbackExt = "vtt";
+                    formatCandidates.Add("vtt");
+                }
+                else
+                {
+                    formatCandidates.Add("srt");
+                    formatCandidates.Add("subrip");
                 }
 
-                string ext = ResolveSubtitleExtension(downloadUrl, subtitleStream.Codec);
-                var localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{ext}");
+                var subtitleStream = _currentMediaSource?.MediaStreams?
+                    .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == subtitleIndex);
+
+                var apiKey = AppState.AccessToken ?? string.Empty;
+                var serverUrl = (AppState.Jellyfin.ServerUrl ?? string.Empty).TrimEnd('/');
+                var downloadCandidates = new List<string>();
+
+                // Preferred: Jellyfin-provided subtitle delivery URL.
+                if (!string.IsNullOrWhiteSpace(subtitleStream?.DeliveryUrl))
+                {
+                    string deliveryUrl = subtitleStream.DeliveryUrl;
+                    if (deliveryUrl.StartsWith("/"))
+                        deliveryUrl = $"{serverUrl}{deliveryUrl}";
+                    if (!deliveryUrl.Contains("api_key=") && !deliveryUrl.Contains("Token="))
+                        deliveryUrl += (deliveryUrl.Contains("?") ? "&" : "?") + $"api_key={Uri.EscapeDataString(apiKey)}";
+                    downloadCandidates.Add(deliveryUrl);
+                }
+
+                foreach (var format in formatCandidates.Distinct())
+                {
+                    downloadCandidates.Add($"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{format}?api_key={Uri.EscapeDataString(apiKey)}");
+                    downloadCandidates.Add($"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/Stream.{format}?api_key={Uri.EscapeDataString(apiKey)}");
+                }
+
+                string downloadedExt = fallbackExt;
+                string localPath = null;
 
                 using (var client = new HttpClient())
                 {
                     client.DefaultRequestHeaders.Add("X-Emby-Authorization", $"MediaBrowser Client=\"JellyfinTizen\", Device=\"SamsungTV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{apiKey}\"");
-                    var response = await client.GetAsync(downloadUrl);
-                    response.EnsureSuccessStatusCode();
-                    var data = await response.Content.ReadAsByteArrayAsync();
-                    await File.WriteAllBytesAsync(localPath, data);
+
+                    foreach (var url in downloadCandidates.Distinct())
+                    {
+                        try
+                        {
+                            var response = await client.GetAsync(url);
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                Console.WriteLine($"[Subtitle] Download failed {(int)response.StatusCode} for {url}");
+                                continue;
+                            }
+
+                            downloadedExt = TryGetSubtitleExtensionFromUrl(url, fallbackExt);
+                            localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{downloadedExt}");
+                            var data = await response.Content.ReadAsByteArrayAsync();
+                            await File.WriteAllBytesAsync(localPath, data);
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[Subtitle] Download exception for {url}: {ex.Message}");
+                        }
+                    }
                 }
+
+                if (string.IsNullOrWhiteSpace(localPath))
+                    throw new HttpRequestException("Subtitle download failed for all candidate URLs.");
+
                 _externalSubtitlePath = localPath;
 
-                bool preferParsedForTiming = !_burnIn && !string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
-                // Keep DirectPlay on native subtitle renderer for both embedded and external tracks.
-                bool allowParsedRenderer = preferParsedForTiming;
-                if (allowParsedRenderer && TryLoadSubtitleCues(localPath))
+                bool isPgsCodec = codec.Contains("pgs");
+                bool pgsLikeExt = downloadedExt == "sup" || downloadedExt == "pgssub" || downloadedExt == "pgs";
+                if ((isPgsCodec || pgsLikeExt) && TryLoadPgsSubtitleCues(localPath))
                 {
                     _useParsedSubtitleRenderer = true;
+                    _isPgs = true;
+                    TryDisableNativeSubtitleTrack();
+                    StartSubtitleRenderTimer();
+                }
+                else if (isPgsCodec || pgsLikeExt)
+                {
+                    // Do not fall back to text parser for PGS tracks.
+                    _useParsedSubtitleRenderer = false;
+                    _isPgs = false;
+                    _subtitleCues.Clear();
+                    _pgsCues.Clear();
+                    StopSubtitleRenderTimer();
+                    return false;
+                }
+                else if (TryLoadSrtSubtitleCues(localPath))
+                {
+                    _useParsedSubtitleRenderer = true;
+                    _isPgs = false;
                     TryDisableNativeSubtitleTrack();
                     StartSubtitleRenderTimer();
                 }
                 else
                 {
                     _useParsedSubtitleRenderer = false;
-                    _subtitleText?.Hide();
+                    _isPgs = false;
                     _player.SetSubtitle(localPath);
                 }
 
                 return true;
             }
-            catch (Exception)
+            catch
             {
                 _externalSubtitlePath = null;
                 _useParsedSubtitleRenderer = false;
+                _isPgs = false;
                 _subtitleCues.Clear();
+                _pgsCues.Clear();
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
                 StopSubtitleRenderTimer();
                 return false;
             }
         }
 
-        private bool TryLoadSubtitleCues(string path)
+        private static string TryGetSubtitleExtensionFromUrl(string url, string fallbackExt)
         {
-            if (TryLoadSrtSubtitleCues(path))
-                return true;
-
-            return TryLoadVttSubtitleCues(path);
-        }
-
-        private static string ResolveSubtitleExtension(string url, string codec)
-        {
-            string ext = null;
-
-            if (!string.IsNullOrWhiteSpace(url))
-            {
-                string pathPart = NormalizeSubtitleDeliveryUrl(url);
-                int queryIndex = pathPart.IndexOf('?');
-                if (queryIndex >= 0) pathPart = pathPart.Substring(0, queryIndex);
-
-                string candidate = System.IO.Path.GetExtension(pathPart);
-                if (!string.IsNullOrWhiteSpace(candidate))
-                    ext = candidate.TrimStart('.').ToLowerInvariant();
-            }
-
-            if (string.IsNullOrWhiteSpace(ext) && !string.IsNullOrWhiteSpace(codec))
-                ext = codec.Trim().ToLowerInvariant();
-
-            if (string.IsNullOrWhiteSpace(ext))
-                ext = "srt";
-
-            if (ext == "subrip")
-                ext = "srt";
-
-            return ext;
-        }
-
-        private bool TryLoadVttSubtitleCues(string path)
-        {
-            try
-            {
-                if (!File.Exists(path)) return false;
-
-                string raw = File.ReadAllText(path);
-                string normalized = raw.Replace("\r\n", "\n").Replace('\r', '\n');
-                string[] lines = normalized.Split('\n');
-                var cues = new List<SubtitleCue>();
-
-                int i = 0;
-                while (i < lines.Length)
-                {
-                    string line = lines[i].Trim();
-                    if (string.IsNullOrWhiteSpace(line) ||
-                        line.StartsWith("WEBVTT", StringComparison.OrdinalIgnoreCase) ||
-                        line.StartsWith("STYLE", StringComparison.OrdinalIgnoreCase) ||
-                        line.StartsWith("NOTE", StringComparison.OrdinalIgnoreCase) ||
-                        line.StartsWith("REGION", StringComparison.OrdinalIgnoreCase))
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    if (!line.Contains("-->"))
-                    {
-                        // Cue identifier line; timing should be on next line.
-                        i++;
-                        if (i >= lines.Length) break;
-                        line = lines[i].Trim();
-                    }
-
-                    if (!line.Contains("-->"))
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    string[] parts = line.Split(new[] { "-->" }, StringSplitOptions.None);
-                    if (parts.Length != 2)
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    if (!TryParseSubtitleTimestamp(parts[0], out int startMs))
-                    {
-                        i++;
-                        continue;
-                    }
-                    if (!TryParseSubtitleTimestamp(parts[1], out int endMs))
-                    {
-                        i++;
-                        continue;
-                    }
-
-                    if (endMs <= startMs) endMs = startMs + 500;
-
-                    var cueLines = new List<string>();
-                    i++;
-                    while (i < lines.Length && !string.IsNullOrWhiteSpace(lines[i]))
-                    {
-                        cueLines.Add(lines[i].TrimEnd());
-                        i++;
-                    }
-
-                    string cueText = string.Join("\n", cueLines);
-                    if (!string.IsNullOrWhiteSpace(cueText))
-                    {
-                        cues.Add(new SubtitleCue
-                        {
-                            StartMs = startMs,
-                            EndMs = endMs,
-                            Text = cueText
-                        });
-                    }
-                }
-
-                cues.Sort((a, b) => a.StartMs.CompareTo(b.StartMs));
-                _subtitleCues = cues;
-                _activeSubtitleCueIndex = -1;
-                return cues.Count > 0;
-            }
-            catch
-            {
-                _subtitleCues.Clear();
-                _activeSubtitleCueIndex = -1;
-                return false;
-            }
-        }
-
-        private string BuildSubtitleDeliveryUrl(MediaStream subtitleStream, string mediaSourceId, int subtitleIndex, string ext)
-        {
-            if (subtitleStream == null) return null;
-
-            var serverUrl = AppState.Jellyfin.ServerUrl?.TrimEnd('/');
-            var apiKey = AppState.AccessToken;
-
-            var deliveryUrl = subtitleStream.DeliveryUrl;
-            if (!string.IsNullOrWhiteSpace(deliveryUrl))
-            {
-                string normalizedUrl = NormalizeSubtitleDeliveryUrl(deliveryUrl);
-                string absoluteUrl;
-
-                if (normalizedUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Parse pseudo file delivery URLs manually so query delimiters are preserved.
-                    string raw = normalizedUrl.Substring("file://".Length).TrimStart('/');
-                    int queryIndex = raw.IndexOf('?');
-                    string path = queryIndex >= 0 ? raw.Substring(0, queryIndex) : raw;
-                    string query = queryIndex >= 0 ? raw.Substring(queryIndex + 1) : string.Empty;
-
-                    if (!path.StartsWith("Videos/", StringComparison.OrdinalIgnoreCase))
-                        path = $"Videos/{path}";
-
-                    absoluteUrl = $"{serverUrl}/{path}";
-                    if (!string.IsNullOrWhiteSpace(query))
-                        absoluteUrl = $"{absoluteUrl}?{query.TrimStart('?', '&')}";
-                }
-                else if (Uri.TryCreate(normalizedUrl, UriKind.Absolute, out var absoluteUri))
-                {
-                    if (absoluteUri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
-                        absoluteUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                    {
-                        absoluteUrl = absoluteUri.ToString();
-                    }
-                    else
-                    {
-                        absoluteUrl = $"{serverUrl}/{normalizedUrl.TrimStart('/')}";
-                    }
-                }
-                else
-                {
-                    absoluteUrl = $"{serverUrl}/{normalizedUrl.TrimStart('/')}";
-                }
-
-                absoluteUrl = NormalizeSubtitleDeliveryUrl(absoluteUrl);
-                string lowerUrl = absoluteUrl.ToLowerInvariant();
-                bool hasAuthParam = lowerUrl.Contains("api_key=") || lowerUrl.Contains("apikey=") || lowerUrl.Contains("token=");
-                if (!hasAuthParam)
-                {
-                    absoluteUrl += absoluteUrl.Contains("?") ? $"&api_key={apiKey}" : $"?api_key={apiKey}";
-                }
-                return absoluteUrl;
-            }
-
-            // Safety fallback for older server payloads that do not include DeliveryUrl.
-            return $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}?api_key={apiKey}";
-        }
-
-        private static string NormalizeSubtitleDeliveryUrl(string deliveryUrl)
-        {
-            if (string.IsNullOrWhiteSpace(deliveryUrl))
-                return string.Empty;
-
-            string normalized = deliveryUrl.Trim().Replace("\r", "").Replace("\n", "");
-            normalized = normalized
-                .Replace("%3F", "?", StringComparison.OrdinalIgnoreCase)
-                .Replace("%26", "&", StringComparison.OrdinalIgnoreCase)
-                .Replace("%3D", "=", StringComparison.OrdinalIgnoreCase)
-                .Replace("??", "?")
-                .Replace("?&", "?");
-            return normalized;
-        }
-
-        private bool TrySelectNativeEmbeddedSubtitle(int jellyfinStreamIndex)
-        {
-            if (_player == null || _currentMediaSource == null)
-                return false;
-
-            if (_playMethod != "DirectPlay")
-                return false;
-
-            try
-            {
-                int tizenSubtitleCount = _player.SubtitleTrackInfo.GetCount();
-                if (tizenSubtitleCount <= 0)
-                    return false;
-
-                var embeddedSubs = _currentMediaSource.MediaStreams?
-                    .Where(s => s.Type == "Subtitle" && !s.IsExternal)
-                    .OrderBy(s => s.Index)
-                    .ToList();
-                if (embeddedSubs == null || embeddedSubs.Count == 0)
-                    return false;
-
-                int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
-                if (tizenIndex < 0 || tizenIndex >= tizenSubtitleCount)
-                {
-                    return false;
-                }
-
-                _useParsedSubtitleRenderer = false;
-                _subtitleCues.Clear();
-                _activeSubtitleCueIndex = -1;
-                StopSubtitleRenderTimer();
-                _subtitleText?.Hide();
-                _player.SubtitleTrackInfo.Selected = tizenIndex;
-                _subtitleEnabled = true;
-                _subtitleIndex = tizenIndex + 1;
-                ApplySubtitleTextStyle();
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            if (string.IsNullOrWhiteSpace(url)) return fallbackExt;
+            string cleanUrl = url.Split('?')[0];
+            string ext = System.IO.Path.GetExtension(cleanUrl).TrimStart('.').ToLowerInvariant();
+            return string.IsNullOrWhiteSpace(ext) ? fallbackExt : ext;
         }
 
         private bool TryLoadSrtSubtitleCues(string path)
@@ -763,6 +639,101 @@ namespace JellyfinTizen.Screens
             catch
             {
                 _subtitleCues.Clear();
+                _activeSubtitleCueIndex = -1;
+                return false;
+            }
+        }
+
+        private bool TryLoadPgsSubtitleCues(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return false;
+                var cues = new List<PgsCue>();
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (var br = new BinaryReader(fs))
+                {
+                    long length = fs.Length;
+                    PgsCue currentCue = new PgsCue { StartMs = -1, EndMs = -1, FileOffset = -1 };
+
+                    while (fs.Position < length - 13)
+                    {
+                        long segmentOffset = fs.Position;
+                        byte b0 = br.ReadByte();
+                        byte b1 = br.ReadByte();
+                        if (b0 != 0x50 || b1 != 0x47)
+                        {
+                            // Re-sync safely if parser drifts into payload bytes.
+                            fs.Seek(segmentOffset + 1, SeekOrigin.Begin);
+                            continue;
+                        }
+
+                        uint pts = (uint)((br.ReadByte() << 24) | (br.ReadByte() << 16) | (br.ReadByte() << 8) | br.ReadByte());
+                        fs.Seek(4, SeekOrigin.Current); // skip DTS
+                        byte type = br.ReadByte();
+                        ushort size = (ushort)((br.ReadByte() << 8) | br.ReadByte());
+                        long payloadEnd = fs.Position + size;
+                        if (payloadEnd > length)
+                            break;
+
+                        if (type == 0x16) // PCS: new display set start
+                        {
+                            long ms = pts / 90;
+                            bool hasObjects = true;
+
+                            if (size >= 11)
+                            {
+                                // video size + frame rate + composition number + state + palette update flag + palette id
+                                fs.Seek(2 + 2 + 1 + 2 + 1 + 1 + 1, SeekOrigin.Current);
+                                hasObjects = fs.Position < payloadEnd && br.ReadByte() > 0;
+                            }
+
+                            if (currentCue.StartMs >= 0)
+                            {
+                                currentCue.EndMs = ms;
+                                if (currentCue.EndMs > currentCue.StartMs)
+                                    cues.Add(currentCue);
+                            }
+
+                            if (hasObjects)
+                            {
+                                currentCue = new PgsCue
+                                {
+                                    StartMs = ms,
+                                    EndMs = -1,
+                                    FileOffset = segmentOffset
+                                };
+                            }
+                            else
+                            {
+                                // Clear event (hide subtitle), no active cue.
+                                currentCue = new PgsCue { StartMs = -1, EndMs = -1, FileOffset = -1 };
+                            }
+                        }
+
+                        fs.Seek(payloadEnd, SeekOrigin.Begin);
+                    }
+
+                    if (currentCue.StartMs >= 0)
+                    {
+                        currentCue.EndMs = currentCue.StartMs + 1000;
+                        cues.Add(currentCue);
+                    }
+                }
+
+                _pgsCues = cues;
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
+                _activeSubtitleCueIndex = -1;
+                return cues.Count > 0;
+            }
+            catch
+            {
+                _pgsCues.Clear();
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
                 _activeSubtitleCueIndex = -1;
                 return false;
             }
@@ -826,9 +797,10 @@ namespace JellyfinTizen.Screens
 
         private void UpdateParsedSubtitleRender()
         {
-            if (!_useParsedSubtitleRenderer || _subtitleText == null || _player == null || !_subtitleEnabled || _subtitleCues.Count == 0)
+            if (!_useParsedSubtitleRenderer || _player == null || !_subtitleEnabled)
             {
                 _subtitleText?.Hide();
+                _subtitleImage?.Hide();
                 _activeSubtitleCueIndex = -1;
                 return;
             }
@@ -836,7 +808,22 @@ namespace JellyfinTizen.Screens
             int queryPosMs = GetPlayPositionMs() - _subtitleOffsetMs;
             if (queryPosMs < 0)
             {
-                _subtitleText.Hide();
+                _subtitleText?.Hide();
+                _subtitleImage?.Hide();
+                _activeSubtitleCueIndex = -1;
+                return;
+            }
+
+            if (_isPgs)
+            {
+                _subtitleText?.Hide();
+                UpdatePgsRender(queryPosMs);
+                return;
+            }
+
+            if (_subtitleText == null || _subtitleCues.Count == 0)
+            {
+                _subtitleText?.Hide();
                 _activeSubtitleCueIndex = -1;
                 return;
             }
@@ -869,6 +856,43 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private void UpdatePgsRender(int queryPosMs)
+        {
+            if (_pgsCues.Count == 0)
+            {
+                _subtitleImage?.Hide();
+                _activeSubtitleCueIndex = -1;
+                return;
+            }
+
+            int cueIndex = -1;
+            for (int i = 0; i < _pgsCues.Count; i++)
+            {
+                if (queryPosMs >= _pgsCues[i].StartMs && queryPosMs < _pgsCues[i].EndMs)
+                {
+                    cueIndex = i;
+                    break;
+                }
+            }
+
+            if (cueIndex == -1)
+            {
+                if (queryPosMs < _pgsHideGraceUntilMs)
+                    return;
+                if (_activeSubtitleCueIndex == -1) return;
+                _activeSubtitleCueIndex = -1;
+                _pgsRenderToken++;
+                _subtitleImage?.Hide();
+                return;
+            }
+
+            if (cueIndex == _activeSubtitleCueIndex) return;
+            _activeSubtitleCueIndex = cueIndex;
+            _pgsHideGraceUntilMs = (int)Math.Min(int.MaxValue, _pgsCues[cueIndex].EndMs + PgsHideGraceMs);
+            int renderToken = ++_pgsRenderToken;
+            _ = RenderPgsCueAsync(_pgsCues[cueIndex], renderToken);
+        }
+
         private string NormalizeParsedCueText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return string.Empty;
@@ -881,6 +905,718 @@ namespace JellyfinTizen.Screens
             normalized = Regex.Replace(normalized, "<[^>]+>", string.Empty);
             normalized = WebUtility.HtmlDecode(normalized);
             return normalized.Trim();
+        }
+
+        private sealed class PgsRenderFrame
+        {
+            public int PlaneWidth;
+            public int PlaneHeight;
+            public int ObjectX;
+            public int ObjectY;
+            public int Width;
+            public int Height;
+            public byte[] BgraPixels;
+        }
+
+        private sealed class PgsCompositionObject
+        {
+            public int ObjectId;
+            public int WindowId;
+            public int X;
+            public int Y;
+            public bool HasCrop;
+            public int CropX;
+            public int CropY;
+            public int CropWidth;
+            public int CropHeight;
+        }
+
+        private sealed class PgsWindow
+        {
+            public int X;
+            public int Y;
+            public int Width;
+            public int Height;
+        }
+
+        private sealed class PgsObjectData
+        {
+            public int Width;
+            public int Height;
+            public int ExpectedPayloadBytes = -1;
+            public bool IsComplete;
+            public readonly List<byte> Data = new List<byte>();
+        }
+
+        private sealed class PgsCachedCue
+        {
+            public string CachePath;
+            public int PlaneWidth;
+            public int PlaneHeight;
+            public int ObjectX;
+            public int ObjectY;
+            public int Width;
+            public int Height;
+        }
+
+        private void ClearPgsCueCache()
+        {
+            foreach (var entry in _pgsCueCache.Values)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(entry.CachePath) && File.Exists(entry.CachePath))
+                        File.Delete(entry.CachePath);
+                }
+                catch { }
+            }
+            _pgsCueCache.Clear();
+        }
+
+        private async Task RenderPgsCueAsync(PgsCue cue, int renderToken)
+        {
+            if (string.IsNullOrWhiteSpace(_externalSubtitlePath))
+                return;
+
+            try
+            {
+                int cueIndex = _activeSubtitleCueIndex;
+                if (cueIndex >= 0 && _pgsCueCache.TryGetValue(cueIndex, out var cached) && !string.IsNullOrWhiteSpace(cached.CachePath) && File.Exists(cached.CachePath))
+                {
+                    RunOnUiThread(() =>
+                    {
+                        if (renderToken != _pgsRenderToken) return;
+                        if (_subtitleImage == null) return;
+                        ApplyRenderedPgsCue(cached.CachePath, cached.PlaneWidth, cached.PlaneHeight, cached.ObjectX, cached.ObjectY, cached.Width, cached.Height);
+                    });
+                    return;
+                }
+
+                var frame = await Task.Run(() => ParsePgsDisplaySet(_externalSubtitlePath, cue.FileOffset));
+                if (frame == null || frame.Width <= 0 || frame.Height <= 0 || frame.BgraPixels == null || frame.BgraPixels.Length == 0)
+                {
+                    RunOnUiThread(() =>
+                    {
+                        if (renderToken != _pgsRenderToken) return;
+                        _subtitleImage?.Hide();
+                    });
+                    return;
+                }
+
+                string cachePath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"pgs_cache_{renderToken}_{Math.Max(0, cueIndex)}.bmp");
+                await Task.Run(() => WritePgsBitmap(cachePath, frame));
+
+                RunOnUiThread(() =>
+                {
+                    if (renderToken != _pgsRenderToken) return;
+                    if (_subtitleImage == null) return;
+                    ApplyRenderedPgsCue(cachePath, frame.PlaneWidth, frame.PlaneHeight, frame.ObjectX, frame.ObjectY, frame.Width, frame.Height);
+
+                    try
+                    {
+                        if (!string.IsNullOrWhiteSpace(_lastPgsCachePath) && _lastPgsCachePath != cachePath && File.Exists(_lastPgsCachePath))
+                            File.Delete(_lastPgsCachePath);
+                    }
+                    catch { }
+                    _lastPgsCachePath = cachePath;
+
+                    if (cueIndex >= 0)
+                    {
+                        _pgsCueCache[cueIndex] = new PgsCachedCue
+                        {
+                            CachePath = cachePath,
+                            PlaneWidth = frame.PlaneWidth,
+                            PlaneHeight = frame.PlaneHeight,
+                            ObjectX = frame.ObjectX,
+                            ObjectY = frame.ObjectY,
+                            Width = frame.Width,
+                            Height = frame.Height
+                        };
+                    }
+                });
+            }
+            catch
+            {
+                RunOnUiThread(() =>
+                {
+                    if (renderToken != _pgsRenderToken) return;
+                    _subtitleImage?.Hide();
+                });
+            }
+        }
+
+        private void ApplyRenderedPgsCue(string cachePath, int planeW, int planeH, int objectX, int objectY, int width, int height)
+        {
+            if (_subtitleImage == null) return;
+
+            int screenW = Window.Default.Size.Width;
+            int screenH = Window.Default.Size.Height;
+            int pW = planeW > 0 ? planeW : screenW;
+            int pH = planeH > 0 ? planeH : screenH;
+
+            float sx = (float)screenW / Math.Max(1, pW);
+            float sy = (float)screenH / Math.Max(1, pH);
+
+            int drawW = Math.Max(1, (int)Math.Round(width * sx));
+            int drawH = Math.Max(1, (int)Math.Round(height * sy));
+            int drawX = (int)Math.Round(objectX * sx);
+            int drawY = (int)Math.Round(objectY * sy);
+
+            drawX = Math.Clamp(drawX, 0, Math.Max(0, screenW - drawW));
+            drawY = Math.Clamp(drawY, 0, Math.Max(0, screenH - drawH));
+
+            _subtitleImage.WidthSpecification = drawW;
+            _subtitleImage.HeightSpecification = drawH;
+            _subtitleImage.PositionX = drawX;
+            _subtitleImage.PositionY = drawY;
+            _subtitleImage.ResourceUrl = cachePath;
+            _subtitleImage.Show();
+        }
+
+        private static PgsRenderFrame ParsePgsDisplaySet(string path, long cueOffset)
+        {
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read);
+            using var br = new BinaryReader(fs);
+
+            if (cueOffset < 0 || cueOffset >= fs.Length - 13)
+                return null;
+
+            int planeW = 0;
+            int planeH = 0;
+            byte[] palette = null;
+            var compObjects = new List<PgsCompositionObject>();
+            var windows = new Dictionary<int, PgsWindow>();
+            var objectMap = new Dictionary<int, PgsObjectData>();
+
+            // PGS epochs can carry palette/objects across display sets.
+            LoadPgsEpochStateUpToOffset(br, fs, cueOffset, objectMap, ref palette);
+
+            fs.Seek(cueOffset, SeekOrigin.Begin);
+            while (fs.Position <= fs.Length - 13)
+            {
+                long segStart = fs.Position;
+                if (br.ReadByte() != 0x50 || br.ReadByte() != 0x47)
+                    break;
+
+                fs.Seek(8, SeekOrigin.Current);
+                byte type = br.ReadByte();
+                ushort size = (ushort)((br.ReadByte() << 8) | br.ReadByte());
+                long payloadEnd = fs.Position + size;
+                if (payloadEnd > fs.Length)
+                    break;
+
+                if (type == 0x16 && size >= 11)
+                {
+                    planeW = (br.ReadByte() << 8) | br.ReadByte();
+                    planeH = (br.ReadByte() << 8) | br.ReadByte();
+                    br.ReadByte(); // frame rate
+                    fs.Seek(2, SeekOrigin.Current); // composition number
+                    int state = br.ReadByte() >> 6;
+                    br.ReadByte(); // palette update flag
+                    br.ReadByte(); // palette id
+                    byte objectCount = br.ReadByte();
+                    compObjects.Clear();
+                    windows.Clear();
+
+                    if (state != 0)
+                    {
+                        objectMap.Clear();
+                        palette = null;
+                    }
+
+                    for (int i = 0; i < objectCount && fs.Position + 8 <= payloadEnd; i++)
+                    {
+                        int objectId = (br.ReadByte() << 8) | br.ReadByte();
+                        int windowId = br.ReadByte();
+                        byte compositionFlag = br.ReadByte();
+                        int objX = (br.ReadByte() << 8) | br.ReadByte();
+                        int objY = (br.ReadByte() << 8) | br.ReadByte();
+
+                        bool hasCrop = (compositionFlag & 0x80) != 0;
+                        int cropX = 0, cropY = 0, cropW = 0, cropH = 0;
+                        if (hasCrop && fs.Position + 8 <= payloadEnd)
+                        {
+                            cropX = (br.ReadByte() << 8) | br.ReadByte();
+                            cropY = (br.ReadByte() << 8) | br.ReadByte();
+                            cropW = (br.ReadByte() << 8) | br.ReadByte();
+                            cropH = (br.ReadByte() << 8) | br.ReadByte();
+                        }
+
+                        compObjects.Add(new PgsCompositionObject
+                        {
+                            ObjectId = objectId,
+                            WindowId = windowId,
+                            X = objX,
+                            Y = objY,
+                            HasCrop = hasCrop,
+                            CropX = cropX,
+                            CropY = cropY,
+                            CropWidth = cropW,
+                            CropHeight = cropH
+                        });
+                    }
+                }
+                else if (type == 0x17)
+                {
+                    ParsePgsWindowSegment(br, fs, payloadEnd, windows);
+                }
+                else if (type == 0x14)
+                {
+                    ParsePgsPaletteSegment(br, fs, payloadEnd, ref palette);
+                }
+                else if (type == 0x15)
+                {
+                    ParsePgsObjectSegment(br, fs, payloadEnd, objectMap);
+                }
+                else if (type == 0x80)
+                {
+                    if (segStart >= cueOffset && palette != null && compObjects.Count > 0)
+                        break;
+                }
+
+                fs.Seek(payloadEnd, SeekOrigin.Begin);
+            }
+
+            if (palette == null || compObjects.Count == 0)
+                return null;
+
+            int canvasW = planeW > 0 ? planeW : 1920;
+            int canvasH = planeH > 0 ? planeH : 1080;
+            var canvas = new byte[canvasW * canvasH * 4];
+
+            foreach (var comp in compObjects)
+            {
+                if (!objectMap.TryGetValue(comp.ObjectId, out var obj) || obj.Width <= 0 || obj.Height <= 0 || obj.Data.Count == 0)
+                    continue;
+
+                byte[] rle = obj.Data.ToArray();
+                if (obj.ExpectedPayloadBytes > 0 && rle.Length > obj.ExpectedPayloadBytes)
+                    rle = rle.Take(obj.ExpectedPayloadBytes).ToArray();
+
+                var decoded = DecodePgsRleToBgra(rle, obj.Width, obj.Height, palette);
+                RemoveLikelyBlackBackdrop(decoded, obj.Width, obj.Height);
+                int srcX = 0;
+                int srcY = 0;
+                int drawW = obj.Width;
+                int drawH = obj.Height;
+                int dstX = comp.X;
+                int dstY = comp.Y;
+
+                if (comp.HasCrop && comp.CropWidth > 0 && comp.CropHeight > 0)
+                {
+                    srcX = Math.Clamp(comp.CropX, 0, Math.Max(0, obj.Width - 1));
+                    srcY = Math.Clamp(comp.CropY, 0, Math.Max(0, obj.Height - 1));
+                    drawW = Math.Min(comp.CropWidth, obj.Width - srcX);
+                    drawH = Math.Min(comp.CropHeight, obj.Height - srcY);
+                }
+
+                if (drawW <= 0 || drawH <= 0)
+                    continue;
+
+                if (windows.TryGetValue(comp.WindowId, out var win))
+                {
+                    int leftClip = Math.Max(0, win.X - dstX);
+                    int topClip = Math.Max(0, win.Y - dstY);
+                    int rightClip = Math.Max(0, (dstX + drawW) - (win.X + win.Width));
+                    int bottomClip = Math.Max(0, (dstY + drawH) - (win.Y + win.Height));
+
+                    srcX += leftClip;
+                    srcY += topClip;
+                    dstX += leftClip;
+                    dstY += topClip;
+                    drawW -= (leftClip + rightClip);
+                    drawH -= (topClip + bottomClip);
+                }
+
+                if (drawW <= 0 || drawH <= 0)
+                    continue;
+
+                BlitPremultipliedBgraRegion(
+                    canvas, canvasW, canvasH,
+                    decoded, obj.Width, obj.Height,
+                    srcX, srcY, drawW, drawH,
+                    dstX, dstY
+                );
+            }
+
+            if (!TryFindOpaqueBounds(canvas, canvasW, canvasH, out int minX, out int minY, out int maxX, out int maxY))
+                return null;
+
+            int outW = maxX - minX + 1;
+            int outH = maxY - minY + 1;
+            var cropped = new byte[outW * outH * 4];
+            for (int y = 0; y < outH; y++)
+            {
+                int src = ((minY + y) * canvasW + minX) * 4;
+                int dst = y * outW * 4;
+                Buffer.BlockCopy(canvas, src, cropped, dst, outW * 4);
+            }
+
+            return new PgsRenderFrame
+            {
+                PlaneWidth = canvasW,
+                PlaneHeight = canvasH,
+                ObjectX = minX,
+                ObjectY = minY,
+                Width = outW,
+                Height = outH,
+                BgraPixels = cropped
+            };
+        }
+
+        private static void LoadPgsEpochStateUpToOffset(BinaryReader br, FileStream fs, long offset, Dictionary<int, PgsObjectData> objectMap, ref byte[] palette)
+        {
+            fs.Seek(0, SeekOrigin.Begin);
+            while (fs.Position <= fs.Length - 13 && fs.Position < offset)
+            {
+                long segStart = fs.Position;
+                if (br.ReadByte() != 0x50 || br.ReadByte() != 0x47)
+                {
+                    fs.Seek(segStart + 1, SeekOrigin.Begin);
+                    continue;
+                }
+
+                fs.Seek(8, SeekOrigin.Current);
+                byte type = br.ReadByte();
+                ushort size = (ushort)((br.ReadByte() << 8) | br.ReadByte());
+                long payloadEnd = fs.Position + size;
+                if (payloadEnd > fs.Length)
+                    break;
+
+                if (type == 0x16 && size >= 7)
+                {
+                    fs.Seek(2 + 2 + 1 + 2, SeekOrigin.Current); // width/height/frameRate/compositionNumber
+                    int state = br.ReadByte() >> 6;
+                    if (state != 0)
+                    {
+                        objectMap.Clear();
+                        palette = null;
+                    }
+                }
+                else if (type == 0x14)
+                {
+                    ParsePgsPaletteSegment(br, fs, payloadEnd, ref palette);
+                }
+                else if (type == 0x15)
+                {
+                    ParsePgsObjectSegment(br, fs, payloadEnd, objectMap);
+                }
+
+                fs.Seek(payloadEnd, SeekOrigin.Begin);
+            }
+        }
+
+        private static void ParsePgsWindowSegment(BinaryReader br, FileStream fs, long payloadEnd, Dictionary<int, PgsWindow> windows)
+        {
+            if (fs.Position >= payloadEnd) return;
+            int count = br.ReadByte();
+            windows.Clear();
+            for (int i = 0; i < count && fs.Position + 9 <= payloadEnd; i++)
+            {
+                int windowId = br.ReadByte();
+                int x = (br.ReadByte() << 8) | br.ReadByte();
+                int y = (br.ReadByte() << 8) | br.ReadByte();
+                int w = (br.ReadByte() << 8) | br.ReadByte();
+                int h = (br.ReadByte() << 8) | br.ReadByte();
+                windows[windowId] = new PgsWindow { X = x, Y = y, Width = w, Height = h };
+            }
+        }
+
+        private static void ParsePgsPaletteSegment(BinaryReader br, FileStream fs, long payloadEnd, ref byte[] palette)
+        {
+            if (palette == null)
+                palette = new byte[256 * 4];
+
+            if (fs.Position + 2 > payloadEnd) return;
+            fs.Seek(2, SeekOrigin.Current); // palette id + version
+
+            while (fs.Position + 5 <= payloadEnd)
+            {
+                int idx = br.ReadByte();
+                int y = br.ReadByte();
+                int cr = br.ReadByte();
+                int cb = br.ReadByte();
+                int a = br.ReadByte();
+
+                int r = (int)(y + 1.402 * (cr - 128));
+                int g = (int)(y - 0.34414 * (cb - 128) - 0.71414 * (cr - 128));
+                int b = (int)(y + 1.772 * (cb - 128));
+
+                palette[idx * 4 + 0] = (byte)Math.Clamp(b, 0, 255);
+                palette[idx * 4 + 1] = (byte)Math.Clamp(g, 0, 255);
+                palette[idx * 4 + 2] = (byte)Math.Clamp(r, 0, 255);
+                palette[idx * 4 + 3] = (byte)a;
+            }
+
+            // Transparent index in PGS is conventionally 0.
+            palette[3] = 0;
+        }
+
+        private static void ParsePgsObjectSegment(BinaryReader br, FileStream fs, long payloadEnd, Dictionary<int, PgsObjectData> objectMap)
+        {
+            if (fs.Position + 4 > payloadEnd) return;
+
+            int objectId = (br.ReadByte() << 8) | br.ReadByte();
+            br.ReadByte(); // object version
+            byte sequenceFlag = br.ReadByte();
+
+            if (!objectMap.TryGetValue(objectId, out var obj))
+            {
+                obj = new PgsObjectData();
+                objectMap[objectId] = obj;
+            }
+
+            if ((sequenceFlag & 0x80) != 0)
+            {
+                if (fs.Position + 7 > payloadEnd) return;
+                obj.ExpectedPayloadBytes = (br.ReadByte() << 16) | (br.ReadByte() << 8) | br.ReadByte();
+                obj.Width = (br.ReadByte() << 8) | br.ReadByte();
+                obj.Height = (br.ReadByte() << 8) | br.ReadByte();
+                obj.Data.Clear();
+                obj.IsComplete = false;
+            }
+
+            int remaining = (int)(payloadEnd - fs.Position);
+            if (remaining > 0)
+                obj.Data.AddRange(br.ReadBytes(remaining));
+
+            if ((sequenceFlag & 0x40) != 0)
+                obj.IsComplete = true;
+        }
+
+        private static byte[] DecodePgsRleToBgra(byte[] rle, int width, int height, byte[] palette)
+        {
+            var output = new byte[width * height * 4];
+            int x = 0;
+            int y = 0;
+            int idx = 0;
+
+            while (idx < rle.Length && y < height)
+            {
+                byte code = rle[idx++];
+                if (code != 0)
+                {
+                    WriteRun(output, width, height, ref x, ref y, 1, code, palette);
+                    continue;
+                }
+
+                if (idx >= rle.Length) break;
+                byte flags = rle[idx++];
+                if (flags == 0)
+                {
+                    x = 0;
+                    y++;
+                    continue;
+                }
+
+                int runLength;
+                byte colorIndex = 0;
+
+                if ((flags & 0xC0) == 0x00)
+                {
+                    runLength = flags & 0x3F;
+                }
+                else if ((flags & 0xC0) == 0x40)
+                {
+                    if (idx >= rle.Length) break;
+                    runLength = ((flags & 0x3F) << 8) | rle[idx++];
+                }
+                else if ((flags & 0xC0) == 0x80)
+                {
+                    if (idx >= rle.Length) break;
+                    runLength = flags & 0x3F;
+                    colorIndex = rle[idx++];
+                }
+                else
+                {
+                    if (idx + 1 >= rle.Length) break;
+                    runLength = ((flags & 0x3F) << 8) | rle[idx++];
+                    colorIndex = rle[idx++];
+                }
+
+                if (runLength <= 0) continue;
+                WriteRun(output, width, height, ref x, ref y, runLength, colorIndex, palette);
+            }
+
+            return output;
+        }
+
+        private static void RemoveLikelyBlackBackdrop(byte[] pixels, int width, int height)
+        {
+            if (pixels == null || pixels.Length < 4) return;
+
+            int opaqueCount = 0;
+            int opaqueBlackCount = 0;
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                byte b = pixels[i + 0];
+                byte g = pixels[i + 1];
+                byte r = pixels[i + 2];
+                byte a = pixels[i + 3];
+                if (a < 180) continue;
+                opaqueCount++;
+                if (r < 26 && g < 26 && b < 26) opaqueBlackCount++;
+            }
+
+            // Only run stripping when the object is clearly dominated by black backing.
+            if (opaqueCount == 0 || opaqueBlackCount * 100 < opaqueCount * 45)
+                return;
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int i = y * width + x;
+                    int p = i * 4;
+                    byte b = pixels[p + 0];
+                    byte g = pixels[p + 1];
+                    byte r = pixels[p + 2];
+                    byte a = pixels[p + 3];
+
+                    if (a < 180) continue;
+
+                    int max = Math.Max(r, Math.Max(g, b));
+                    int min = Math.Min(r, Math.Min(g, b));
+                    int sat = max - min;
+                    int lum = (r * 77 + g * 150 + b * 29) >> 8;
+
+                    // Aggressively remove opaque neutral-dark backing boxes.
+                    if (lum < 72 && sat < 32)
+                        pixels[p + 3] = 0;
+                }
+            }
+        }
+
+        private static void WriteRun(byte[] output, int width, int height, ref int x, ref int y, int runLength, byte colorIndex, byte[] palette)
+        {
+            int p = colorIndex * 4;
+            byte b = palette[p + 0];
+            byte g = palette[p + 1];
+            byte r = palette[p + 2];
+            byte a = palette[p + 3];
+
+            for (int i = 0; i < runLength && y < height; i++)
+            {
+                if (x >= width)
+                {
+                    x = 0;
+                    y++;
+                    if (y >= height) break;
+                }
+
+                int dst = (y * width + x) * 4;
+                output[dst + 0] = b;
+                output[dst + 1] = g;
+                output[dst + 2] = r;
+                output[dst + 3] = a;
+                x++;
+            }
+        }
+
+        private static void BlitPremultipliedBgra(byte[] dst, int dstW, int dstH, byte[] src, int srcW, int srcH, int dstX, int dstY)
+        {
+            BlitPremultipliedBgraRegion(dst, dstW, dstH, src, srcW, srcH, 0, 0, srcW, srcH, dstX, dstY);
+        }
+
+        private static void BlitPremultipliedBgraRegion(
+            byte[] dst, int dstW, int dstH,
+            byte[] src, int srcW, int srcH,
+            int srcX, int srcY, int copyW, int copyH,
+            int dstX, int dstY)
+        {
+            if (copyW <= 0 || copyH <= 0) return;
+            srcX = Math.Clamp(srcX, 0, Math.Max(0, srcW - 1));
+            srcY = Math.Clamp(srcY, 0, Math.Max(0, srcH - 1));
+            copyW = Math.Min(copyW, srcW - srcX);
+            copyH = Math.Min(copyH, srcH - srcY);
+
+            if (copyW <= 0 || copyH <= 0) return;
+
+            for (int y = 0; y < srcH; y++)
+            {
+                if (y >= copyH) break;
+                int sy = srcY + y;
+                int ty = dstY + y;
+                if (ty < 0 || ty >= dstH) continue;
+                for (int x = 0; x < copyW; x++)
+                {
+                    int sx = srcX + x;
+                    int tx = dstX + x;
+                    if (tx < 0 || tx >= dstW) continue;
+
+                    int s = (sy * srcW + sx) * 4;
+                    byte sa = src[s + 3];
+                    if (sa == 0) continue;
+
+                    int d = (ty * dstW + tx) * 4;
+                    if (sa == 255)
+                    {
+                        dst[d + 0] = src[s + 0];
+                        dst[d + 1] = src[s + 1];
+                        dst[d + 2] = src[s + 2];
+                        dst[d + 3] = 255;
+                        continue;
+                    }
+
+                    int invA = 255 - sa;
+                    dst[d + 0] = (byte)((src[s + 0] * sa + dst[d + 0] * invA) / 255);
+                    dst[d + 1] = (byte)((src[s + 1] * sa + dst[d + 1] * invA) / 255);
+                    dst[d + 2] = (byte)((src[s + 2] * sa + dst[d + 2] * invA) / 255);
+                    dst[d + 3] = (byte)Math.Clamp(sa + (dst[d + 3] * invA) / 255, 0, 255);
+                }
+            }
+        }
+
+        private static bool TryFindOpaqueBounds(byte[] pixels, int width, int height, out int minX, out int minY, out int maxX, out int maxY)
+        {
+            minX = width;
+            minY = height;
+            maxX = -1;
+            maxY = -1;
+
+            for (int y = 0; y < height; y++)
+            {
+                int row = y * width * 4;
+                for (int x = 0; x < width; x++)
+                {
+                    byte a = pixels[row + x * 4 + 3];
+                    if (a == 0) continue;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+
+            return maxX >= minX && maxY >= minY;
+        }
+
+        private static void WritePgsBitmap(string cachePath, PgsRenderFrame frame)
+        {
+            using var bmp = new FileStream(cachePath, FileMode.Create, FileAccess.Write);
+            using var bw = new BinaryWriter(bmp);
+
+            int dataSize = frame.Width * frame.Height * 4;
+            int fileSize = 54 + dataSize;
+
+            bw.Write((byte)'B');
+            bw.Write((byte)'M');
+            bw.Write(fileSize);
+            bw.Write(0);
+            bw.Write(54);
+            bw.Write(40);
+            bw.Write(frame.Width);
+            bw.Write(-frame.Height); // top-down
+            bw.Write((short)1);
+            bw.Write((short)32);
+            bw.Write(0);
+            bw.Write(dataSize);
+            bw.Write(0);
+            bw.Write(0);
+            bw.Write(0);
+            bw.Write(0);
+
+            bw.Write(frame.BgraPixels);
         }
 
         private void TryDisableNativeSubtitleTrack()
@@ -1034,6 +1770,7 @@ namespace JellyfinTizen.Screens
             CreateAudioOverlay();
             CreateSubtitleOverlay();
             CreateSubtitleText();
+            CreateSubtitleViews();
             
             _osdTimer = new Timer(5000);
             _osdTimer.Tick += OnOsdTimerTick;
@@ -2041,40 +2778,27 @@ namespace JellyfinTizen.Screens
 
         private void CreateSubtitleText()
         {
-            _subtitleText = new TextLabel("")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word,
-                EnableMarkup = false
-            };
-            ApplySubtitleTextStyle();
+            _subtitleText = new TextLabel("") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 200, PointSize = 46, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, BackgroundColor = Color.Transparent, PositionY = Window.Default.Size.Height - 250, MultiLine = true, LineWrapMode = LineWrapMode.Word, Padding = new Extents(150, 150, 0, 0), EnableMarkup = false };
             _subtitleText.Hide();
             Add(_subtitleText);
         }
 
-        private void ApplySubtitleTextStyle()
+        private void CreateSubtitleViews()
         {
-            if (_subtitleText == null)
-                return;
-
-            // Keep styling identical across embedded and sidecar paths.
-            _subtitleText.TextColor = Color.White;
-            _subtitleText.HorizontalAlignment = HorizontalAlignment.Center;
-            _subtitleText.VerticalAlignment = VerticalAlignment.Center;
-            _subtitleText.BackgroundColor = Color.Transparent;
-            _subtitleText.PointSize = 48;
-            _subtitleText.HeightSpecification = 180;
-            _subtitleText.Padding = new Extents(180, 180, 0, 0);
-            _subtitleTextBaseY = Window.Default.Size.Height - 270;
-            try
+            _subtitleImage = new ImageView
             {
-                _subtitleText.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Normal });
-            }
-            catch { }
-
-            _subtitleTextOsdY = _subtitleTextBaseY - SubtitleOsdLiftPx;
-            _subtitleText.PositionY = _osdVisible ? _subtitleTextOsdY : _subtitleTextBaseY;
+                WidthSpecification = 1,
+                HeightSpecification = 1,
+                PositionX = 0,
+                PositionY = 0,
+                BackgroundColor = Color.Transparent,
+                PreMultipliedAlpha = false,
+                FittingMode = FittingModeType.Fill,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+            _subtitleImage.Hide();
+            Add(_subtitleImage);
+            _subtitleImage.LowerToBottom();
         }
 
         private void ShowSubtitleOverlay()
@@ -2257,14 +2981,20 @@ namespace JellyfinTizen.Screens
             {
                 _subtitleEnabled = false;
                 _useParsedSubtitleRenderer = false;
+                _isPgs = false;
                 _subtitleCues.Clear();
+                _pgsCues.Clear();
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
                 _activeSubtitleCueIndex = -1;
                 StopSubtitleRenderTimer();
-                _subtitleHideTimer?.Stop();
                 try { _player?.ClearSubtitle(); } catch { }
                 RunOnUiThread(() =>
                 {
+                    _subtitleHideTimer?.Stop();
                     _subtitleText?.Hide();
+                    _subtitleImage?.Hide();
                 });
                 return;
             }
@@ -2278,28 +3008,41 @@ namespace JellyfinTizen.Screens
             bool sidecarSet = false;
             if (!_burnIn)
             {
-                bool useNativeEmbedded = _playMethod == "DirectPlay" && !subStream.IsExternal;
-                if (useNativeEmbedded)
-                {
-                    if (TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
-                    {
-                        ApplySubtitleOffset();
-                        return;
-                    }
-                    sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream);
-                }
-                else
-                {
-                    sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream);
-                }
-
+                sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, jellyfinStreamIndex, subStream.Codec);
                 if (sidecarSet)
                 {
                     ApplySubtitleOffset();
                     return;
                 }
             }
-        }
+
+            // Fallback: native internal switch if sidecar extraction is unavailable.
+            bool tryNative = _playMethod == "DirectPlay" && !subStream.IsExternal;
+            if (tryNative)
+            {
+                try
+                {
+                    var embeddedSubs = _currentMediaSource.MediaStreams.Where(s => s.Type == "Subtitle" && !s.IsExternal).OrderBy(s => s.Index).ToList();
+                    int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
+                    if (tizenIndex != -1 && tizenIndex < _player.SubtitleTrackInfo.GetCount())
+                    {_useParsedSubtitleRenderer = false;
+                        _isPgs = false;
+                        _subtitleCues.Clear();
+                        _pgsCues.Clear();
+                        ClearPgsCueCache();
+                        _pgsRenderToken = 0;
+                        _pgsHideGraceUntilMs = 0;
+                        _activeSubtitleCueIndex = -1;
+                        StopSubtitleRenderTimer();
+                        _subtitleText?.Hide();
+                        _subtitleImage?.Hide();
+                        _player.SubtitleTrackInfo.Selected = tizenIndex;
+                        ApplySubtitleOffset();
+                        return;
+                    }
+                }
+                catch {}
+            }}
 
         private void CreateAudioOverlay()
         {
@@ -2474,24 +3217,21 @@ namespace JellyfinTizen.Screens
 
         private void OnSubtitleUpdated(object sender, SubtitleUpdatedEventArgs e)
         {
-            if (_useParsedSubtitleRenderer)
-            {
-                return;
-            }
+            if (_useParsedSubtitleRenderer) return;
 
             RunOnUiThread(() =>
             {
                 string text = e.Text;
-                string normalizedText = NormalizeParsedCueText(text);
                 _subtitleHideTimer?.Stop();
+                _subtitleImage?.Hide();
 
-                if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(normalizedText))
+                if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(text))
                 {
                     _subtitleText?.Hide();
                     return;
                 }
 
-                _subtitleText.Text = normalizedText;
+                _subtitleText.Text = text;
                 _subtitleText.Show();
 
                 uint hideDurationMs = (uint)Math.Clamp((long)e.Duration, 200L, uint.MaxValue);
@@ -2609,7 +3349,7 @@ namespace JellyfinTizen.Screens
                 {
                     UiAnimator.Replace(
                         ref _subtitleTextAnimation,
-                        UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)_subtitleTextOsdY, UiAnimator.ScrollDurationMs)
+                        UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)(Window.Default.Size.Height - 340), UiAnimator.ScrollDurationMs)
                     );
                 }
             }
@@ -2690,7 +3430,7 @@ namespace JellyfinTizen.Screens
             {
                 UiAnimator.Replace(
                     ref _subtitleTextAnimation,
-                    UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)_subtitleTextBaseY, UiAnimator.ScrollDurationMs)
+                    UiAnimator.AnimateTo(_subtitleText, "PositionY", (float)(Window.Default.Size.Height - 250), UiAnimator.ScrollDurationMs)
                 );
             }
 
@@ -2771,14 +3511,20 @@ namespace JellyfinTizen.Screens
                 try { _progressTimer?.Stop(); } catch { }
                 try { _osdTimer?.Stop(); } catch { }
                 try { _subtitleRenderTimer?.Stop(); } catch { }
-                try { _subtitleHideTimer?.Stop(); } catch { }
                 try { _player.PlaybackCompleted -= OnPlaybackCompleted; } catch { }
                 try { _player.ErrorOccurred -= OnPlayerErrorOccurred; } catch { }
                 try { _player.BufferingProgressChanged -= OnBufferingProgressChanged; } catch { }
                 _player.SubtitleUpdated -= OnSubtitleUpdated;
+                _subtitleHideTimer?.Stop();
                 _subtitleText?.Hide();
+                _subtitleImage?.Hide();
                 _useParsedSubtitleRenderer = false;
+                _isPgs = false;
                 _subtitleCues.Clear();
+                _pgsCues.Clear();
+                ClearPgsCueCache();
+                _pgsRenderToken = 0;
+                _pgsHideGraceUntilMs = 0;
                 _activeSubtitleCueIndex = -1;
                 try { _player.Stop(); } catch { }
                 try { _player.Unprepare(); } catch { }
@@ -3011,7 +3757,12 @@ namespace JellyfinTizen.Screens
             _currentTimeLabel.Text = "00:00"; _durationLabel.Text = "00:00";
             _overrideAudioIndex = null;
             _useParsedSubtitleRenderer = false;
+            _isPgs = false;
             _subtitleCues.Clear();
+            _pgsCues.Clear();
+            ClearPgsCueCache();
+            _pgsRenderToken = 0;
+            _pgsHideGraceUntilMs = 0;
             _activeSubtitleCueIndex = -1;
             StopSubtitleRenderTimer();
             ResetTrickplayState();
@@ -3040,4 +3791,3 @@ namespace JellyfinTizen.Screens
         }
     }
 }
-

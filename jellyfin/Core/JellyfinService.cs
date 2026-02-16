@@ -441,7 +441,6 @@ namespace JellyfinTizen.Core
                             Language = stream.TryGetProperty("Language", out var l) ? l.GetString() : "Unknown",
                             DisplayTitle = stream.TryGetProperty("DisplayTitle", out var d) ? d.GetString() : "Unknown",
                             Codec = stream.TryGetProperty("Codec", out var c) ? c.GetString() : null,
-                            DeliveryUrl = stream.TryGetProperty("DeliveryUrl", out var du) ? du.GetString() : null,
                             IsExternal = stream.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
                             Width = null,
                             Height = null,
@@ -563,8 +562,9 @@ namespace JellyfinTizen.Core
                                 Language = TryGetString(s, "Language"),
                                 DisplayTitle = TryGetString(s, "DisplayTitle"),
                                 Codec = TryGetString(s, "Codec"),
-                                DeliveryUrl = TryGetString(s, "DeliveryUrl"),
                                 IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
+                                DeliveryMethod = TryGetString(s, "DeliveryMethod"),
+                                DeliveryUrl = TryGetString(s, "DeliveryUrl"),
                                 Width = s.TryGetProperty("Width", out var widthProp) && widthProp.TryGetInt32(out var widthValue)
                                     ? widthValue
                                     : null,
