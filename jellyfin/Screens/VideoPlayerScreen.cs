@@ -277,16 +277,24 @@ namespace JellyfinTizen.Screens
                     string vidCodec = videoStream?.Codec?.ToLower() ?? "unknown";
                     bool isVideoNative = vidCodec.Contains("h264") || vidCodec.Contains("hevc") || 
                                          vidCodec.Contains("vp9") || vidCodec.Contains("av1");
-                    string container = (isVideoNative && !_burnIn) ? "mp4" : "ts";
+                    string container = isVideoNative ? "mp4" : "ts";
                     string audioPriority = "ac3,eac3,aac,mp3";
+                    string requestedVideoCodecs = _burnIn ? "h264" : "h264,hevc,vp9,av1";
+                    string requestedAudioCodecs = _burnIn ? "ac3,eac3,aac" : audioPriority;
+                    const int fallbackMaxStreamingBitrate = 120000000;
+                    const int fallbackAudioBitrate = 1411200;
+                    int fallbackVideoBitrate = Math.Max(1000000, fallbackMaxStreamingBitrate - fallbackAudioBitrate);
 
                     if (!hasTranscodeUrl)
                     {
                         streamUrl = $"{serverUrl}/Videos/{_movie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
-                        streamUrl += "&VideoCodec=h264,hevc,vp9,av1";
-                        streamUrl += $"&AudioCodec={audioPriority}"; 
+                        streamUrl += $"&VideoCodec={requestedVideoCodecs}";
+                        streamUrl += $"&AudioCodec={requestedAudioCodecs}";
                         streamUrl += $"&SegmentContainer={container}"; 
                         streamUrl += "&TranscodingMaxAudioChannels=6";
+                        streamUrl += $"&MaxStreamingBitrate={fallbackMaxStreamingBitrate}";
+                        streamUrl += $"&VideoBitrate={fallbackVideoBitrate}";
+                        streamUrl += $"&AudioBitrate={fallbackAudioBitrate}";
                         streamUrl += "&MinSegments=1";
                         streamUrl += "&BreakOnNonKeyFrames=True";
                     }
@@ -295,8 +303,8 @@ namespace JellyfinTizen.Screens
                         streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
                         if (_overrideAudioIndex.HasValue)
                         {
-                            if (!streamUrl.Contains("SegmentContainer=")) streamUrl += $"&SegmentContainer={container}";
-                            if (!streamUrl.Contains("AudioCodec=")) streamUrl += $"&AudioCodec={audioPriority}";
+                            streamUrl = UpsertQueryParam(streamUrl, "SegmentContainer", container);
+                            streamUrl = UpsertQueryParam(streamUrl, "AudioCodec", requestedAudioCodecs);
                         }
                     }
 
@@ -309,12 +317,12 @@ namespace JellyfinTizen.Screens
                     if (!streamUrl.Contains("api_key=") && !streamUrl.Contains("Token=")) streamUrl = AppendParam(streamUrl, $"api_key={apiKey}");
                     if (!streamUrl.Contains("PlaySessionId=") && !string.IsNullOrEmpty(_playSessionId)) streamUrl = AppendParam(streamUrl, $"PlaySessionId={_playSessionId}");
                     if (_overrideAudioIndex.HasValue)
-                        streamUrl = AppendParam(streamUrl, $"AudioStreamIndex={_overrideAudioIndex.Value}");
+                        streamUrl = UpsertQueryParam(streamUrl, "AudioStreamIndex", _overrideAudioIndex.Value.ToString());
 
                     if (_initialSubtitleIndex.HasValue)
                     {
-                        if (!streamUrl.Contains("SubtitleStreamIndex=")) streamUrl = AppendParam(streamUrl, $"SubtitleStreamIndex={_initialSubtitleIndex}");
-                        if (_burnIn && !streamUrl.Contains("SubtitleMethod=")) streamUrl = AppendParam(streamUrl, "SubtitleMethod=Encode");
+                        streamUrl = UpsertQueryParam(streamUrl, "SubtitleStreamIndex", _initialSubtitleIndex.Value.ToString());
+                        if (_burnIn) streamUrl = UpsertQueryParam(streamUrl, "SubtitleMethod", "Encode");
                     }
 
                     streamUrl = streamUrl.Replace("?&", "?").Replace("&&", "&").Replace(" ", "%20").Replace("\n", "").Replace("\r", "");
@@ -1065,6 +1073,42 @@ namespace JellyfinTizen.Screens
             _osdTimer.Tick += OnOsdTimerTick;
             _progressTimer = new Timer(500);
             _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
+        }
+
+        private static string UpsertQueryParam(string url, string key, string value)
+        {
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+                return url;
+
+            string baseUrl = url;
+            string query = string.Empty;
+            int queryStart = url.IndexOf('?');
+            if (queryStart >= 0)
+            {
+                baseUrl = url.Substring(0, queryStart);
+                if (queryStart < url.Length - 1)
+                    query = url.Substring(queryStart + 1);
+            }
+
+            var kept = new List<string>();
+            if (!string.IsNullOrWhiteSpace(query))
+            {
+                foreach (var part in query.Split('&'))
+                {
+                    if (string.IsNullOrWhiteSpace(part))
+                        continue;
+
+                    int eq = part.IndexOf('=');
+                    string k = eq >= 0 ? part.Substring(0, eq) : part;
+                    if (k.Equals(key, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    kept.Add(part);
+                }
+            }
+
+            kept.Add($"{key}={value}");
+            return $"{baseUrl}?{string.Join("&", kept)}";
         }
 
         private bool OnOsdTimerTick(object sender, Timer.TickEventArgs e)
@@ -2160,9 +2204,12 @@ namespace JellyfinTizen.Screens
                 _subtitleScrollView.Add(_subtitleListContainer);
                 _subtitleOverlay.Add(_subtitleScrollView);
                 
-                // --- OFF OPTION ---
-                var offRow = CreateSubtitleRow("OFF", "OFF_INDEX");
-                _subtitleListContainer.Add(offRow);
+                if (!_burnIn)
+                {
+                    // OFF option is only meaningful when subtitles are sidecar/native, not burn-in.
+                    var offRow = CreateSubtitleRow("OFF", "OFF_INDEX");
+                    _subtitleListContainer.Add(offRow);
+                }
 
                 // --- POPULATE TRACKS ---
                 if (subtitleStreams != null)
@@ -2294,6 +2341,7 @@ namespace JellyfinTizen.Screens
             if (selectedName == "OFF_INDEX")
             {
                 _subtitleEnabled = false;
+                _initialSubtitleIndex = null;
                 _useParsedSubtitleRenderer = false;
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
@@ -2304,6 +2352,14 @@ namespace JellyfinTizen.Screens
                 {
                     _subtitleText?.Hide();
                 });
+
+                if (_burnIn)
+                {
+                    long currentPos = GetPlayPositionMs();
+                    StopPlayback();
+                    _startPositionMs = (int)currentPos;
+                    StartPlayback();
+                }
                 return;
             }
 
@@ -2313,7 +2369,17 @@ namespace JellyfinTizen.Screens
             var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             if (subStream == null) return;
 
+            _initialSubtitleIndex = jellyfinStreamIndex;
             bool sidecarSet = false;
+            if (_burnIn)
+            {
+                long currentPos = GetPlayPositionMs();
+                StopPlayback();
+                _startPositionMs = (int)currentPos;
+                StartPlayback();
+                return;
+            }
+
             if (!_burnIn)
             {
                 bool useNativeEmbedded = _playMethod == "DirectPlay" && !subStream.IsExternal;
@@ -2774,6 +2840,10 @@ namespace JellyfinTizen.Screens
         private void StopPlayback()
         {
             _suppressPlaybackCompletedNavigation = true;
+            _osdVisible = false;
+            _audioOverlayVisible = false;
+            _subtitleOverlayVisible = false;
+            _subtitleOffsetAdjustMode = false;
             UiAnimator.StopAndDispose(ref _osdAnimation);
             UiAnimator.StopAndDispose(ref _topOsdAnimation);
             UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
@@ -2791,6 +2861,11 @@ namespace JellyfinTizen.Screens
             _seekFeedbackContainer?.Hide();
             HideTrickplayPreview();
             _playPauseFeedbackContainer?.Hide();
+            _audioOverlay?.Hide();
+            _subtitleOverlay?.Hide();
+            _subtitleOffsetTrackContainer?.Hide();
+            _osd?.Hide();
+            _topOsd?.Hide();
             ResetTrickplayState();
             _trickplayHttpClient?.Dispose();
             _trickplayHttpClient = null;

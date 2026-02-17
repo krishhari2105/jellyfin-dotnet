@@ -9,7 +9,7 @@ namespace JellyfinTizen.Core
         {
             var profile = new DeviceProfile
             {
-                Name = "SamsungTV",
+                Name = "Samsung TV",
                 
                 MaxStreamingBitrate = 120000000, // 120 Mbps limit
                
@@ -109,6 +109,8 @@ namespace JellyfinTizen.Core
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "vtt", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "ass", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "ssa", Method = "Encode" });
+                profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgs", Method = "Encode" });
+                profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgssub", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "mov_text", Method = "Encode" });
             }
             else
@@ -118,12 +120,13 @@ namespace JellyfinTizen.Core
                 {
                     new SubtitleProfile { Format = "vtt", Method = "External" },
                     new SubtitleProfile { Format = "srt", Method = "External" },
+                    new SubtitleProfile { Format = "subrip", Method = "External" },
                     new SubtitleProfile { Format = "ass", Method = "External" },
                     new SubtitleProfile { Format = "ssa", Method = "External" },
-                    new SubtitleProfile { Format = "mov_text", Method = "External" },
                     // Keep Embed as secondary option for DirectPlay compatibility
                     new SubtitleProfile { Format = "vtt", Method = "Embed" },
                     new SubtitleProfile { Format = "srt", Method = "Embed" },
+                    new SubtitleProfile { Format = "subrip", Method = "Embed" },
                     new SubtitleProfile { Format = "ass", Method = "Embed" },
                     new SubtitleProfile { Format = "ssa", Method = "Embed" },                 
                     new SubtitleProfile { Format = "mov_text", Method = "Embed" }
@@ -137,7 +140,7 @@ namespace JellyfinTizen.Core
                 foreach (var tp in profile.TranscodingProfiles)
                 {
                     tp.VideoCodec = "h264"; // Ensure only h264 for burn-in
-                    tp.Container = "ts"; // TS container is most compatible with hls + burn-in
+                    tp.Container = "mp4"; // TS container is most compatible with hls + burn-in
                     tp.Protocol = "hls";
                 }
             }

@@ -509,14 +509,23 @@ namespace JellyfinTizen.Core
 
         public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(string itemId, int? subtitleStreamIndex = null, bool forceBurnIn = false)
         {
+            bool hasExplicitSubtitleSelection = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value >= 0;
+            bool forceServerTranscode = forceBurnIn && hasExplicitSubtitleSelection;
+            int? effectiveSubtitleStreamIndex = forceBurnIn && !hasExplicitSubtitleSelection
+                ? -1
+                : subtitleStreamIndex;
+
             // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
             var body = new 
             { 
                 UserId = UserId,
                 AutoOpenLiveStream = true,
                 DeviceProfile = ProfileBuilder.BuildTizenProfile(forceBurnIn),
+                EnableDirectPlay = !forceServerTranscode,
+                EnableDirectStream = !forceServerTranscode,
+                EnableTranscoding = true,
                 // Always include subtitle stream index, even if null (will be handled properly by server)
-                SubtitleStreamIndex = subtitleStreamIndex
+                SubtitleStreamIndex = effectiveSubtitleStreamIndex
             };
 
             var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
