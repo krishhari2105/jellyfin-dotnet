@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Tizen.Multimedia;
 using Tizen.NUI;
@@ -33,6 +33,8 @@ namespace JellyfinTizen.Screens
         private View _progressFill;
         private TextLabel _currentTimeLabel;
         private TextLabel _durationLabel;
+        private TextLabel _clockLabel;
+        private TextLabel _endsAtLabel;
         private View _previewFill;
         private Timer _progressTimer;
         private View _audioOverlay;
@@ -955,6 +957,18 @@ namespace JellyfinTizen.Screens
             _topOsd.Hide();
 
             _topOsd.Add(CreateTopOsdTitleView(sidePadding));
+            _clockLabel = new TextLabel(FormatClockTime(DateTime.Now))
+            {
+                PositionX = screenWidth - sidePadding - 180,
+                PositionY = 40,
+                WidthSpecification = 180,
+                HeightSpecification = 42,
+                PointSize = 26,
+                TextColor = Color.White,
+                VerticalAlignment = VerticalAlignment.Top,
+                HorizontalAlignment = HorizontalAlignment.End
+            };
+            _topOsd.Add(_clockLabel);
             Add(_topOsd);
 
             _osd = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = bottomHeight, PositionY = _osdHiddenY, Opacity = 0.0f };
@@ -987,11 +1001,23 @@ namespace JellyfinTizen.Screens
             _progressTrack.Add(_previewFill);
 
             _progressThumb = new View { WidthSpecification = 24, HeightSpecification = 24, BackgroundColor = Color.White, CornerRadius = 12.0f, PositionY = 13, PositionX = trackStartX };
+            _endsAtLabel = new TextLabel("")
+            {
+                PositionX = trackStartX,
+                PositionY = 40,
+                WidthSpecification = trackWidth,
+                HeightSpecification = 36,
+                PointSize = 23,
+                TextColor = new Color(1, 1, 1, 0.9f),
+                VerticalAlignment = VerticalAlignment.Top,
+                HorizontalAlignment = HorizontalAlignment.End
+            };
 
             progressRow.Add(_currentTimeLabel);
             progressRow.Add(_progressTrack);
             progressRow.Add(_durationLabel);
             progressRow.Add(_progressThumb);
+            progressRow.Add(_endsAtLabel);
 
             _controlsContainer = new View
             {
@@ -1652,13 +1678,25 @@ namespace JellyfinTizen.Screens
             }
 
             _currentTimeLabel.Text = FormatTime(position);
-            _durationLabel.Text = FormatTime(duration);
+            int remainingMs = Math.Max(duration - position, 0);
+            _durationLabel.Text = $"-{FormatTime(remainingMs)}";
+            if (_clockLabel != null) _clockLabel.Text = FormatClockTime(DateTime.Now);
+            if (_endsAtLabel != null)
+            {
+                DateTime endAt = DateTime.Now.AddMilliseconds(remainingMs);
+                _endsAtLabel.Text = $"Ends at {FormatClockTime(endAt)}";
+            }
         }
 
         private string FormatTime(int ms)
         {
             var t = TimeSpan.FromMilliseconds(ms);
             return t.Hours > 0 ? $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes:D2}:{t.Seconds:D2}";
+        }
+
+        private string FormatClockTime(DateTime time)
+        {
+            return time.ToString("h:mm tt");
         }
 
         private void BeginSeek()
@@ -3008,7 +3046,9 @@ namespace JellyfinTizen.Screens
             _startPositionMs = newMovie.PlaybackPositionTicks > 0 ? (int)(newMovie.PlaybackPositionTicks / 10000) : 0;
             _initialSeekDone = false;
             _progressFill.WidthSpecification = 0;
-            _currentTimeLabel.Text = "00:00"; _durationLabel.Text = "00:00";
+            _currentTimeLabel.Text = "00:00"; _durationLabel.Text = "-00:00";
+            if (_clockLabel != null) _clockLabel.Text = FormatClockTime(DateTime.Now);
+            if (_endsAtLabel != null) _endsAtLabel.Text = string.Empty;
             _overrideAudioIndex = null;
             _useParsedSubtitleRenderer = false;
             _subtitleCues.Clear();
@@ -3040,4 +3080,3 @@ namespace JellyfinTizen.Screens
         }
     }
 }
-
