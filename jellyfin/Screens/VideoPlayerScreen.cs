@@ -171,10 +171,10 @@ namespace JellyfinTizen.Screens
         private const int IntroSkipSafetyMs = 600;
         private const int NextEpisodeAutoStartMs = 15000;
         private const int SmartPopupBreathingDelayMs = 1500;
-        private const int SmartPopupMinWidth = 190;
-        private const int SmartPopupMaxWidth = 360;
-        private const int SmartPopupIntroHeight = 70;
-        private const int SmartPopupOutroHeight = 102;
+        private const int SmartPopupMinWidth = 192;
+        private const int SmartPopupMaxWidth = 362;
+        private const int SmartPopupIntroHeight = 72;
+        private const int SmartPopupOutroHeight = 104;
         private const int SmartPopupGapAboveSeekbar = 28;
 
         // --- NEW: Store MediaSource and Override Audio ---
@@ -1576,10 +1576,10 @@ namespace JellyfinTizen.Screens
 
             _smartActionTitleLabel = new TextLabel("")
             {
-                PositionX = 26,
+                PositionX = 28,
                 WidthSpecification = SmartPopupMinWidth - 60,
                 HeightSpecification = SmartPopupIntroHeight,
-                PointSize = 25,
+                PointSize = 27,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Center
@@ -1587,11 +1587,11 @@ namespace JellyfinTizen.Screens
 
             _smartActionSubtitleLabel = new TextLabel("")
             {
-                PositionX = 26,
-                PositionY = 54,
+                PositionX = 28,
+                PositionY = 56,
                 WidthSpecification = SmartPopupMinWidth - 52,
-                HeightSpecification = 34,
-                PointSize = 19,
+                HeightSpecification = 36,
+                PointSize = 21,
                 TextColor = new Color(1f, 1f, 1f, 0.92f),
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Center
@@ -1600,10 +1600,10 @@ namespace JellyfinTizen.Screens
 
             _smartActionIcon = new ImageView
             {
-                WidthSpecification = 28,
-                HeightSpecification = 28,
+                WidthSpecification = 30,
+                HeightSpecification = 30,
                 PositionX = SmartPopupMinWidth - 44,
-                PositionY = (SmartPopupIntroHeight - 28) / 2,
+                PositionY = (SmartPopupIntroHeight - 30) / 2,
                 ResourceUrl = ResolveFreshIconPath("next.png"),
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
@@ -1649,29 +1649,29 @@ namespace JellyfinTizen.Screens
             if (_smartActionPopup == null || _smartActionTitleLabel == null || _smartActionSubtitleLabel == null || _smartActionIcon == null)
                 return;
 
-            const int leftPadding = 26;
-            const int iconWidth = 28;
+            const int leftPadding = 28;
+            const int iconWidth = 30;
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
-            int textIconGap = 6;
-            int rightPadding = isIntro ? 10 : 12;
+            int textIconGap = 8;
+            int rightPadding = isIntro ? 12 : 14;
 
-            float titleCharWidth = isIntro ? 10.8f : 14.2f;
+            float titleCharWidth = isIntro ? 11.8f : 15.2f;
             int titleWidth = EstimateSmartPopupTextWidth(title, titleCharWidth);
-            int subtitleWidth = string.IsNullOrWhiteSpace(subtitle) ? 0 : EstimateSmartPopupTextWidth(subtitle, 9.8f);
+            int subtitleWidth = string.IsNullOrWhiteSpace(subtitle) ? 0 : EstimateSmartPopupTextWidth(subtitle, 10.8f);
             int primaryLineWidth = leftPadding + titleWidth + textIconGap + iconWidth + rightPadding;
             int secondaryLineWidth = leftPadding + subtitleWidth + rightPadding;
             int desiredWidth = Math.Max(primaryLineWidth, secondaryLineWidth);
             int popupWidth = Math.Clamp(desiredWidth, SmartPopupMinWidth, SmartPopupMaxWidth);
 
-            int maxTitleWidth = Math.Max(80, popupWidth - leftPadding - textIconGap - iconWidth - rightPadding);
-            int maxSubtitleWidth = Math.Max(100, popupWidth - leftPadding - rightPadding);
+            int maxTitleWidth = Math.Max(82, popupWidth - leftPadding - textIconGap - iconWidth - rightPadding);
+            int maxSubtitleWidth = Math.Max(102, popupWidth - leftPadding - rightPadding);
             int actualTitleWidth = Math.Min(titleWidth, maxTitleWidth);
             _smartActionPopup.WidthSpecification = popupWidth;
             _smartActionPopup.HeightSpecification = hasSubtitle ? SmartPopupOutroHeight : SmartPopupIntroHeight;
 
             _smartActionTitleLabel.WidthSpecification = maxTitleWidth;
-            _smartActionTitleLabel.HeightSpecification = hasSubtitle ? 44 : SmartPopupIntroHeight;
-            _smartActionTitleLabel.PositionY = hasSubtitle ? 10 : 0;
+            _smartActionTitleLabel.HeightSpecification = hasSubtitle ? 46 : SmartPopupIntroHeight;
+            _smartActionTitleLabel.PositionY = hasSubtitle ? 12 : 0;
 
             _smartActionIcon.WidthSpecification = iconWidth;
             _smartActionIcon.HeightSpecification = iconWidth;
