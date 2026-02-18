@@ -95,6 +95,27 @@ namespace JellyfinTizen.Screens
         private string _externalSubtitleMediaSourceId = null;
         private string _externalSubtitleCodec = null;
         private bool _suppressPlaybackCompletedNavigation;
+        private View _smartActionPopup;
+        private TextLabel _smartActionTitleLabel;
+        private TextLabel _smartActionSubtitleLabel;
+        private ImageView _smartActionIcon;
+        private Timer _smartActionTimer;
+        private Animation _smartActionPopupAnimation;
+        private bool _smartPopupVisible;
+        private bool _smartPopupFocused;
+        private bool _smartPopupDismissedWhileHidden;
+        private bool _isIntroPopupActive;
+        private bool _isOutroPopupActive;
+        private bool _introSkipped;
+        private bool _autoNextTriggered;
+        private bool _autoNextCancelledByBack;
+        private int _nextEpisodeCountdownMs;
+        private int _introEligibleSinceMs = -1;
+        private int _outroEligibleSinceMs = -1;
+        private SegmentWindow _introSegment;
+        private SegmentWindow _outroSegment;
+        private bool _hasIntroSegment;
+        private bool _hasOutroSegment;
 
         // OSD Controls
         private View _controlsContainer;
@@ -145,6 +166,15 @@ namespace JellyfinTizen.Screens
         private const int TrickplayPreviewHeight = 180;
         private const int TrickplayPreviewBorderPx = 2;
         private const int TrickplayPreviewGapToSeekbar = 18;
+        private const int SmartActionTickMs = 250;
+        private const int IntroSkipSafetyMs = 600;
+        private const int NextEpisodeAutoStartMs = 15000;
+        private const int SmartPopupBreathingDelayMs = 1500;
+        private const int SmartPopupMinWidth = 190;
+        private const int SmartPopupMaxWidth = 360;
+        private const int SmartPopupIntroHeight = 70;
+        private const int SmartPopupOutroHeight = 102;
+        private const int SmartPopupGapAboveSeekbar = 28;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -156,6 +186,12 @@ namespace JellyfinTizen.Screens
             public int StartMs;
             public int EndMs;
             public string Text;
+        }
+
+        private struct SegmentWindow
+        {
+            public int StartMs;
+            public int EndMs;
         }
 
         public VideoPlayerScreen(
@@ -186,6 +222,10 @@ namespace JellyfinTizen.Screens
             _reportProgressTimer = new Timer(5000);
             _reportProgressTimer.Tick += OnReportProgressTick;
             _reportProgressTimer.Start();
+            _smartActionTimer ??= new Timer(SmartActionTickMs);
+            _smartActionTimer.Tick -= OnSmartActionTick;
+            _smartActionTimer.Tick += OnSmartActionTick;
+            _smartActionTimer.Start();
 
             StartPlayback();
         }
@@ -201,9 +241,11 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
             UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
             UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
+            UiAnimator.StopAndDispose(ref _smartActionPopupAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
             _seekCommitTimer?.Stop();
             _seekCommitTimer = null;
+            _smartActionTimer?.Stop();
             StopPlayback();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
@@ -214,6 +256,7 @@ namespace JellyfinTizen.Screens
             try
             {
                 _suppressPlaybackCompletedNavigation = false;
+                ResetSmartActionState();
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
@@ -243,6 +286,7 @@ namespace JellyfinTizen.Screens
                 }
                 _currentMediaSource = mediaSource; 
                 _playSessionId = playbackInfo.PlaySessionId;
+                _ = LoadMediaSegmentsAsync();
 
                 try
                 {
@@ -1064,6 +1108,7 @@ namespace JellyfinTizen.Screens
             CreateTrickplayPreview();
             CreateSeekFeedback();
             CreatePlayPauseFeedback();
+            CreateSmartActionPopup();
 
             CreateAudioOverlay();
             CreateSubtitleOverlay();
@@ -1508,6 +1553,442 @@ namespace JellyfinTizen.Screens
                 );
             }
             return false;
+        }
+
+        private void CreateSmartActionPopup()
+        {
+            _smartActionPopup = new View
+            {
+                WidthSpecification = SmartPopupMinWidth,
+                HeightSpecification = SmartPopupIntroHeight,
+                BackgroundColor = new Color(0.16f, 0.18f, 0.22f, 0.95f),
+                CornerRadius = 8.0f,
+                Opacity = 0.0f,
+                Scale = new Vector3(0.98f, 0.98f, 1f)
+            };
+
+            var content = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent
+            };
+
+            _smartActionTitleLabel = new TextLabel("")
+            {
+                PositionX = 26,
+                WidthSpecification = SmartPopupMinWidth - 60,
+                HeightSpecification = SmartPopupIntroHeight,
+                PointSize = 25,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            _smartActionSubtitleLabel = new TextLabel("")
+            {
+                PositionX = 26,
+                PositionY = 54,
+                WidthSpecification = SmartPopupMinWidth - 52,
+                HeightSpecification = 34,
+                PointSize = 19,
+                TextColor = new Color(1f, 1f, 1f, 0.92f),
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _smartActionSubtitleLabel.Hide();
+
+            _smartActionIcon = new ImageView
+            {
+                WidthSpecification = 28,
+                HeightSpecification = 28,
+                PositionX = SmartPopupMinWidth - 44,
+                PositionY = (SmartPopupIntroHeight - 28) / 2,
+                ResourceUrl = ResolveFreshIconPath("next.png"),
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            content.Add(_smartActionTitleLabel);
+            content.Add(_smartActionSubtitleLabel);
+            content.Add(_smartActionIcon);
+            _smartActionPopup.Add(content);
+            UpdateSmartPopupPosition();
+            _smartActionPopup.Hide();
+            Add(_smartActionPopup);
+        }
+
+        private void UpdateSmartPopupPosition()
+        {
+            if (_smartActionPopup == null)
+                return;
+
+            // Seekbar absolute Y: OSD panel anchor + progress row + track offset.
+            int seekbarY = _osdShownY + 90 + 22;
+            int popupHeight = _smartActionPopup.HeightSpecification;
+            int targetY = seekbarY - popupHeight - SmartPopupGapAboveSeekbar;
+            _smartActionPopup.PositionY = Math.Max(40, targetY);
+
+            // Align popup right edge with seekbar line right edge (not with duration label).
+            int trackStartX = 60 + 140 + 20;
+            int trackWidth = Window.Default.Size.Width - (2 * trackStartX);
+            int seekbarRightX = trackStartX + trackWidth;
+            _smartActionPopup.PositionX = seekbarRightX - _smartActionPopup.WidthSpecification;
+        }
+
+        private static int EstimateSmartPopupTextWidth(string text, float perCharPx)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 100;
+
+            return Math.Clamp((int)Math.Ceiling(text.Length * perCharPx), 70, 520);
+        }
+
+        private void UpdateSmartPopupContentLayout(string title, string subtitle, bool isIntro)
+        {
+            if (_smartActionPopup == null || _smartActionTitleLabel == null || _smartActionSubtitleLabel == null || _smartActionIcon == null)
+                return;
+
+            const int leftPadding = 26;
+            const int iconWidth = 28;
+            bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
+            int textIconGap = 6;
+            int rightPadding = isIntro ? 10 : 12;
+
+            float titleCharWidth = isIntro ? 10.8f : 14.2f;
+            int titleWidth = EstimateSmartPopupTextWidth(title, titleCharWidth);
+            int subtitleWidth = string.IsNullOrWhiteSpace(subtitle) ? 0 : EstimateSmartPopupTextWidth(subtitle, 9.8f);
+            int primaryLineWidth = leftPadding + titleWidth + textIconGap + iconWidth + rightPadding;
+            int secondaryLineWidth = leftPadding + subtitleWidth + rightPadding;
+            int desiredWidth = Math.Max(primaryLineWidth, secondaryLineWidth);
+            int popupWidth = Math.Clamp(desiredWidth, SmartPopupMinWidth, SmartPopupMaxWidth);
+
+            int maxTitleWidth = Math.Max(80, popupWidth - leftPadding - textIconGap - iconWidth - rightPadding);
+            int maxSubtitleWidth = Math.Max(100, popupWidth - leftPadding - rightPadding);
+            int actualTitleWidth = Math.Min(titleWidth, maxTitleWidth);
+            _smartActionPopup.WidthSpecification = popupWidth;
+            _smartActionPopup.HeightSpecification = hasSubtitle ? SmartPopupOutroHeight : SmartPopupIntroHeight;
+
+            _smartActionTitleLabel.WidthSpecification = maxTitleWidth;
+            _smartActionTitleLabel.HeightSpecification = hasSubtitle ? 44 : SmartPopupIntroHeight;
+            _smartActionTitleLabel.PositionY = hasSubtitle ? 10 : 0;
+
+            _smartActionIcon.WidthSpecification = iconWidth;
+            _smartActionIcon.HeightSpecification = iconWidth;
+            _smartActionIcon.PositionX = leftPadding + actualTitleWidth + textIconGap;
+            int titleLineY = (int)Math.Round(_smartActionTitleLabel.PositionY);
+            int titleLineH = _smartActionTitleLabel.HeightSpecification;
+            int iconHeight = _smartActionIcon.HeightSpecification;
+            int iconOpticalOffsetY = isIntro ? 2 : 1;
+            _smartActionIcon.PositionY = titleLineY + Math.Max(0, ((titleLineH - iconHeight) / 2)) + iconOpticalOffsetY;
+
+            _smartActionSubtitleLabel.WidthSpecification = maxSubtitleWidth;
+            _smartActionSubtitleLabel.Text = subtitle ?? string.Empty;
+            if (!hasSubtitle)
+                _smartActionSubtitleLabel.Hide();
+            else
+                _smartActionSubtitleLabel.Show();
+        }
+
+        private void SetSmartPopupFocus(bool focused)
+        {
+            _smartPopupFocused = focused && _smartPopupVisible;
+            if (_smartActionPopup == null)
+                return;
+
+            _smartActionPopup.BackgroundColor = _smartPopupFocused
+                ? new Color(0.24f, 0.27f, 0.33f, 0.98f)
+                : new Color(0.16f, 0.18f, 0.22f, 0.95f);
+            AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? new Vector3(1.04f, 1.04f, 1f) : Vector3.One);
+        }
+
+        private void ShowSmartPopup(string title, string subtitle, bool isIntro, bool focused)
+        {
+            if (_smartActionPopup == null || _smartActionTitleLabel == null || _smartActionIcon == null)
+                return;
+
+            _smartActionTitleLabel.Text = title ?? string.Empty;
+            UpdateSmartPopupContentLayout(title, subtitle, isIntro);
+            _isIntroPopupActive = isIntro;
+            _isOutroPopupActive = !isIntro;
+            UpdateSmartPopupPosition();
+
+            if (_smartPopupVisible)
+            {
+                SetSmartPopupFocus(focused);
+                return;
+            }
+
+            _smartPopupVisible = true;
+            _smartActionPopup.Show();
+            _smartActionPopup.Opacity = 0.0f;
+            _smartActionPopup.Scale = new Vector3(0.98f, 0.98f, 1f);
+
+            UiAnimator.Replace(
+                ref _smartActionPopupAnimation,
+                UiAnimator.Start(
+                    140,
+                    animation =>
+                    {
+                        animation.AnimateTo(_smartActionPopup, "Opacity", 1.0f);
+                        animation.AnimateTo(_smartActionPopup, "Scale", Vector3.One);
+                    }
+                )
+            );
+            SetSmartPopupFocus(focused);
+        }
+
+        private void HideSmartPopup()
+        {
+            _isIntroPopupActive = false;
+            _isOutroPopupActive = false;
+            _smartPopupFocused = false;
+            if (_smartActionPopup == null)
+                return;
+
+            if (!_smartPopupVisible)
+            {
+                _smartActionPopup.Hide();
+                return;
+            }
+
+            _smartPopupVisible = false;
+            UiAnimator.Replace(
+                ref _smartActionPopupAnimation,
+                UiAnimator.Start(
+                    130,
+                    animation =>
+                    {
+                        animation.AnimateTo(_smartActionPopup, "Opacity", 0.0f);
+                        animation.AnimateTo(_smartActionPopup, "Scale", new Vector3(0.98f, 0.98f, 1f));
+                    },
+                    () => _smartActionPopup.Hide()
+                )
+            );
+        }
+
+        private async Task LoadMediaSegmentsAsync()
+        {
+            try
+            {
+                var segments = await AppState.Jellyfin.GetMediaSegmentsAsync(_movie.Id, "Intro", "Outro");
+                if (segments == null || segments.Count == 0)
+                    return;
+
+                var intro = SelectSegmentWindow(segments, "Intro");
+                if (intro.HasValue)
+                {
+                    _introSegment = intro.Value;
+                    _hasIntroSegment = true;
+                }
+
+                var outro = SelectSegmentWindow(segments, "Outro");
+                if (outro.HasValue)
+                {
+                    _outroSegment = outro.Value;
+                    _hasOutroSegment = true;
+                }
+            }
+            catch
+            {
+                _hasIntroSegment = false;
+                _hasOutroSegment = false;
+            }
+        }
+
+        private static SegmentWindow? SelectSegmentWindow(List<MediaSegmentInfo> segments, string type)
+        {
+            if (segments == null || segments.Count == 0 || string.IsNullOrWhiteSpace(type))
+                return null;
+
+            var segment = segments
+                .Where(s => string.Equals(s.Type, type, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.StartTicks)
+                .FirstOrDefault();
+            if (segment == null)
+                return null;
+
+            int startMs = segment.StartTicks > 0 ? (int)(segment.StartTicks / 10000) : 0;
+            int endMs = segment.EndTicks > 0 ? (int)(segment.EndTicks / 10000) : 0;
+            if (endMs <= startMs)
+                endMs = startMs + 20000;
+
+            return new SegmentWindow
+            {
+                StartMs = Math.Max(0, startMs),
+                EndMs = Math.Max(startMs + 1000, endMs)
+            };
+        }
+
+        private bool OnSmartActionTick(object sender, Timer.TickEventArgs e)
+        {
+            EvaluateSmartActions();
+            return true;
+        }
+
+        private void EvaluateSmartActions()
+        {
+            if (_player == null || _isFinished)
+            {
+                _introEligibleSinceMs = -1;
+                _outroEligibleSinceMs = -1;
+                HideSmartPopup();
+                return;
+            }
+
+            int positionMs = GetPlayPositionMs();
+            if (positionMs < 0)
+            {
+                _introEligibleSinceMs = -1;
+                _outroEligibleSinceMs = -1;
+                HideSmartPopup();
+                return;
+            }
+
+            bool canShowIntro = _hasIntroSegment &&
+                                !_introSkipped &&
+                                positionMs >= _introSegment.StartMs &&
+                                positionMs < Math.Max(_introSegment.StartMs + 400, _introSegment.EndMs - IntroSkipSafetyMs);
+            if (canShowIntro)
+            {
+                if (_introEligibleSinceMs < 0)
+                    _introEligibleSinceMs = positionMs;
+
+                bool delayDone = (positionMs - _introEligibleSinceMs) >= SmartPopupBreathingDelayMs;
+                if (delayDone && (!_smartPopupDismissedWhileHidden || _osdVisible))
+                    ShowSmartPopup("Skip Intro", null, isIntro: true, focused: _smartPopupFocused || !_osdVisible);
+                return;
+            }
+            _introEligibleSinceMs = -1;
+
+            bool canShowOutro = _movie.ItemType == "Episode" &&
+                                _hasOutroSegment &&
+                                !_autoNextTriggered &&
+                                positionMs >= _outroSegment.StartMs;
+            if (!canShowOutro)
+            {
+                _outroEligibleSinceMs = -1;
+                _nextEpisodeCountdownMs = 0;
+                _autoNextCancelledByBack = false;
+                _smartPopupDismissedWhileHidden = false;
+                HideSmartPopup();
+                return;
+            }
+
+            if (_outroEligibleSinceMs < 0)
+                _outroEligibleSinceMs = positionMs;
+
+            bool outroDelayDone = (positionMs - _outroEligibleSinceMs) >= SmartPopupBreathingDelayMs;
+            if (!outroDelayDone)
+                return;
+
+            if (_nextEpisodeCountdownMs <= 0)
+                _nextEpisodeCountdownMs = NextEpisodeAutoStartMs;
+
+            // User dismissed hidden-state popup: keep it gone in hidden mode.
+            // If OSD is opened manually, expose a manual-only Next Episode button (no timer/autoplay).
+            if (_smartPopupDismissedWhileHidden)
+            {
+                if (!_osdVisible)
+                {
+                    HideSmartPopup();
+                    return;
+                }
+
+                ShowSmartPopup("Next Episode", null, isIntro: false, focused: _smartPopupFocused);
+                return;
+            }
+
+            int seconds = (int)Math.Ceiling(_nextEpisodeCountdownMs / 1000.0);
+            ShowSmartPopup("Next Episode", $"Starts in {Math.Max(1, seconds)} seconds", isIntro: false, focused: _smartPopupFocused || !_osdVisible);
+
+            if (_player.State == PlayerState.Playing && _smartPopupVisible)
+                _nextEpisodeCountdownMs = Math.Max(0, _nextEpisodeCountdownMs - SmartActionTickMs);
+
+            if (_nextEpisodeCountdownMs > 0)
+                return;
+
+            if (!_smartPopupVisible)
+                return;
+
+            if (_autoNextCancelledByBack)
+                return;
+
+            _autoNextTriggered = true;
+            HideSmartPopup();
+            PlayNextEpisode();
+        }
+
+        private async void SkipIntro()
+        {
+            if (_player == null || !_hasIntroSegment)
+                return;
+
+            int duration = GetDuration();
+            int targetMs = _introSegment.EndMs + IntroSkipSafetyMs;
+            if (duration > 0)
+                targetMs = Math.Min(targetMs, Math.Max(0, duration - 1000));
+            targetMs = Math.Max(targetMs, 0);
+
+            try
+            {
+                _introSkipped = true;
+                _isSeeking = true;
+                _seekPreviewMs = targetMs;
+                UpdatePreviewBar();
+                await _player.SetPlayPositionAsync(targetMs, false);
+            }
+            catch
+            {
+            }
+            finally
+            {
+                _isSeeking = false;
+                UpdateProgress();
+                HideSmartPopup();
+            }
+        }
+
+        private bool HandleSmartPopupEnter()
+        {
+            if (!_smartPopupVisible)
+                return false;
+
+            if (_isIntroPopupActive)
+            {
+                SkipIntro();
+                return true;
+            }
+
+            if (_isOutroPopupActive && _movie.ItemType == "Episode")
+            {
+                if (!_osdVisible || !_smartPopupFocused)
+                    return false;
+
+                _autoNextTriggered = true;
+                _autoNextCancelledByBack = false;
+                HideSmartPopup();
+                PlayNextEpisode();
+                return true;
+            }
+
+            return false;
+        }
+
+        private void ResetSmartActionState()
+        {
+            _hasIntroSegment = false;
+            _hasOutroSegment = false;
+            _smartPopupFocused = false;
+            _smartPopupDismissedWhileHidden = false;
+            _introSkipped = false;
+            _autoNextTriggered = false;
+            _autoNextCancelledByBack = false;
+            _nextEpisodeCountdownMs = 0;
+            _introEligibleSinceMs = -1;
+            _outroEligibleSinceMs = -1;
+            _introSegment = default;
+            _outroSegment = default;
+            HideSmartPopup();
         }
 
         private void SetButtonVisual(View button, bool focused)
@@ -2663,6 +3144,7 @@ namespace JellyfinTizen.Screens
         {
             var wasVisible = _osdVisible;
             if (!wasVisible) _osdFocusRow = 0;
+            if (!wasVisible) SetSmartPopupFocus(false);
 
             _osd.Show();
             if (_topOsd != null) _topOsd.Show();
@@ -2760,6 +3242,7 @@ namespace JellyfinTizen.Screens
         {
             ExitSubtitleOffsetAdjustMode();
             _osdVisible = false;
+            SetSmartPopupFocus(false);
 
             UiAnimator.Replace(
                 ref _osdAnimation,
@@ -2801,6 +3284,9 @@ namespace JellyfinTizen.Screens
             _osdTimer.Stop();
             _progressTimer.Stop();
             HideTrickplayPreview();
+
+            if (_smartPopupVisible && (_isIntroPopupActive || _isOutroPopupActive) && !_smartPopupDismissedWhileHidden)
+                SetSmartPopupFocus(true);
         }
 
         private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
@@ -2860,6 +3346,7 @@ namespace JellyfinTizen.Screens
             _seekPreviewMs = 0;
             _seekFeedbackContainer?.Hide();
             HideTrickplayPreview();
+            HideSmartPopup();
             _playPauseFeedbackContainer?.Hide();
             _audioOverlay?.Hide();
             _subtitleOverlay?.Hide();
@@ -2869,6 +3356,7 @@ namespace JellyfinTizen.Screens
             ResetTrickplayState();
             _trickplayHttpClient?.Dispose();
             _trickplayHttpClient = null;
+            ResetSmartActionState();
 
             try 
             {
@@ -2944,6 +3432,9 @@ namespace JellyfinTizen.Screens
                     else HandleHiddenDirectionalSeek(1);
                     break;
                 case AppKey.Enter:
+                    if ((!_osdVisible && HandleSmartPopupEnter()) ||
+                        (_osdVisible && _smartPopupFocused && HandleSmartPopupEnter()))
+                        break;
                     if (_audioOverlayVisible) SelectAudioTrack();
                     else if (_subtitleOverlayVisible) 
                     {
@@ -2970,6 +3461,10 @@ namespace JellyfinTizen.Screens
                     {
                         // Let FocusManager handle audio overlay navigation.
                     }
+                    else if (_osdVisible && _smartPopupFocused)
+                    {
+                        // Keep popup focused; no lateral action.
+                    }
                     else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(-SubtitleOffsetStepMs);
                     else if (_subtitleOverlayVisible) MoveSubtitleSelection(-1);
                     else if (_osdVisible && _osdFocusRow == 1) MoveButtonFocus(-1);
@@ -2980,6 +3475,10 @@ namespace JellyfinTizen.Screens
                     if (_audioOverlayVisible)
                     {
                         // Let FocusManager handle audio overlay navigation.
+                    }
+                    else if (_osdVisible && _smartPopupFocused)
+                    {
+                        // Keep popup focused; no lateral action.
                     }
                     else if (_subtitleOverlayVisible && _subtitleOffsetAdjustMode) AdjustSubtitleOffset(SubtitleOffsetStepMs);
                     else if (_subtitleOverlayVisible) MoveSubtitleSelection(1);
@@ -3001,6 +3500,10 @@ namespace JellyfinTizen.Screens
                         }
                         else MoveSubtitleSelection(-1);
                     }
+                    else if (_osdVisible && _osdFocusRow == 0 && _smartPopupVisible && !_smartPopupFocused)
+                    {
+                        SetSmartPopupFocus(true);
+                    }
                     else if (_osdVisible) MoveOsdRow(-1);
                     else ShowOSD();
                     break;
@@ -3014,6 +3517,10 @@ namespace JellyfinTizen.Screens
                         if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
                         else MoveSubtitleSelection(1);
                     }
+                    else if (_osdVisible && _smartPopupFocused)
+                    {
+                        SetSmartPopupFocus(false);
+                    }
                     else if (_osdVisible) MoveOsdRow(1);
                     else ShowOSD();
                     break;
@@ -3025,6 +3532,17 @@ namespace JellyfinTizen.Screens
                     }
                     else if (_audioOverlayVisible) HideAudioOverlay();
                     else if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
+                    else if (!_osdVisible && _smartPopupVisible)
+                    {
+                        if (_isOutroPopupActive)
+                            _autoNextCancelledByBack = true;
+                        _smartPopupDismissedWhileHidden = true;
+                        HideSmartPopup();
+                    }
+                    else if (_osdVisible && _smartPopupFocused)
+                    {
+                        SetSmartPopupFocus(false);
+                    }
                     else if (_isSeeking)
                     {
                         CancelQueuedDirectionalSeek();
@@ -3130,6 +3648,7 @@ namespace JellyfinTizen.Screens
             _activeSubtitleCueIndex = -1;
             StopSubtitleRenderTimer();
             ResetTrickplayState();
+            ResetSmartActionState();
             StartPlayback();
             ShowOSD();
         }

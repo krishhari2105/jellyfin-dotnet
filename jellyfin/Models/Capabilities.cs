@@ -107,4 +107,13 @@ namespace JellyfinTizen.Models
         public int? Channels { get; set; }
         public string ChannelLayout { get; set; }
     }
+
+    public class MediaSegmentInfo
+    {
+        public string Id { get; set; }
+        public string ItemId { get; set; }
+        public string Type { get; set; }
+        public long StartTicks { get; set; }
+        public long EndTicks { get; set; }
+    }
 }

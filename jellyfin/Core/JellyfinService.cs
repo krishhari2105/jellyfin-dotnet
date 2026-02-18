@@ -601,6 +601,46 @@ namespace JellyfinTizen.Core
             return response;
         }
 
+        public async Task<List<MediaSegmentInfo>> GetMediaSegmentsAsync(string itemId, params string[] includeSegmentTypes)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                return new List<MediaSegmentInfo>();
+
+            var url = $"/MediaSegments/{itemId}";
+            if (includeSegmentTypes != null && includeSegmentTypes.Length > 0)
+            {
+                var filtered = includeSegmentTypes
+                    .Where(t => !string.IsNullOrWhiteSpace(t))
+                    .Select(t => Uri.EscapeDataString(t.Trim()))
+                    .ToList();
+
+                if (filtered.Count > 0)
+                    url += $"?{string.Join("&", filtered.Select(t => $"includeSegmentTypes={t}"))}";
+            }
+
+            var json = await GetAsync(url);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var items = new List<MediaSegmentInfo>();
+            if (!root.TryGetProperty("Items", out var segments) || segments.ValueKind != JsonValueKind.Array)
+                return items;
+
+            foreach (var segment in segments.EnumerateArray())
+            {
+                items.Add(new MediaSegmentInfo
+                {
+                    Id = TryGetString(segment, "Id"),
+                    ItemId = TryGetString(segment, "ItemId"),
+                    Type = TryGetString(segment, "Type"),
+                    StartTicks = TryGetInt64(segment, "StartTicks", out var startTicks) ? startTicks : 0L,
+                    EndTicks = TryGetInt64(segment, "EndTicks", out var endTicks) ? endTicks : 0L
+                });
+            }
+
+            return items;
+        }
+
         public async Task<TrickplayInfo> GetTrickplayInfoAsync(string itemId)
         {
             if (string.IsNullOrWhiteSpace(itemId))
@@ -786,6 +826,17 @@ namespace JellyfinTizen.Core
                 return int.TryParse(prop.GetString(), out value);
 
             return false;
+        }
+
+        private static bool TryGetInt64(JsonElement element, string propertyName, out long value)
+        {
+            value = 0;
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return false;
+            if (prop.ValueKind != JsonValueKind.Number)
+                return false;
+
+            return prop.TryGetInt64(out value);
         }
 
         private static double? TryGetAspectRatio(JsonElement element, string propertyName)
