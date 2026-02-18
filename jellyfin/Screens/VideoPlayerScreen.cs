@@ -55,6 +55,10 @@ namespace JellyfinTizen.Screens
         private int _activeSubtitleCueIndex = -1;
         private Timer _reportProgressTimer;
         private bool _isFinished;
+        private bool _completedForCurrentItem;
+        private bool _isEpisodeSwitchInProgress;
+        private bool _suppressStopReportOnce;
+        private long _lastKnownPositionTicks;
         private View _progressThumb;
         private Timer _seekCommitTimer;
         private int _pendingSeekDeltaSeconds;
@@ -181,6 +185,11 @@ namespace JellyfinTizen.Screens
         private MediaSourceInfo _currentMediaSource;
         private int? _overrideAudioIndex = null;
         private bool _isAnamorphicVideo;
+        private int _playbackToken;
+        private string _activeReportItemId;
+        private string _activeReportPlaySessionId;
+        private string _activeReportMediaSourceId;
+        private string _activeReportPlayMethod = "DirectPlay";
 
         private struct SubtitleCue
         {
@@ -220,6 +229,12 @@ namespace JellyfinTizen.Screens
             if (_osd == null) CreateOSD();
 
             _isFinished = false;
+            _completedForCurrentItem = false;
+            if (_reportProgressTimer != null)
+            {
+                _reportProgressTimer.Tick -= OnReportProgressTick;
+                _reportProgressTimer.Stop();
+            }
             _reportProgressTimer = new Timer(5000);
             _reportProgressTimer.Tick += OnReportProgressTick;
             _reportProgressTimer.Start();
@@ -233,7 +248,11 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            _reportProgressTimer?.Stop();
+            if (_reportProgressTimer != null)
+            {
+                _reportProgressTimer.Tick -= OnReportProgressTick;
+                _reportProgressTimer.Stop();
+            }
             _reportProgressTimer = null;
             ReportProgressToServer();
             UiAnimator.StopAndDispose(ref _osdAnimation);
@@ -254,9 +273,15 @@ namespace JellyfinTizen.Screens
 
         private async void StartPlayback()
         {
+            int playbackToken = ++_playbackToken;
+            var playbackMovie = _movie;
+            if (playbackMovie == null || string.IsNullOrWhiteSpace(playbackMovie.Id))
+                return;
+
             try
             {
                 _suppressPlaybackCompletedNavigation = false;
+                _completedForCurrentItem = false;
                 ResetSmartActionState();
                 _subtitleEnabled = _initialSubtitleIndex.HasValue;
                 _subtitleOffsetBurnInWarningShown = false;
@@ -274,7 +299,10 @@ namespace JellyfinTizen.Screens
                 _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
                 _player.DisplaySettings.IsVisible = true;
 
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_movie.Id, _initialSubtitleIndex, _burnIn);
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(playbackMovie.Id, _initialSubtitleIndex, _burnIn);
+                if (playbackToken != _playbackToken)
+                    return;
+
                 if (playbackInfo.MediaSources == null || playbackInfo.MediaSources.Count == 0)
                     return;
 
@@ -291,7 +319,7 @@ namespace JellyfinTizen.Screens
 
                 try
                 {
-                    _isAnamorphicVideo = await AppState.Jellyfin.GetIsAnamorphicAsync(_movie.Id);
+                    _isAnamorphicVideo = await AppState.Jellyfin.GetIsAnamorphicAsync(playbackMovie.Id);
                 }
                 catch
                 {
@@ -312,7 +340,7 @@ namespace JellyfinTizen.Screens
                 if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
                 {
                     _playMethod = "DirectPlay";
-                    streamUrl = $"{serverUrl}/Videos/{_movie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
+                    streamUrl = $"{serverUrl}/Videos/{playbackMovie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
                 }
                 else if (supportsTranscoding || forceTranscode)
                 {
@@ -332,7 +360,7 @@ namespace JellyfinTizen.Screens
 
                     if (!hasTranscodeUrl)
                     {
-                        streamUrl = $"{serverUrl}/Videos/{_movie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
+                        streamUrl = $"{serverUrl}/Videos/{playbackMovie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
                         streamUrl += $"&VideoCodec={requestedVideoCodecs}";
                         streamUrl += $"&AudioCodec={requestedAudioCodecs}";
                         streamUrl += $"&SegmentContainer={container}"; 
@@ -416,9 +444,13 @@ namespace JellyfinTizen.Screens
                 }
 
                 var source = new MediaUriSource(streamUrl);
+                SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, _playMethod);
                 _player.SetSource(source);
 
                 await _player.PrepareAsync();
+                if (playbackToken != _playbackToken)
+                    return;
+
                 ApplyDisplayModeForCurrentVideo();
 
                 try { _ = _player.StreamInfo.GetVideoProperties(); } catch { }
@@ -453,17 +485,24 @@ namespace JellyfinTizen.Screens
                     await _player.SetPlayPositionAsync(_startPositionMs, false);
 
                 _player.Start();
+                if (playbackToken != _playbackToken)
+                    return;
+
                 ApplyDisplayModeForCurrentVideo();
                 ApplySubtitleOffset();
 
                 var info = new PlaybackProgressInfo
                 {
-                    ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = mediaSource.Id,
+                    ItemId = playbackMovie.Id, PlaySessionId = _playSessionId, MediaSourceId = mediaSource.Id,
                     PositionTicks = _startPositionMs * 10000, IsPaused = false, PlayMethod = _playMethod, EventName = "TimeUpdate"
                 };
                 _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
             }
-            catch { }
+            catch
+            {
+                if (playbackToken == _playbackToken)
+                    ClearReportingContext();
+            }
         }
 
         private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, MediaStream subtitleStream)
@@ -1828,7 +1867,7 @@ namespace JellyfinTizen.Screens
 
         private void EvaluateSmartActions()
         {
-            if (_player == null || _isFinished)
+            if (_player == null || _isFinished || _isEpisodeSwitchInProgress)
             {
                 _introEligibleSinceMs = -1;
                 _outroEligibleSinceMs = -1;
@@ -2842,6 +2881,7 @@ namespace JellyfinTizen.Screens
                 if (_burnIn)
                 {
                     long currentPos = GetPlayPositionMs();
+                    _suppressStopReportOnce = true;
                     StopPlayback();
                     _startPositionMs = (int)currentPos;
                     StartPlayback();
@@ -2860,6 +2900,7 @@ namespace JellyfinTizen.Screens
             if (_burnIn)
             {
                 long currentPos = GetPlayPositionMs();
+                _suppressStopReportOnce = true;
                 StopPlayback();
                 _startPositionMs = (int)currentPos;
                 StartPlayback();
@@ -3139,6 +3180,7 @@ namespace JellyfinTizen.Screens
             }
 
             long currentPos = GetPlayPositionMs();
+            _suppressStopReportOnce = true;
             StopPlayback();
             _overrideAudioIndex = jellyfinStreamIndex;
             _startPositionMs = (int)currentPos;
@@ -3296,10 +3338,30 @@ namespace JellyfinTizen.Screens
 
         private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
 
+        private void SetReportingContext(string itemId, string playSessionId, string mediaSourceId, string playMethod)
+        {
+            _activeReportItemId = itemId;
+            _activeReportPlaySessionId = playSessionId;
+            _activeReportMediaSourceId = mediaSourceId;
+            _activeReportPlayMethod = string.IsNullOrWhiteSpace(playMethod) ? "DirectPlay" : playMethod;
+            _lastKnownPositionTicks = Math.Max(0, (long)_startPositionMs) * 10000;
+        }
+
+        private void ClearReportingContext()
+        {
+            _activeReportItemId = null;
+            _activeReportPlaySessionId = null;
+            _activeReportMediaSourceId = null;
+            _activeReportPlayMethod = "DirectPlay";
+            _lastKnownPositionTicks = 0;
+        }
+
         private void ReportProgressToServer(bool force = false)
         {
             if (_player == null || _isSeeking || _isFinished || _currentMediaSource == null) return;
             if (!force && _player.State != PlayerState.Playing) return;
+            if (string.IsNullOrWhiteSpace(_activeReportItemId) || string.IsNullOrWhiteSpace(_activeReportMediaSourceId))
+                return;
 
             var positionMs = GetPlayPositionMs();
             var durationMs = GetDuration();
@@ -3307,14 +3369,29 @@ namespace JellyfinTizen.Screens
 
             var info = new PlaybackProgressInfo
             {
-                ItemId = _movie.Id, PlaySessionId = _playSessionId, MediaSourceId = _currentMediaSource.Id,
+                ItemId = _activeReportItemId, PlaySessionId = _activeReportPlaySessionId, MediaSourceId = _activeReportMediaSourceId,
                 PositionTicks = (long)positionMs * 10000, IsPaused = _player.State == PlayerState.Paused,
-                PlayMethod = _playMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate"
+                PlayMethod = _activeReportPlayMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate"
             };
+            _lastKnownPositionTicks = info.PositionTicks;
             _ = AppState.Jellyfin.ReportPlaybackProgressAsync(info);
 
-            if (((double)positionMs / durationMs) > 0.95 && !_isFinished) { _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id); }
-            else { _ = AppState.Jellyfin.UpdatePlaybackPositionAsync(_movie.Id, (long)positionMs * 10000); }
+            if (((double)positionMs / durationMs) > 0.95 && !_isFinished)
+            {
+                if (!_completedForCurrentItem)
+                    FinalizeCurrentItemAsPlayed();
+            }
+        }
+
+        private void FinalizeCurrentItemAsPlayed()
+        {
+            var completedItemId = _activeReportItemId ?? _movie?.Id;
+            if (string.IsNullOrWhiteSpace(completedItemId))
+                return;
+
+            _completedForCurrentItem = true;
+            _ = AppState.Jellyfin.MarkAsPlayedAsync(completedItemId);
+            _ = AppState.Jellyfin.UpdatePlaybackPositionAsync(completedItemId, 0);
         }
 
         private void OnPlaybackCompleted(object sender, EventArgs e)
@@ -3324,12 +3401,15 @@ namespace JellyfinTizen.Screens
 
             _suppressPlaybackCompletedNavigation = true;
             _isFinished = true;
-            _ = AppState.Jellyfin.MarkAsPlayedAsync(_movie.Id);
+            FinalizeCurrentItemAsPlayed();
             RunOnUiThread(() => { if (_movie.ItemType == "Episode") PlayNextEpisode(); else NavigationService.NavigateBack(); });
         }
 
         private void StopPlayback()
         {
+            _playbackToken++;
+            bool suppressStopReport = _suppressStopReportOnce || _isEpisodeSwitchInProgress;
+            _suppressStopReportOnce = false;
             _suppressPlaybackCompletedNavigation = true;
             _osdVisible = false;
             _audioOverlayVisible = false;
@@ -3365,11 +3445,28 @@ namespace JellyfinTizen.Screens
 
             try 
             {
-                if (_player != null) {
-                    var info = new PlaybackProgressInfo { ItemId = _movie.Id, PlaySessionId = _playSessionId, PositionTicks = GetPlayPositionMs() * 10000, EventName = "Stop" };
-                    _ = AppState.Jellyfin.ReportPlaybackStoppedAsync(info);
+                if (!suppressStopReport && _player != null && !_isFinished && !_completedForCurrentItem && !string.IsNullOrWhiteSpace(_activeReportItemId)) {
+                    long stopPositionTicks = _lastKnownPositionTicks > 0 ? _lastKnownPositionTicks : GetPlayPositionMs() * 10000;
+                    var info = new PlaybackProgressInfo
+                    {
+                        ItemId = _activeReportItemId,
+                        PlaySessionId = _activeReportPlaySessionId,
+                        MediaSourceId = _activeReportMediaSourceId,
+                        PlayMethod = _activeReportPlayMethod,
+                        PositionTicks = stopPositionTicks,
+                        EventName = "Stop"
+                    };
+                    try
+                    {
+                        var stopTask = AppState.Jellyfin.ReportPlaybackStoppedAsync(info);
+                        stopTask.Wait(800);
+                    }
+                    catch { }
                 }
             } catch {}
+            ClearReportingContext();
+            _currentMediaSource = null;
+            _playSessionId = null;
             
             try
             {
@@ -3602,13 +3699,34 @@ namespace JellyfinTizen.Screens
             }
         }
         
-        private async void PlayNextEpisode() { await SwitchEpisode(1); }
+        private async void PlayNextEpisode()
+        {
+            if (_isEpisodeSwitchInProgress)
+                return;
+
+            _autoNextTriggered = true;
+            _autoNextCancelledByBack = false;
+            _nextEpisodeCountdownMs = 0;
+            HideSmartPopup();
+            await SwitchEpisode(1);
+        }
 
         private async Task SwitchEpisode(int offset)
         {
-            if (_movie.ItemType != "Episode") return;
+            if (_movie.ItemType != "Episode" || _isEpisodeSwitchInProgress) return;
             try
-            {StopPlayback();
+            {
+                _isEpisodeSwitchInProgress = true;
+                if (!_completedForCurrentItem)
+                {
+                    int durationMs = GetDuration();
+                    int positionMs = GetPlayPositionMs();
+                    if (durationMs > 0 && positionMs > 0 && ((double)positionMs / durationMs) > 0.95)
+                        FinalizeCurrentItemAsPlayed();
+                }
+
+                _suppressStopReportOnce = true;
+                StopPlayback();
                 var seasons = await AppState.Jellyfin.GetSeasonsAsync(_movie.SeriesId);
                 if (seasons == null || seasons.Count == 0) { NavigationService.NavigateBack(); return; }
                 seasons.Sort((a, b) => a.IndexNumber.CompareTo(b.IndexNumber));
@@ -3633,12 +3751,15 @@ namespace JellyfinTizen.Screens
                 NavigationService.NavigateBack();
             }
             catch (Exception) {NavigationService.NavigateBack(); }
+            finally { _isEpisodeSwitchInProgress = false; }
         }
 
         private void LoadNewMedia(JellyfinMovie newMovie)
         {
             _movie = newMovie;
             _isFinished = false;
+            _completedForCurrentItem = false;
+            _isEpisodeSwitchInProgress = false;
             _isSeeking = false;
             _seekPreviewMs = 0;
             _startPositionMs = newMovie.PlaybackPositionTicks > 0 ? (int)(newMovie.PlaybackPositionTicks / 10000) : 0;

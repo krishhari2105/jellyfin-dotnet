@@ -259,6 +259,15 @@ namespace JellyfinTizen.Core
             if (_currentScreen is IKeyHandler handler) handler.HandleKey(AppKey.Back);
         }
 
+        public static void NotifyAppTerminating()
+        {
+            try
+            {
+                _currentScreen?.OnHide();
+            }
+            catch { }
+        }
+
         private static void NavigateImmediate(ScreenBase screen, bool addToStack)
         {
             if (_currentScreen != null)

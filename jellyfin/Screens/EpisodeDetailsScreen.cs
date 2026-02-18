@@ -17,6 +17,10 @@ namespace JellyfinTizen.Screens
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
         private const float ButtonFocusScale = 1.08f;
+        private const int FixedTopContentHeight = 500;
+        private const int FixedOverviewViewportHeight = 240;
+        private const int OverviewScrollStepPx = 70;
+        private const int OverviewScrollTailPx = 28;
         private readonly JellyfinMovie _episode;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -41,6 +45,10 @@ namespace JellyfinTizen.Screens
         private View _metadataRatingGroup;
         private TextLabel _metadataRatingLabel;
         private View _metadataTagRow;
+        private View _overviewViewport;
+        private TextLabel _overviewLabel;
+        private int _overviewScrollOffset;
+        private int _overviewMaxScroll;
         private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
         private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
         private readonly bool _hasPrefetchedSubtitleStreams;
@@ -124,6 +132,19 @@ namespace JellyfinTizen.Screens
             _infoColumn = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent
+            };
+
+            var topContentViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = FixedTopContentHeight,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
+            var topContent = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 Layout = new LinearLayout
                 {
@@ -132,34 +153,36 @@ namespace JellyfinTizen.Screens
                 }
             };
             var titleText = $"{_episode.SeriesName} - {_episode.Name}";
+            var titlePointSize = GetAdaptiveTitlePointSize(titleText);
             var title = new TextLabel(titleText)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 140,
-                PointSize = 64,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = titlePointSize,
                 TextColor = Color.White,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
+                Ellipsis = false,
                 VerticalAlignment = VerticalAlignment.Top
             };
 
             _metadataContainer = CreateMetadataView();
-            var overviewViewport = new View
+            var overviewText = string.IsNullOrEmpty(_episode.Overview)
+                ? "No overview available."
+                : _episode.Overview;
+            var overviewPointSize = 31f;
+            _overviewViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 360,
+                HeightSpecification = FixedOverviewViewportHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
-            var overview = new TextLabel(
-                string.IsNullOrEmpty(_episode.Overview)
-                    ? "No overview available."
-                    : _episode.Overview
-            )
+            _overviewLabel = new TextLabel(overviewText)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 32,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = overviewPointSize,
                 TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
@@ -167,10 +190,12 @@ namespace JellyfinTizen.Screens
                 VerticalAlignment = VerticalAlignment.Top
             };
 
-            overviewViewport.Add(overview);
-            _infoColumn.Add(title);
-            _infoColumn.Add(_metadataContainer);
-            _infoColumn.Add(overviewViewport);
+            _overviewViewport.Add(_overviewLabel);
+            topContent.Add(title);
+            topContent.Add(_metadataContainer);
+            topContent.Add(_overviewViewport);
+            topContentViewport.Add(topContent);
+            _infoColumn.Add(topContentViewport);
             UpdateMetadataView();
             _buttonGroup = new View
             {
@@ -181,7 +206,8 @@ namespace JellyfinTizen.Screens
                     LinearOrientation = LinearLayout.Orientation.Vertical,
                     CellPadding = new Size2D(0, 14)
                 },
-                Margin = new Extents(0, 0, 20, 0)
+                Margin = new Extents(0, 0, 26, 0),
+                PositionY = 560
             };
 
             _buttonRowTop = CreateButtonRow();
@@ -214,6 +240,15 @@ namespace JellyfinTizen.Screens
             root.Add(content);
             Add(root);
         }
+
+        private static float GetAdaptiveTitlePointSize(string titleText)
+        {
+            int length = string.IsNullOrWhiteSpace(titleText) ? 0 : titleText.Length;
+            if (length > 90) return 46f;
+            if (length > 65) return 50f;
+            return 56f;
+        }
+
         public override void OnShow()
         {
             if (!_hasPrefetchedSubtitleStreams)
@@ -221,6 +256,7 @@ namespace JellyfinTizen.Screens
             if (!_hasPrefetchedMediaSources)
                 _ = LoadMediaSourcesAsync();
             FocusButton(0);
+            RunOnUiThread(RefreshOverviewScrollBounds);
         }
 
         public override void OnHide()
@@ -275,6 +311,12 @@ namespace JellyfinTizen.Screens
         {
             switch (key)
             {
+                case AppKey.Up:
+                    ScrollOverview(-OverviewScrollStepPx);
+                    break;
+                case AppKey.Down:
+                    ScrollOverview(OverviewScrollStepPx);
+                    break;
                 case AppKey.Left:
                     MoveFocus(-1);
                     break;
@@ -358,6 +400,67 @@ namespace JellyfinTizen.Screens
                 else
                     _buttonRowBottom.Add(button);
             }
+        }
+
+        private void RefreshOverviewScrollBounds()
+        {
+            if (_overviewViewport == null || _overviewLabel == null)
+                return;
+
+            int viewportHeight = (int)Math.Round(_overviewViewport.SizeHeight);
+            if (viewportHeight <= 0)
+                viewportHeight = FixedOverviewViewportHeight;
+
+            int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
+            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
+            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
+            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
+
+            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
+            _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private void ScrollOverview(int delta)
+        {
+            if (_overviewLabel == null)
+                return;
+
+            // Recompute on each input so late layout updates can expand the reachable range.
+            RefreshOverviewScrollBounds();
+
+            int nextOffset = Math.Clamp(_overviewScrollOffset + delta, 0, _overviewMaxScroll);
+            if (nextOffset == _overviewScrollOffset)
+                return;
+
+            _overviewScrollOffset = nextOffset;
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private int EstimateOverviewContentHeight(int viewportWidth)
+        {
+            string text = _overviewLabel?.Text ?? string.Empty;
+            if (string.IsNullOrEmpty(text))
+                return 0;
+
+            float pointSize = _overviewLabel.PointSize > 0 ? _overviewLabel.PointSize : 31f;
+            int safeWidth = viewportWidth > 0 ? viewportWidth : 960;
+            int charsPerLine = Math.Max(12, (int)Math.Floor(safeWidth / Math.Max(1f, pointSize * 0.56f)));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (paragraph.Length == 0)
+                {
+                    lineCount += 1;
+                    continue;
+                }
+
+                lineCount += (int)Math.Ceiling(paragraph.Length / (double)charsPerLine);
+            }
+
+            int lineHeight = (int)Math.Ceiling(pointSize * 1.55f);
+            return Math.Max(0, lineCount * lineHeight);
         }
 
         private static void ClearRowChildren(View row)

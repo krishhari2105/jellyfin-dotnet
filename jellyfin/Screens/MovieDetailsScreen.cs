@@ -18,6 +18,10 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const float ButtonFocusScale = 1.08f;
         private const float EpisodeFocusScale = 1.03f;
+        private const int FixedTopContentHeight = 500;
+        private const int FixedOverviewViewportHeight = 240;
+        private const int OverviewScrollStepPx = 70;
+        private const int OverviewScrollTailPx = 28;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -47,6 +51,10 @@ namespace JellyfinTizen.Screens
         private View _metadataRatingGroup;
         private TextLabel _metadataRatingLabel;
         private View _metadataTagRow;
+        private View _overviewViewport;
+        private TextLabel _overviewLabel;
+        private int _overviewScrollOffset;
+        private int _overviewMaxScroll;
         private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
         private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
 
@@ -121,23 +129,48 @@ namespace JellyfinTizen.Screens
             var titleText = _mediaItem.ItemType == "Episode" ? $"{_mediaItem.SeriesName} - {_mediaItem.Name}" : _mediaItem.Name;
             var title = CreateDetailsTitleView(titleText);
             _metadataContainer = CreateMetadataView();
-            var overview = new TextLabel(
-                string.IsNullOrEmpty(_mediaItem.Overview)
-                    ? "No overview available."
-                    : _mediaItem.Overview
-            )
+            var overviewText = string.IsNullOrEmpty(_mediaItem.Overview)
+                ? "No overview available."
+                : _mediaItem.Overview;
+            var topContentViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 360,
-                PointSize = 32,
+                HeightSpecification = FixedTopContentHeight,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+            var topContent = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 26)
+                }
+            };
+            _overviewViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = FixedOverviewViewportHeight,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+            _overviewLabel = new TextLabel(overviewText)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 31,
                 TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
+                Ellipsis = false,
                 VerticalAlignment = VerticalAlignment.Top
             };
-            _infoColumn.Add(title);
-            _infoColumn.Add(_metadataContainer);
-            _infoColumn.Add(overview);
+            _overviewViewport.Add(_overviewLabel);
+            topContent.Add(title);
+            topContent.Add(_metadataContainer);
+            topContent.Add(_overviewViewport);
+            topContentViewport.Add(topContent);
+            _infoColumn.Add(topContentViewport);
             UpdateMetadataView();
             if (_mediaItem.ItemType == "Movie" || _mediaItem.ItemType == "Episode")
             {
@@ -150,7 +183,7 @@ namespace JellyfinTizen.Screens
                         LinearOrientation = LinearLayout.Orientation.Vertical,
                         CellPadding = new Size2D(0, 14)
                     },
-                    Margin = new Extents(0, 0, 20, 0)
+                    Margin = new Extents(0, 0, 34, 0)
                 };
 
                 _buttonRowTop = CreateButtonRow();
@@ -191,6 +224,7 @@ namespace JellyfinTizen.Screens
                 _ = LoadSubtitleStreamsAsync();
                 _ = LoadMediaSourcesAsync();
                 FocusButton(0);
+                RunOnUiThread(RefreshOverviewScrollBounds);
             }
         }
 
@@ -235,11 +269,12 @@ namespace JellyfinTizen.Screens
             return new TextLabel(text)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 140,
-                PointSize = 64,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 56,
                 TextColor = Color.White,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
+                Ellipsis = false,
                 VerticalAlignment = VerticalAlignment.Top
             };
         }
@@ -370,6 +405,10 @@ namespace JellyfinTizen.Screens
                 case AppKey.Right:
                     MoveFocus(1);
                     break;
+                case AppKey.Up:
+                    if (_mediaItem.ItemType != "Series")
+                        ScrollOverview(-OverviewScrollStepPx);
+                    break;
                 case AppKey.Enter:
                     ActivateFocusedButton();
                     break;
@@ -382,9 +421,75 @@ namespace JellyfinTizen.Screens
                         _isEpisodeViewFocused = true;
                         FocusEpisode(0);
                     }
+                    else if (_mediaItem.ItemType != "Series")
+                    {
+                        ScrollOverview(OverviewScrollStepPx);
+                    }
                     break;
             }
         }
+
+        private void RefreshOverviewScrollBounds()
+        {
+            if (_overviewViewport == null || _overviewLabel == null)
+                return;
+
+            int viewportHeight = (int)Math.Round(_overviewViewport.SizeHeight);
+            if (viewportHeight <= 0)
+                viewportHeight = FixedOverviewViewportHeight;
+
+            int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
+            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
+            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
+            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
+
+            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
+            _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private void ScrollOverview(int delta)
+        {
+            if (_overviewLabel == null)
+                return;
+
+            // Recompute on each input so late layout updates can expand the reachable range.
+            RefreshOverviewScrollBounds();
+
+            int nextOffset = Math.Clamp(_overviewScrollOffset + delta, 0, _overviewMaxScroll);
+            if (nextOffset == _overviewScrollOffset)
+                return;
+
+            _overviewScrollOffset = nextOffset;
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private int EstimateOverviewContentHeight(int viewportWidth)
+        {
+            string text = _overviewLabel?.Text ?? string.Empty;
+            if (string.IsNullOrEmpty(text))
+                return 0;
+
+            float pointSize = _overviewLabel.PointSize > 0 ? _overviewLabel.PointSize : 31f;
+            int safeWidth = viewportWidth > 0 ? viewportWidth : 960;
+            int charsPerLine = Math.Max(12, (int)Math.Floor(safeWidth / Math.Max(1f, pointSize * 0.56f)));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (paragraph.Length == 0)
+                {
+                    lineCount += 1;
+                    continue;
+                }
+
+                lineCount += (int)Math.Ceiling(paragraph.Length / (double)charsPerLine);
+            }
+
+            int lineHeight = (int)Math.Ceiling(pointSize * 1.55f);
+            return Math.Max(0, lineCount * lineHeight);
+        }
+
         private void HandleEpisodeKey(AppKey key)
         {
             switch (key)

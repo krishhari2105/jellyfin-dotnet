@@ -491,13 +491,15 @@ namespace JellyfinTizen.Core
 
         public async Task ReportPlaybackStartAsync(PlaybackProgressInfo info)
         {
-            info.EventName = "TimeUpdate";
+            if (string.IsNullOrWhiteSpace(info.EventName))
+                info.EventName = "TimeUpdate";
             await PostAsync("/Sessions/Playing", info);
         }
 
         public async Task ReportPlaybackProgressAsync(PlaybackProgressInfo info)
         {
-            info.EventName = "TimeUpdate";
+            if (string.IsNullOrWhiteSpace(info.EventName))
+                info.EventName = "TimeUpdate";
             await PostAsync("/Sessions/Playing/Progress", info);
         }
 

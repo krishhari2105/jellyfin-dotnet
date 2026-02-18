@@ -13,6 +13,18 @@ namespace JellyfinTizen
             Initialize();
         }
 
+        protected override void OnPause()
+        {
+            base.OnPause();
+            NavigationService.NotifyAppTerminating();
+        }
+
+        protected override void OnTerminate()
+        {
+            NavigationService.NotifyAppTerminating();
+            base.OnTerminate();
+        }
+
         void Initialize()
         {
             Window.Default.BackgroundColor = Color.Black;
