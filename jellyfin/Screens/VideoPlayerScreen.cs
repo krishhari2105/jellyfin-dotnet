@@ -14,6 +14,7 @@ using System.Net.Http;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Net;
+using System.Globalization;
 
 namespace JellyfinTizen.Screens
 {
@@ -1961,7 +1962,9 @@ namespace JellyfinTizen.Screens
 
             if (_isOutroPopupActive && _movie.ItemType == "Episode")
             {
-                if (!_osdVisible || !_smartPopupFocused)
+                // Hidden OSD popup should activate on Enter.
+                // With OSD visible, require explicit popup focus.
+                if (_osdVisible && !_smartPopupFocused)
                     return false;
 
                 _autoNextTriggered = true;
@@ -2221,7 +2224,9 @@ namespace JellyfinTizen.Screens
 
         private string FormatClockTime(DateTime time)
         {
-            return time.ToString("h:mm tt");
+            // Tizen locale/font stacks can render lowercase am/pm on some TVs.
+            // Force invariant uppercase AM/PM for consistent UI across devices.
+            return time.ToString("h:mm tt", CultureInfo.InvariantCulture).ToUpperInvariant();
         }
 
         private void BeginSeek()
