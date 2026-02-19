@@ -3382,6 +3382,17 @@ namespace JellyfinTizen.Screens
             _lastKnownPositionTicks = 0;
         }
 
+        private async Task ReportPlaybackStoppedSafeAsync(PlaybackProgressInfo info)
+        {
+            try
+            {
+                await AppState.Jellyfin.ReportPlaybackStoppedAsync(info);
+            }
+            catch
+            {
+            }
+        }
+
         private void ReportProgressToServer(bool force = false)
         {
             if (_player == null || _isSeeking || _isFinished || _currentMediaSource == null) return;
@@ -3482,12 +3493,7 @@ namespace JellyfinTizen.Screens
                         PositionTicks = stopPositionTicks,
                         EventName = "Stop"
                     };
-                    try
-                    {
-                        var stopTask = AppState.Jellyfin.ReportPlaybackStoppedAsync(info);
-                        stopTask.Wait(800);
-                    }
-                    catch { }
+                    _ = ReportPlaybackStoppedSafeAsync(info);
                 }
             } catch {}
             ClearReportingContext();

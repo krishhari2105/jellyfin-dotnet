@@ -10,6 +10,22 @@ namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
+        private readonly struct TransitionSpec
+        {
+            public TransitionSpec(int durationMs, float slideDistance, bool deferIncomingOnShow, bool deferOutgoingOnHide)
+            {
+                DurationMs = durationMs;
+                SlideDistance = slideDistance;
+                DeferIncomingOnShow = deferIncomingOnShow;
+                DeferOutgoingOnHide = deferOutgoingOnHide;
+            }
+
+            public int DurationMs { get; }
+            public float SlideDistance { get; }
+            public bool DeferIncomingOnShow { get; }
+            public bool DeferOutgoingOnHide { get; }
+        }
+
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
@@ -104,14 +120,16 @@ namespace JellyfinTizen.Core
 
             _isTransitioning = true;
 
-            outgoing.OnHide();
+            if (!transition.DeferOutgoingOnHide)
+                outgoing.OnHide();
             if (addToStack) _stack.Push(outgoing);
 
             incoming.PositionX = slide;
             incoming.Opacity = 0.0f;
             _window.Add(incoming);
             _currentScreen = incoming;
-            incoming.OnShow();
+            if (!transition.DeferIncomingOnShow)
+                incoming.OnShow();
 
             UiAnimator.Replace(
                 ref _screenTransitionAnimation,
@@ -126,7 +144,15 @@ namespace JellyfinTizen.Core
                     },
                     () =>
                     {
+                        if (transition.DeferOutgoingOnHide)
+                        {
+                            try { outgoing.OnHide(); } catch { }
+                        }
                         CleanupOutgoingAfterNavigate(outgoing, addToStack);
+                        if (transition.DeferIncomingOnShow)
+                        {
+                            try { incoming.OnShow(); } catch { }
+                        }
                         _isTransitioning = false;
                         _screenTransitionAnimation = null;
                     }
@@ -215,13 +241,15 @@ namespace JellyfinTizen.Core
 
             _isTransitioning = true;
 
-            outgoing.OnHide();
+            if (!transition.DeferOutgoingOnHide)
+                outgoing.OnHide();
 
             incoming.PositionX = -slide * 0.6f;
             incoming.Opacity = 0.0f;
             _window.Add(incoming);
             _currentScreen = incoming;
-            incoming.OnShow();
+            if (!transition.DeferIncomingOnShow)
+                incoming.OnShow();
 
             UiAnimator.Replace(
                 ref _screenTransitionAnimation,
@@ -236,8 +264,16 @@ namespace JellyfinTizen.Core
                     },
                     () =>
                     {
+                        if (transition.DeferOutgoingOnHide)
+                        {
+                            try { outgoing.OnHide(); } catch { }
+                        }
                         try { _window.Remove(outgoing); } catch { }
                         try { outgoing.Dispose(); } catch { }
+                        if (transition.DeferIncomingOnShow)
+                        {
+                            try { incoming.OnShow(); } catch { }
+                        }
                         _isTransitioning = false;
                         _screenTransitionAnimation = null;
                     }
@@ -327,9 +363,15 @@ namespace JellyfinTizen.Core
             return Math.Max(UiAnimator.ScreenSlideDistance, _window.Size.Width * 0.08f);
         }
 
-        private static (int DurationMs, float SlideDistance) GetTransitionSpec(ScreenBase outgoing, ScreenBase incoming)
+        private static TransitionSpec GetTransitionSpec(ScreenBase outgoing, ScreenBase incoming)
         {
-            return (UiAnimator.ScreenDurationMs, GetSlideDistance());
+            bool outgoingIsVideoPlayer = outgoing is VideoPlayerScreen;
+            bool incomingIsVideoPlayer = incoming is VideoPlayerScreen;
+            return new TransitionSpec(
+                UiAnimator.ScreenDurationMs,
+                GetSlideDistance(),
+                deferIncomingOnShow: incomingIsVideoPlayer,
+                deferOutgoingOnHide: outgoingIsVideoPlayer);
         }
 
         private static bool ShouldAnimateTransition(ScreenBase outgoing, ScreenBase incoming, bool animated)
