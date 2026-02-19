@@ -22,6 +22,7 @@ namespace JellyfinTizen.Screens
         private const int FixedOverviewViewportHeight = 240;
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
+        private const int ActionButtonHeight = 70;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -191,13 +192,12 @@ namespace JellyfinTizen.Screens
                 _buttonGroup.Add(_buttonRowTop);
                 _buttonGroup.Add(_buttonRowBottom);
 
-                _playButton = CreateActionButton("Play", isPrimary: true);
-                _playButton.WidthSpecification = 200;
+                _playButton = CreateActionButton(string.Empty, isPrimary: true, iconFile: "play.svg", width: 122, iconSize: 46);
 
                 if (_resumeAvailable)
                 {
-                    var resumeText = $"Resume ({FormatResumeTime(_mediaItem.PlaybackPositionTicks)})";
-                    _resumeButton = CreateActionButton(resumeText, isPrimary: false);
+                    var resumeText = FormatResumeTime(_mediaItem.PlaybackPositionTicks);
+                    _resumeButton = CreateActionButton(resumeText, isPrimary: false, iconFile: "resume.svg", width: null, iconSize: 46);
                 }
 
                 _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
@@ -530,27 +530,110 @@ namespace JellyfinTizen.Screens
                 FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
             }
         }
-        private View CreateActionButton(string text, bool isPrimary)
+        private View CreateActionButton(string text, bool isPrimary, string iconFile = null, int? width = 260, int iconSize = 30)
         {
             var button = new View
             {
-                WidthSpecification = 260,
-                HeightSpecification = 70,
+                HeightSpecification = ActionButtonHeight,
                 BackgroundColor = new Color(1, 1, 1, 0.15f),
                 Focusable = true,
-                CornerRadius = 35.0f
+                CornerRadius = ActionButtonHeight / 2.0f
             };
-            var label = new TextLabel(text)
+            bool autoWidth = !width.HasValue;
+            if (autoWidth)
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 26,
-                TextColor = Color.White,
-                Ellipsis = true
-            };
-            button.Add(label);
+                button.WidthResizePolicy = ResizePolicyType.FitToChildren;
+                button.Padding = new Extents(34, 34, 8, 8);
+                button.Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+            }
+            else
+            {
+                button.WidthSpecification = width.Value;
+            }
+
+            if (!string.IsNullOrWhiteSpace(iconFile))
+            {
+                var iconPath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
+                var icon = new ImageView
+                {
+                    WidthSpecification = iconSize,
+                    HeightSpecification = iconSize,
+                    ResourceUrl = iconPath,
+                    PreMultipliedAlpha = false,
+                    FittingMode = FittingModeType.ShrinkToFit,
+                    SamplingMode = SamplingModeType.BoxThenLanczos,
+                    ParentOrigin = Tizen.NUI.ParentOrigin.Center,
+                    PivotPoint = Tizen.NUI.PivotPoint.Center,
+                    PositionUsesPivotPoint = true
+                };
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    var content = new View
+                    {
+                        WidthResizePolicy = ResizePolicyType.FitToChildren,
+                        HeightResizePolicy = ResizePolicyType.FitToChildren,
+                        Layout = new LinearLayout
+                        {
+                            LinearOrientation = LinearLayout.Orientation.Horizontal,
+                            CellPadding = new Size2D(14, 0)
+                        }
+                    };
+                    if (!autoWidth)
+                    {
+                        content.ParentOrigin = Tizen.NUI.ParentOrigin.Center;
+                        content.PivotPoint = Tizen.NUI.PivotPoint.Center;
+                        content.PositionUsesPivotPoint = true;
+                    }
+
+                    var label = new TextLabel(text)
+                    {
+                        HeightSpecification = iconSize,
+                        WidthResizePolicy = ResizePolicyType.FitToChildren,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        PointSize = 26,
+                        TextColor = Color.White,
+                        Ellipsis = true
+                    };
+
+                    var rowIcon = new ImageView
+                    {
+                        WidthSpecification = iconSize,
+                        HeightSpecification = iconSize,
+                        ResourceUrl = iconPath,
+                        PreMultipliedAlpha = false,
+                        FittingMode = FittingModeType.ShrinkToFit,
+                        SamplingMode = SamplingModeType.BoxThenLanczos
+                    };
+
+                    content.Add(rowIcon);
+                    content.Add(label);
+                    button.Add(content);
+                }
+                else
+                {
+                    button.Add(icon);
+                }
+            }
+            else
+            {
+                var label = new TextLabel(text)
+                {
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FillToParent,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    PointSize = 26,
+                    TextColor = Color.White,
+                    Ellipsis = true
+                };
+                button.Add(label);
+            }
+
             return button;
         }
 
@@ -977,14 +1060,15 @@ namespace JellyfinTizen.Screens
                 }
             };
 
+            bool hasIcon = false;
             if (isDolbyVisionChip || isDolbyAudioChip)
             {
-                string iconFile = isDolbyVisionChip ? "dolby_vision.png" : "dolby_audio.png";
+                string iconFile = isDolbyVisionChip ? "dolby_vision.svg" : "dolby_audio.svg";
                 string iconPath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
                 if (File.Exists(iconPath))
                 {
-                    int iconWidth = isDolbyVisionChip ? 130 : 24;
-                    int iconHeight = 20;
+                    int iconWidth = isDolbyVisionChip ? 124 : 24;
+                    int iconHeight = isDolbyVisionChip ? 22 : 20;
                     chip.Add(new ImageView
                     {
                         WidthSpecification = iconWidth,
@@ -995,11 +1079,17 @@ namespace JellyfinTizen.Screens
                         SamplingMode = SamplingModeType.BoxThenLanczos,
                         Margin = isDolbyVisionChip ? new Extents(0, 0, 0, 0) : new Extents(0, 8, 0, 0)
                     });
+                    hasIcon = true;
                 }
             }
 
             if (isDolbyVisionChip)
-                return chip;
+            {
+                chip.Padding = new Extents(10, 10, 8, 8);
+                if (hasIcon)
+                    return chip;
+                chipLabelText = "Dolby Vision";
+            }
 
             var label = new TextLabel(chipLabelText)
             {

@@ -145,7 +145,7 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 ResourceUrl = hasAvatar
                     ? avatarUrl
-                    : sharedResPath + "settings.png",
+                    : sharedResPath + "settings.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos,
                 Padding = hasAvatar

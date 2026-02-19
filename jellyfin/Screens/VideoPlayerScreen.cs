@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Tizen.Multimedia;
 using Tizen.NUI;
@@ -180,6 +180,7 @@ namespace JellyfinTizen.Screens
         private const int SmartPopupIntroHeight = 72;
         private const int SmartPopupOutroHeight = 104;
         private const int SmartPopupGapAboveSeekbar = 28;
+        private const int TopOsdSidePadding = 60;
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -190,6 +191,7 @@ namespace JellyfinTizen.Screens
         private string _activeReportPlaySessionId;
         private string _activeReportMediaSourceId;
         private string _activeReportPlayMethod = "DirectPlay";
+        private View _topOsdTitleView;
 
         private struct SubtitleCue
         {
@@ -1026,7 +1028,7 @@ namespace JellyfinTizen.Screens
 
         private void CreateOSD()
         {
-            int sidePadding = 60; int labelWidth = 140; int labelGap = 20; int bottomHeight = 260; int topHeight = 160; int screenWidth = Window.Default.Size.Width;
+            int sidePadding = TopOsdSidePadding; int labelWidth = 140; int labelGap = 20; int bottomHeight = 260; int topHeight = 160; int screenWidth = Window.Default.Size.Width;
             _topOsdShownY = 0;
             _topOsdHiddenY = -OsdSlideDistance;
             _osdShownY = Window.Default.Size.Height - bottomHeight;
@@ -1048,7 +1050,8 @@ namespace JellyfinTizen.Screens
             _topOsd.Background = topGradient;
             _topOsd.Hide();
 
-            _topOsd.Add(CreateTopOsdTitleView(sidePadding));
+            _topOsdTitleView = CreateTopOsdTitleView(sidePadding);
+            _topOsd.Add(_topOsdTitleView);
             _clockLabel = new TextLabel(FormatClockTime(DateTime.Now))
             {
                 PositionX = screenWidth - sidePadding - 180,
@@ -1123,9 +1126,9 @@ namespace JellyfinTizen.Screens
                     CellPadding = new Size2D(36, 0)
                 }
             };
-            _audioButton = CreateOsdButton("audio.png", "Audio", 168);
-            _subtitleButton = CreateOsdButton("sub.png", "Subtitles", 206);
-            _nextButton = CreateOsdButton("next.png", "Next Episode", 242);
+            _audioButton = CreateOsdButton("audio.svg", "Audio", 168);
+            _subtitleButton = CreateOsdButton("sub.svg", "Subtitles", 206);
+            _nextButton = CreateOsdButton("next.svg", "Next Episode", 242);
 
             _controlsContainer.Add(_audioButton);
             _controlsContainer.Add(_subtitleButton);
@@ -1243,6 +1246,27 @@ namespace JellyfinTizen.Screens
             }
 
             return CreateTopOsdTitleLabel(sidePadding, GetFallbackOsdTitleText());
+        }
+
+        private void RefreshTopOsdTitleView()
+        {
+            if (_topOsd == null)
+                return;
+
+            try
+            {
+                if (_topOsdTitleView != null)
+                    _topOsd.Remove(_topOsdTitleView);
+            }
+            catch
+            {
+            }
+
+            _topOsdTitleView = CreateTopOsdTitleView(TopOsdSidePadding);
+            _topOsd.Add(_topOsdTitleView);
+
+            if (_clockLabel != null)
+                _clockLabel.RaiseToTop();
         }
 
         private TextLabel CreateTopOsdTitleLabel(int sidePadding, string text)
@@ -1453,8 +1477,8 @@ namespace JellyfinTizen.Screens
                 return;
 
             _seekFeedbackIcon.ResourceUrl = direction > 0
-                ? _sharedResPath + "forward.png"
-                : _sharedResPath + "reverse.png";
+                ? _sharedResPath + "forward.svg"
+                : _sharedResPath + "reverse.svg";
             _seekFeedbackLabel.Text = $"{Math.Abs(seekSeconds)}s";
             _seekFeedbackContainer.PositionX = direction > 0
                 ? (int)(Window.Default.Size.Width * 0.70f) - 90
@@ -1519,7 +1543,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 90,
                 PositionX = 25,
                 PositionY = 25,
-                ResourceUrl = _sharedResPath + "play.png",
+                ResourceUrl = _sharedResPath + "play.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
             };
@@ -1530,7 +1554,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 90,
                 PositionX = 25,
                 PositionY = 25,
-                ResourceUrl = _sharedResPath + "pause.png",
+                ResourceUrl = _sharedResPath + "pause.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
             };
@@ -1643,7 +1667,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 30,
                 PositionX = SmartPopupMinWidth - 44,
                 PositionY = (SmartPopupIntroHeight - 30) / 2,
-                ResourceUrl = ResolveFreshIconPath("next.png"),
+                ResourceUrl = ResolveFreshIconPath("next.svg"),
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
             };
@@ -1812,7 +1836,9 @@ namespace JellyfinTizen.Screens
             {
                 var segments = await AppState.Jellyfin.GetMediaSegmentsAsync(_movie.Id, "Intro", "Outro");
                 if (segments == null || segments.Count == 0)
+                {
                     return;
+                }
 
                 var intro = SelectSegmentWindow(segments, "Intro");
                 if (intro.HasValue)
@@ -3729,26 +3755,76 @@ namespace JellyfinTizen.Screens
                 StopPlayback();
                 var seasons = await AppState.Jellyfin.GetSeasonsAsync(_movie.SeriesId);
                 if (seasons == null || seasons.Count == 0) { NavigationService.NavigateBack(); return; }
-                seasons.Sort((a, b) => a.IndexNumber.CompareTo(b.IndexNumber));
-                var currentSeason = seasons.Find(s => s.IndexNumber == _movie.ParentIndexNumber) ?? seasons[0];
-                var episodes = await AppState.Jellyfin.GetEpisodesAsync(currentSeason.Id) ?? new List<JellyfinMovie>();
-                var currentIndex = episodes.FindIndex(e => e.Id == _movie.Id);
 
-                if (currentIndex == -1) 
+                seasons = seasons
+                    .OrderBy(s => s.IndexNumber)
+                    .ThenBy(s => s.Name)
+                    .ToList();
+
+                var orderedEpisodes = new List<JellyfinMovie>();
+                foreach (var season in seasons)
                 {
-                    foreach(var s in seasons) { var eps = await AppState.Jellyfin.GetEpisodesAsync(s.Id); var idx = eps.FindIndex(e => e.Id == _movie.Id); if (idx != -1) { currentSeason = s; episodes = eps; currentIndex = idx; break; } }
+                    var eps = await AppState.Jellyfin.GetEpisodesAsync(season.Id) ?? new List<JellyfinMovie>();
+                    var orderedSeasonEpisodes = eps
+                        .Where(e => e != null && e.ItemType == "Episode")
+                        .OrderBy(e => e.IndexNumber)
+                        .ThenBy(e => e.Name)
+                        .ToList();
+                    orderedEpisodes.AddRange(orderedSeasonEpisodes);
                 }
-                
-                int nextIndex = currentIndex + offset;
-                if (nextIndex >= 0 && nextIndex < episodes.Count) { LoadNewMedia(episodes[nextIndex]); return; }
 
-                int seasonPos = seasons.FindIndex(s => s.Id == currentSeason.Id);
-                if (offset > 0) {
-                    for (int si = seasonPos + 1; si < seasons.Count; si++) { var eps = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id); if (eps.Count > 0) { LoadNewMedia(eps[0]); return; } }
-                } else {
-                    for (int si = seasonPos - 1; si >= 0; si--) { var eps = await AppState.Jellyfin.GetEpisodesAsync(seasons[si].Id); if (eps.Count > 0) { LoadNewMedia(eps[eps.Count-1]); return; } }
+                if (orderedEpisodes.Count == 0) { NavigationService.NavigateBack(); return; }
+
+                int currentPos = orderedEpisodes.FindIndex(e => e.Id == _movie.Id);
+                if (currentPos < 0)
+                {
+                    currentPos = orderedEpisodes.FindIndex(e =>
+                        e.ParentIndexNumber == _movie.ParentIndexNumber &&
+                        e.IndexNumber == _movie.IndexNumber);
                 }
-                NavigationService.NavigateBack();
+
+                JellyfinMovie target = null;
+                int currentSeason = currentPos >= 0 ? orderedEpisodes[currentPos].ParentIndexNumber : _movie.ParentIndexNumber;
+                int currentEpisodeNumber = currentPos >= 0 ? orderedEpisodes[currentPos].IndexNumber : _movie.IndexNumber;
+
+                bool currentHasValidEpisodeNumber = currentSeason > 0 || currentEpisodeNumber > 0;
+                var logicalTimeline = currentHasValidEpisodeNumber
+                    ? orderedEpisodes.Where(e =>
+                        e.Id == _movie.Id ||
+                        e.ParentIndexNumber != currentSeason ||
+                        e.IndexNumber != currentEpisodeNumber).ToList()
+                    : orderedEpisodes;
+
+                int logicalCurrentPos = logicalTimeline.FindIndex(e => e.Id == _movie.Id);
+                if (logicalCurrentPos >= 0)
+                {
+                    int nextPos = logicalCurrentPos + (offset >= 0 ? 1 : -1);
+                    if (nextPos >= 0 && nextPos < logicalTimeline.Count)
+                        target = logicalTimeline[nextPos];
+                }
+
+                if (target == null)
+                {
+                    bool IsAfterCurrent(JellyfinMovie e) =>
+                        e.ParentIndexNumber > currentSeason ||
+                        (e.ParentIndexNumber == currentSeason && e.IndexNumber > currentEpisodeNumber);
+
+                    bool IsBeforeCurrent(JellyfinMovie e) =>
+                        e.ParentIndexNumber < currentSeason ||
+                        (e.ParentIndexNumber == currentSeason && e.IndexNumber < currentEpisodeNumber);
+
+                    target = offset > 0
+                        ? logicalTimeline.FirstOrDefault(e => e.Id != _movie.Id && IsAfterCurrent(e))
+                        : logicalTimeline.LastOrDefault(e => e.Id != _movie.Id && IsBeforeCurrent(e));
+                }
+
+                if (target == null || target.Id == _movie.Id)
+                {
+                    NavigationService.NavigateBack();
+                    return;
+                }
+
+                LoadNewMedia(target);
             }
             catch (Exception) {NavigationService.NavigateBack(); }
             finally { _isEpisodeSwitchInProgress = false; }
@@ -3757,6 +3833,7 @@ namespace JellyfinTizen.Screens
         private void LoadNewMedia(JellyfinMovie newMovie)
         {
             _movie = newMovie;
+            RefreshTopOsdTitleView();
             _isFinished = false;
             _completedForCurrentItem = false;
             _isEpisodeSwitchInProgress = false;
