@@ -8,6 +8,7 @@ using Tizen.NUI.BaseComponents;
 using Tizen.NUI.Components;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
@@ -85,7 +86,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = new Color(0, 0, 0, 0.65f)
+                BackgroundColor = UiTheme.DetailsBackdropDim
             };
             var content = new View
             {
@@ -105,7 +106,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = PosterWidth,
                 HeightSpecification = PosterHeight,
-                BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 1f),
+                BackgroundColor = UiTheme.DetailsPosterSurface,
                 CornerRadius = 16.0f,
                 ClippingMode = ClippingModeType.ClipChildren
             };
@@ -160,7 +161,7 @@ namespace JellyfinTizen.Screens
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
                 PointSize = 31,
-                TextColor = new Color(0.85f, 0.85f, 0.85f, 1f),
+                TextColor = UiTheme.DetailsOverviewText,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
                 Ellipsis = false,
@@ -535,7 +536,7 @@ namespace JellyfinTizen.Screens
             var button = new View
             {
                 HeightSpecification = ActionButtonHeight,
-                BackgroundColor = new Color(1, 1, 1, 0.15f),
+                BackgroundColor = UiTheme.DetailsActionButtonBase,
                 Focusable = true,
                 CornerRadius = ActionButtonHeight / 2.0f
             };
@@ -725,11 +726,11 @@ namespace JellyfinTizen.Screens
                 // Add focused look
                 if (focused)
                 {
-                    button.BackgroundColor = new Color(0.85f, 0.11f, 0.11f, 1f);
+                    button.BackgroundColor = UiTheme.DetailsActionButtonFocused;
                 }
                 else
                 {
-                    button.BackgroundColor = new Color(1, 1, 1, 0.15f);
+                    button.BackgroundColor = UiTheme.DetailsActionButtonBase;
                 }
             }
 
@@ -1044,7 +1045,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FitToChildren,
                 HeightSpecification = 48,
-                BackgroundColor = new Color(0.22f, 0.22f, 0.22f, 1.0f),
+                BackgroundColor = UiTheme.DetailsChipSurface,
                 CornerRadius = 12.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 ClippingMode = ClippingModeType.ClipChildren,

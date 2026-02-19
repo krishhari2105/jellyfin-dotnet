@@ -1,6 +1,7 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using JellyfinTizen.UI;
 using System.Threading.Tasks;
 using System;
 
@@ -15,71 +16,20 @@ namespace JellyfinTizen.Screens
 
         public ServerSetupScreen()
         {
-            var container = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 40)
-                }
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
+            var panel = UiFactory.CreateCenteredPanel();
+            panel.Add(UiFactory.CreateDisplayTitle("Connect To Your Jellyfin Server"));
+            panel.Add(UiFactory.CreateSubtitle("Enter your server URL to continue."));
 
-            var title = new TextLabel("Enter Jellyfin Server URL")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 52,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
+            var serverInputShell = UiFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
+            _continueButton = UiFactory.CreateButton("Continue", out _continueText, primary: true);
+            _errorLabel = UiFactory.CreateErrorLabel();
 
-            _serverInput = new TextField
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                PlaceholderText = "http://192.168.1.10:8096",
-                PointSize = 36,
-                BackgroundColor = new Color(0.15f, 0.15f, 0.15f, 1f),
-                TextColor = Color.White,
-                Focusable = true
-            };
-
-            // "Button" as a View
-            _continueButton = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                BackgroundColor = new Color(0.25f, 0.25f, 0.25f, 1f),
-                Focusable = true
-            };
-
-            _continueText = new TextLabel("Continue")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 40,
-                TextColor = Color.White
-            };
-
-            _continueButton.Add(_continueText);
-
-            // Error label
-            _errorLabel = new TextLabel(string.Empty)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 32,
-                TextColor = Color.Red,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            container.Add(title);
-            container.Add(_serverInput);
-            container.Add(_continueButton);
-            container.Add(_errorLabel);
-            Add(container);
+            panel.Add(serverInputShell);
+            panel.Add(_continueButton);
+            panel.Add(_errorLabel);
+            root.Add(panel);
+            Add(root);
         }
 
         public override void OnShow()
@@ -93,6 +43,7 @@ namespace JellyfinTizen.Screens
                 }
             }
             FocusManager.Instance.SetCurrentFocusView(_serverInput);
+            HighlightButton(false);
         }
 
         public void HandleKey(AppKey key)
@@ -135,9 +86,7 @@ namespace JellyfinTizen.Screens
 
         private void HighlightButton(bool focused)
         {
-            _continueButton.BackgroundColor =
-                focused ? new Color(0.35f, 0.35f, 0.35f, 1f)
-                        : new Color(0.25f, 0.25f, 0.25f, 1f);
+            UiFactory.SetButtonFocusState(_continueButton, primary: true, focused: focused);
         }
 
         private async void OnContinue()

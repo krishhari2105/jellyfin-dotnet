@@ -7,6 +7,7 @@ using Tizen.NUI.Components;
 using Tizen.Applications;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 using System.Threading.Tasks;
 using System.IO;
@@ -137,6 +138,7 @@ namespace JellyfinTizen.Screens
         private int _osdButtonCount = 1;
         private int _osdFocusRow = 0; // 0 = Seekbar, 1 = Buttons
         private int _buttonFocusIndex = 0;
+        private bool _seekbarFocusVisualActive;
         private Animation _osdAnimation;
         private Animation _topOsdAnimation;
         private Animation _subtitleOverlayAnimation;
@@ -1044,8 +1046,8 @@ namespace JellyfinTizen.Screens
             topOffsets.Add(new PropertyValue(1.0f));
             topGradient.Add(GradientVisualProperty.StopOffset, new PropertyValue(topOffsets));
             var topColors = new PropertyArray();
-            topColors.Add(new PropertyValue(new Color(0, 0, 0, 0.9f)));
-            topColors.Add(new PropertyValue(new Color(0, 0, 0, 0.0f)));
+            topColors.Add(new PropertyValue(UiTheme.PlayerTopGradientStart));
+            topColors.Add(new PropertyValue(UiTheme.PlayerTopGradientEnd));
             topGradient.Add(GradientVisualProperty.StopColor, new PropertyValue(topColors));
             _topOsd.Background = topGradient;
             _topOsd.Hide();
@@ -1056,9 +1058,9 @@ namespace JellyfinTizen.Screens
             {
                 PositionX = screenWidth - sidePadding - 180,
                 PositionY = 40,
-                WidthSpecification = 180,
-                HeightSpecification = 42,
-                PointSize = 26,
+                WidthSpecification = UiTheme.PlayerClockBoxWidth,
+                HeightSpecification = UiTheme.PlayerClockBoxHeight,
+                PointSize = UiTheme.PlayerClockText,
                 TextColor = Color.White,
                 VerticalAlignment = VerticalAlignment.Top,
                 HorizontalAlignment = HorizontalAlignment.End
@@ -1076,22 +1078,22 @@ namespace JellyfinTizen.Screens
             bottomOffsets.Add(new PropertyValue(1.0f));
             bottomGradient.Add(GradientVisualProperty.StopOffset, new PropertyValue(bottomOffsets));
             var bottomColors = new PropertyArray();
-            bottomColors.Add(new PropertyValue(new Color(0, 0, 0, 0.0f)));
-            bottomColors.Add(new PropertyValue(new Color(0, 0, 0, 0.95f)));
+            bottomColors.Add(new PropertyValue(UiTheme.PlayerBottomGradientStart));
+            bottomColors.Add(new PropertyValue(UiTheme.PlayerBottomGradientEnd));
             bottomGradient.Add(GradientVisualProperty.StopColor, new PropertyValue(bottomColors));
             _osd.Background = bottomGradient;
             _osd.Hide();
 
-            var progressRow = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 50, PositionY = 90 };
-            _currentTimeLabel = new TextLabel("00:00") { PositionX = sidePadding, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Begin };
-            _durationLabel = new TextLabel("00:00") { PositionX = screenWidth - sidePadding - labelWidth, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.End };
+            var progressRow = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerProgressRowHeight, PositionY = UiTheme.PlayerProgressRowY };
+            _currentTimeLabel = new TextLabel("00:00") { PositionX = sidePadding, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerTimeTextSize, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.Begin };
+            _durationLabel = new TextLabel("00:00") { PositionX = screenWidth - sidePadding - labelWidth, WidthSpecification = labelWidth, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerTimeTextSize, TextColor = Color.White, VerticalAlignment = VerticalAlignment.Center, HorizontalAlignment = HorizontalAlignment.End };
 
             int trackStartX = sidePadding + labelWidth + labelGap;
             int trackWidth = screenWidth - (2 * trackStartX);
 
-            _progressTrack = new View { PositionX = trackStartX, WidthSpecification = trackWidth, HeightSpecification = 6, BackgroundColor = new Color(1, 1, 1, 0.3f), PositionY = 22, CornerRadius = 3.0f };
-            _progressFill = new View { HeightSpecification = 6, BackgroundColor = new Color(0, 164f/255f, 220f/255f, 1f), WidthSpecification = 0, CornerRadius = 3.0f }; 
-            _previewFill = new View { HeightSpecification = 6, BackgroundColor = new Color(1, 1, 1, 0.6f), WidthSpecification = 0, CornerRadius = 3.0f };
+            _progressTrack = new View { PositionX = trackStartX, WidthSpecification = trackWidth, HeightSpecification = 6, BackgroundColor = UiTheme.PlayerTrackBase, PositionY = 22, CornerRadius = 3.0f };
+            _progressFill = new View { HeightSpecification = 6, BackgroundColor = UiTheme.Accent, WidthSpecification = 0, CornerRadius = 3.0f };
+            _previewFill = new View { HeightSpecification = 6, BackgroundColor = UiTheme.PlayerPreviewFill, WidthSpecification = 0, CornerRadius = 3.0f };
             _progressTrack.Add(_progressFill);
             _progressTrack.Add(_previewFill);
 
@@ -1101,9 +1103,9 @@ namespace JellyfinTizen.Screens
                 PositionX = trackStartX,
                 PositionY = 40,
                 WidthSpecification = trackWidth,
-                HeightSpecification = 36,
-                PointSize = 23,
-                TextColor = new Color(1, 1, 1, 0.9f),
+                HeightSpecification = UiTheme.PlayerEndsAtHeight,
+                PointSize = UiTheme.PlayerEndsAtText,
+                TextColor = UiTheme.PlayerTimeText,
                 VerticalAlignment = VerticalAlignment.Top,
                 HorizontalAlignment = HorizontalAlignment.End
             };
@@ -1117,7 +1119,7 @@ namespace JellyfinTizen.Screens
             _controlsContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 80,
+                HeightSpecification = UiTheme.PlayerControlsRowHeight,
                 PositionY = 155,
                 Layout = new LinearLayout
                 {
@@ -1277,7 +1279,7 @@ namespace JellyfinTizen.Screens
                 PositionY = 40,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 36,
+                PointSize = UiTheme.PlayerTopTitleText,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Top
@@ -1296,9 +1298,9 @@ namespace JellyfinTizen.Screens
             var btn = new View
             {
                 WidthSpecification = width,
-                HeightSpecification = 60,
-                BackgroundColor = new Color(1f, 1f, 1f, 0.10f),
-                CornerRadius = 28.0f
+                HeightSpecification = UiTheme.PlayerControlButtonHeight,
+                BackgroundColor = UiTheme.PlayerButtonBase,
+                CornerRadius = UiTheme.PlayerControlButtonRadius
             };
 
             var content = new View
@@ -1316,8 +1318,8 @@ namespace JellyfinTizen.Screens
 
             var icon = new ImageView
             {
-                WidthSpecification = 28,
-                HeightSpecification = 28,
+                WidthSpecification = UiTheme.PlayerControlIconSize,
+                HeightSpecification = UiTheme.PlayerControlIconSize,
                 ResourceUrl = ResolveFreshIconPath(iconFile),
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
@@ -1329,7 +1331,7 @@ namespace JellyfinTizen.Screens
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 TextColor = Color.White,
-                PointSize = 26
+                PointSize = UiTheme.PlayerControlLabelText
             };
 
             content.Add(icon);
@@ -1428,7 +1430,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 180,
                 PositionX = (int)(screenWidth * 0.70f) - 90,
                 PositionY = (screenHeight / 2) - 90,
-                BackgroundColor = new Color(0f, 0f, 0f, 0.28f),
+                BackgroundColor = UiTheme.PlayerSeekBackdrop,
                 CornerRadius = 24.0f,
                 Opacity = 0.0f,
                 Scale = Vector3.One
@@ -1458,7 +1460,7 @@ namespace JellyfinTizen.Screens
             _seekFeedbackLabel = new TextLabel("10s")
             {
                 HeightSpecification = 44,
-                PointSize = 24,
+                PointSize = UiTheme.PlayerSeekFeedbackText,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
@@ -1531,7 +1533,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 140,
                 PositionX = (screenWidth / 2) - 70,
                 PositionY = (screenHeight / 2) - 70,
-                BackgroundColor = new Color(0f, 0f, 0f, 0.34f),
+                BackgroundColor = UiTheme.PlayerFeedbackBackdrop,
                 CornerRadius = 70.0f,
                 Opacity = 0.0f,
                 Scale = new Vector3(0.9f, 0.9f, 1f)
@@ -1625,7 +1627,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = SmartPopupMinWidth,
                 HeightSpecification = SmartPopupIntroHeight,
-                BackgroundColor = new Color(0.16f, 0.18f, 0.22f, 0.95f),
+                BackgroundColor = UiTheme.PlayerPanel,
                 CornerRadius = 8.0f,
                 Opacity = 0.0f,
                 Scale = new Vector3(0.98f, 0.98f, 1f)
@@ -1642,7 +1644,7 @@ namespace JellyfinTizen.Screens
                 PositionX = 28,
                 WidthSpecification = SmartPopupMinWidth - 60,
                 HeightSpecification = SmartPopupIntroHeight,
-                PointSize = 27,
+                PointSize = UiTheme.PlayerSmartPopupTitle,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Center
@@ -1654,8 +1656,8 @@ namespace JellyfinTizen.Screens
                 PositionY = 56,
                 WidthSpecification = SmartPopupMinWidth - 52,
                 HeightSpecification = 36,
-                PointSize = 21,
-                TextColor = new Color(1f, 1f, 1f, 0.92f),
+                PointSize = UiTheme.PlayerSmartPopupSubtitle,
+                TextColor = UiTheme.PlayerSubtitleText,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -1760,8 +1762,8 @@ namespace JellyfinTizen.Screens
                 return;
 
             _smartActionPopup.BackgroundColor = _smartPopupFocused
-                ? new Color(0.24f, 0.27f, 0.33f, 0.98f)
-                : new Color(0.16f, 0.18f, 0.22f, 0.95f);
+                ? UiTheme.PlayerPanelFocused
+                : UiTheme.PlayerPanel;
             AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? new Vector3(1.04f, 1.04f, 1f) : Vector3.One);
         }
 
@@ -2063,8 +2065,8 @@ namespace JellyfinTizen.Screens
         {
              if (button == null) return;
              button.BackgroundColor = focused
-                 ? new Color(0.82f, 0.82f, 0.82f, 0.34f)
-                 : new Color(1f, 1f, 1f, 0.10f);
+                 ? UiTheme.PlayerButtonFocused
+                 : UiTheme.PlayerButtonBase;
              AnimateFocusScale(button, focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One);
         }
 
@@ -2094,7 +2096,7 @@ namespace JellyfinTizen.Screens
             _subtitleOffsetTrackContainer = new View
             {
                 WidthSpecification = SubtitleOffsetTrackWidth,
-                HeightSpecification = 36,
+                HeightSpecification = UiTheme.PlayerSubtitleOffsetTrackHeight,
                 PositionX = trackX,
                 PositionY = 138
             };
@@ -2102,28 +2104,28 @@ namespace JellyfinTizen.Screens
             var trackLine = new View
             {
                 WidthSpecification = SubtitleOffsetTrackWidth,
-                HeightSpecification = 2,
-                PositionY = 17,
-                BackgroundColor = new Color(1, 1, 1, 0.45f),
-                CornerRadius = 1.0f
+                HeightSpecification = UiTheme.PlayerSubtitleOffsetLineHeight,
+                PositionY = UiTheme.PlayerSubtitleOffsetLineY,
+                BackgroundColor = UiTheme.PlayerSubtitleOffsetTrack,
+                CornerRadius = UiTheme.PlayerSubtitleOffsetLineRadius
             };
 
             _subtitleOffsetCenterMarker = new View
             {
-                WidthSpecification = 2,
-                HeightSpecification = 16,
+                WidthSpecification = UiTheme.PlayerSubtitleOffsetCenterWidth,
+                HeightSpecification = UiTheme.PlayerSubtitleOffsetCenterHeight,
                 PositionX = (SubtitleOffsetTrackWidth / 2) - 1,
-                PositionY = 10,
-                BackgroundColor = new Color(1, 1, 1, 0.85f)
+                PositionY = UiTheme.PlayerSubtitleOffsetCenterY,
+                BackgroundColor = UiTheme.PlayerSubtitleOffsetCenter
             };
 
             _subtitleOffsetThumb = new View
             {
-                WidthSpecification = 12,
-                HeightSpecification = 12,
-                PositionY = 12,
-                BackgroundColor = new Color(0, 164f / 255f, 220f / 255f, 1f),
-                CornerRadius = 6.0f
+                WidthSpecification = UiTheme.PlayerSubtitleOffsetThumbSize,
+                HeightSpecification = UiTheme.PlayerSubtitleOffsetThumbSize,
+                PositionY = UiTheme.PlayerSubtitleOffsetThumbY,
+                BackgroundColor = UiTheme.Accent,
+                CornerRadius = UiTheme.PlayerSubtitleOffsetThumbRadius
             };
 
             _subtitleOffsetTrackContainer.Add(trackLine);
@@ -2216,8 +2218,8 @@ namespace JellyfinTizen.Screens
             if (_subtitleOffsetButton != null)
             {
                 _subtitleOffsetButton.BackgroundColor = _subtitleOffsetAdjustMode 
-                    ? new Color(0, 164f / 255f, 220f / 255f, 1f) // Blue when editing
-                    : new Color(1, 1, 1, 0.15f); // Default transparent
+                    ? UiTheme.Accent // Blue when editing
+                    : UiTheme.PlayerSubtitleOffsetBase; // Default transparent
                 
                 AnimateFocusScale(_subtitleOffsetButton, _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One);
             }
@@ -2233,7 +2235,7 @@ namespace JellyfinTizen.Screens
             // Reset subtitle offset button visual
             if (_subtitleOffsetButton != null)
             {
-                _subtitleOffsetButton.BackgroundColor = new Color(1, 1, 1, 0.15f);
+                _subtitleOffsetButton.BackgroundColor = UiTheme.PlayerSubtitleOffsetBase;
                 AnimateFocusScale(_subtitleOffsetButton, Vector3.One);
             }
             UpdateOsdFocus();
@@ -2667,7 +2669,7 @@ namespace JellyfinTizen.Screens
         private void CreateSubtitleOverlay()
         {
             _subtitleOverlayBaseX = Window.Default.Size.Width - 500;
-            _subtitleOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = _subtitleOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
+            _subtitleOverlay = new View { WidthSpecification = UiTheme.PlayerOverlayWidth, HeightSpecification = UiTheme.PlayerOverlayHeight, BackgroundColor = UiTheme.Surface, PositionX = _subtitleOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
             _subtitleOverlay.Hide();
             Add(_subtitleOverlay);
         }
@@ -2696,7 +2698,7 @@ namespace JellyfinTizen.Screens
             _subtitleText.HorizontalAlignment = HorizontalAlignment.Center;
             _subtitleText.VerticalAlignment = VerticalAlignment.Center;
             _subtitleText.BackgroundColor = Color.Transparent;
-            _subtitleText.PointSize = 48;
+            _subtitleText.PointSize = UiTheme.PlayerSubtitleTextSize;
             _subtitleText.HeightSpecification = 180;
             _subtitleText.Padding = new Extents(180, 180, 0, 0);
             _subtitleTextBaseY = Window.Default.Size.Height - 270;
@@ -2726,18 +2728,18 @@ namespace JellyfinTizen.Screens
 
             if (_subtitleOverlay.ChildCount == 0)
             {
-                _subtitleOverlay.Add(new TextLabel("Subtitles") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                _subtitleOverlay.Add(new TextLabel("Subtitles") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerOverlayHeaderHeight, PointSize = UiTheme.PlayerOverlayHeader, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
                 
                 // Subtitle Offset Button and Track - Minimal Design
-                var offsetContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PositionY = 80 };
-                _subtitleOffsetButton = new View { WidthSpecification = 280, HeightSpecification = 45, BackgroundColor = new Color(1, 1, 1, 0.15f), CornerRadius = 22.5f, PositionX = 85 };
-                var offsetLabel = new TextLabel($"Offset: {FormatSubtitleOffsetLabel()}") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = 20 };
+                var offsetContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerOverlayHeaderHeight, PositionY = UiTheme.PlayerOverlayHeaderHeight };
+                _subtitleOffsetButton = new View { WidthSpecification = UiTheme.PlayerSubtitleOffsetButtonWidth, HeightSpecification = UiTheme.PlayerSubtitleOffsetButtonHeight, BackgroundColor = UiTheme.PlayerSubtitleOffsetBase, CornerRadius = UiTheme.PlayerSubtitleOffsetButtonRadius, PositionX = UiTheme.PlayerSubtitleOffsetButtonX };
+                var offsetLabel = new TextLabel($"Offset: {FormatSubtitleOffsetLabel()}") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = UiTheme.PlayerOffsetLabel };
                 _subtitleOffsetButton.Add(offsetLabel);
                 offsetContainer.Add(_subtitleOffsetButton);
                 
-                CreateSubtitleOffsetTrack(280); // Smaller track width
-                _subtitleOffsetTrackContainer.PositionX = 85;
-                _subtitleOffsetTrackContainer.PositionY = 40;
+                CreateSubtitleOffsetTrack(UiTheme.PlayerSubtitleOffsetButtonWidth);
+                _subtitleOffsetTrackContainer.PositionX = UiTheme.PlayerSubtitleOffsetButtonX;
+                _subtitleOffsetTrackContainer.PositionY = UiTheme.PlayerSubtitleOffsetTrackContainerY;
                 offsetContainer.Add(_subtitleOffsetTrackContainer);
                 
                 _subtitleOverlay.Add(offsetContainer);
@@ -2811,14 +2813,14 @@ namespace JellyfinTizen.Screens
         {
             var row = new View
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60,
-                BackgroundColor = Color.Transparent, CornerRadius = 8.0f,
-                Margin = new Extents(20, 20, 5, 5),
+                WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerOverlayListRowHeight,
+                BackgroundColor = Color.Transparent, CornerRadius = UiTheme.PlayerOverlayListRowRadius,
+                Margin = new Extents(UiTheme.PlayerOverlayItemMarginHorizontal, UiTheme.PlayerOverlayItemMarginHorizontal, UiTheme.PlayerOverlayItemMarginVertical, UiTheme.PlayerOverlayItemMarginVertical),
                 Focusable = false
             };
             row.Name = indexId; 
             
-            var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 28, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
+            var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerOverlayItem, TextColor = UiTheme.PlayerTextMuted, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(UiTheme.PlayerOverlayItemPaddingLeft, (ushort)0, (ushort)0, (ushort)0) };
             row.Add(label);
             return row;
         }
@@ -2831,12 +2833,12 @@ namespace JellyfinTizen.Screens
             {
                 var row = _subtitleListContainer.GetChildAt((uint)i);
                 bool selected = (i == _subtitleIndex);
-                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
+                row.BackgroundColor = selected ? UiTheme.PlayerSelectionFill : Color.Transparent;
                 AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
                 var label = row.GetChildAt(0) as TextLabel;
                 if (label != null)
                 {
-                    label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+                    label.TextColor = selected ? Color.White : UiTheme.PlayerTextMuted;
                 }
             }
             // Keep subtitle selection fully manual; FocusManager + ScrollableBase can crash on some TVs.
@@ -2961,7 +2963,7 @@ namespace JellyfinTizen.Screens
         private void CreateAudioOverlay()
         {
             _audioOverlayBaseX = Window.Default.Size.Width - 500;
-            _audioOverlay = new View { WidthSpecification = 450, HeightSpecification = 500, BackgroundColor = new Color(0.1f, 0.1f, 0.1f, 0.95f), PositionX = _audioOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
+            _audioOverlay = new View { WidthSpecification = UiTheme.PlayerOverlayWidth, HeightSpecification = UiTheme.PlayerOverlayHeight, BackgroundColor = UiTheme.Surface, PositionX = _audioOverlayBaseX + OverlaySlideDistance, PositionY = Window.Default.Size.Height - 780, CornerRadius = 16.0f, ClippingMode = ClippingModeType.ClipChildren, Opacity = 0.0f };
             _audioOverlay.Hide();
             Add(_audioOverlay);
         }
@@ -2983,8 +2985,8 @@ namespace JellyfinTizen.Screens
             
             if (_audioOverlay.ChildCount == 0)
             {
-                _audioOverlay.Add(new TextLabel("Audio Tracks") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 80, PointSize = 34, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
-                _audioScrollView = new ScrollableBase { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PositionY = 80, HeightSpecification = 420, ScrollingDirection = ScrollableBase.Direction.Vertical };
+                _audioOverlay.Add(new TextLabel("Audio Tracks") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerOverlayHeaderHeight, PointSize = UiTheme.PlayerOverlayHeader, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+                _audioScrollView = new ScrollableBase { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PositionY = UiTheme.PlayerOverlayHeaderHeight, HeightSpecification = UiTheme.PlayerAudioScrollHeight, ScrollingDirection = ScrollableBase.Direction.Vertical };
                 _audioListContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FitToChildren, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Vertical, CellPadding = new Size2D(0, 5) } };
                 _audioScrollView.Add(_audioListContainer);
                 _audioOverlay.Add(_audioScrollView);
@@ -2995,9 +2997,9 @@ namespace JellyfinTizen.Screens
                     var codec = !string.IsNullOrEmpty(stream.Codec) ? stream.Codec.ToUpper() : "AUDIO";
                     var displayText = $"{lang} | {codec}";
 
-                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = 60, BackgroundColor = Color.Transparent, CornerRadius = 8.0f, Margin = new Extents(20, 20, 5, 5), Focusable = false };
+                    var row = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightSpecification = UiTheme.PlayerOverlayListRowHeight, BackgroundColor = Color.Transparent, CornerRadius = UiTheme.PlayerOverlayListRowRadius, Margin = new Extents(UiTheme.PlayerOverlayItemMarginHorizontal, UiTheme.PlayerOverlayItemMarginHorizontal, UiTheme.PlayerOverlayItemMarginVertical, UiTheme.PlayerOverlayItemMarginVertical), Focusable = false };
                     row.Name = stream.Index.ToString();
-                    var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = 26, TextColor = new Color(1, 1, 1, 0.6f), HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(20, 0, 0, 0) };
+                    var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerAudioItem, TextColor = UiTheme.PlayerTextMuted, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(UiTheme.PlayerOverlayItemPaddingLeft, (ushort)0, (ushort)0, (ushort)0) };
                     row.Add(label);
                     _audioListContainer.Add(row);
                 }
@@ -3039,10 +3041,10 @@ namespace JellyfinTizen.Screens
             {
                 var row = _audioListContainer.GetChildAt((uint)i);
                 bool selected = (i == _audioIndex);
-                row.BackgroundColor = selected ? new Color(1, 1, 1, 0.25f) : Color.Transparent;
+                row.BackgroundColor = selected ? UiTheme.PlayerSelectionFill : Color.Transparent;
                 AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
                 var label = row.GetChildAt(0) as TextLabel;
-                if (label != null) label.TextColor = selected ? Color.White : new Color(1, 1, 1, 0.6f);
+                if (label != null) label.TextColor = selected ? Color.White : UiTheme.PlayerTextMuted;
             }
             // Keep audio selection fully manual; device FocusManager + ScrollableBase can crash on some TVs.
         }
@@ -3294,11 +3296,33 @@ namespace JellyfinTizen.Screens
         {
             if (_progressTrack == null) return;
 
-            bool buttonRowFocused = _osdFocusRow == 1;
-            _progressTrack.BackgroundColor = buttonRowFocused
-                ? new Color(1, 1, 1, 0.25f)
-                : new Color(1, 1, 1, 0.4f);
+            bool seekbarRowFocused = _osdFocusRow == 0;
+            _progressTrack.BackgroundColor = UiTheme.PlayerTrackIdle;
+            if (_seekbarFocusVisualActive != seekbarRowFocused)
+            {
+                _seekbarFocusVisualActive = seekbarRowFocused;
+                var lineScale = seekbarRowFocused
+                    ? new Vector3(1.0f, 1.22f, 1f)
+                    : Vector3.One;
+                AnimateFocusScale(
+                    _progressTrack,
+                    lineScale
+                );
+                AnimateFocusScale(
+                    _progressFill,
+                    lineScale
+                );
+                AnimateFocusScale(
+                    _previewFill,
+                    lineScale
+                );
+                AnimateFocusScale(
+                    _progressThumb,
+                    seekbarRowFocused ? new Vector3(1.14f, 1.14f, 1f) : Vector3.One
+                );
+            }
 
+            bool buttonRowFocused = _osdFocusRow == 1;
             SetButtonVisual(_audioButton, buttonRowFocused && _buttonFocusIndex == AudioButtonIndex);
             SetButtonVisual(_subtitleButton, buttonRowFocused && _buttonFocusIndex == SubtitleButtonIndex);
             SetButtonVisual(_nextButton, buttonRowFocused && _buttonFocusIndex == NextButtonIndex);
@@ -3306,8 +3330,8 @@ namespace JellyfinTizen.Screens
             if (_subtitleOffsetCenterMarker != null)
             {
                 _subtitleOffsetCenterMarker.BackgroundColor = _subtitleOffsetAdjustMode
-                    ? new Color(0, 164f / 255f, 220f / 255f, 1f)
-                    : new Color(1, 1, 1, 0.85f);
+                    ? UiTheme.Accent
+                    : UiTheme.PlayerSubtitleOffsetCenter;
             }
         }
 

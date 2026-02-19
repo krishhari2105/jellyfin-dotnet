@@ -1,5 +1,6 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using JellyfinTizen.UI;
 
 namespace JellyfinTizen.Screens
 {
@@ -7,7 +8,8 @@ namespace JellyfinTizen.Screens
     {
         public SplashScreen()
         {
-            var label = new TextLabel("Jellyfin Native (Tizen)")
+            var root = UiFactory.CreateAtmosphericBackground();
+            var label = new TextLabel("Jellyfin")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
@@ -15,11 +17,12 @@ namespace JellyfinTizen.Screens
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
 
-                PointSize = 48,
-                TextColor = Color.White
+                PointSize = 64,
+                TextColor = UiTheme.TextPrimary
             };
 
-            Add(label);
+            root.Add(label);
+            Add(root);
         }
     }
 }

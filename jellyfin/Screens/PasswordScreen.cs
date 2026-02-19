@@ -1,6 +1,7 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using JellyfinTizen.UI;
 using System;
 
 namespace JellyfinTizen.Screens
@@ -17,35 +18,12 @@ namespace JellyfinTizen.Screens
         {
             AppState.Username = username;
 
-            var container = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 40)
-                }
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
+            var panel = UiFactory.CreateCenteredPanel();
+            panel.Add(UiFactory.CreateDisplayTitle($"Sign In As {username}"));
+            panel.Add(UiFactory.CreateSubtitle("Enter your password to continue."));
 
-            var title = new TextLabel($"Login as {username}")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 52,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            _passwordInput = new TextField
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                PlaceholderText = "Password",
-                PointSize = 36,
-                BackgroundColor = new Color(0.15f, 0.15f, 0.15f, 1f),
-                TextColor = Color.White,
-                Focusable = true
-            };
+            var passwordInputShell = UiFactory.CreateInputFieldShell("Password", out _passwordInput);
 
             var hiddenInput = new PropertyMap();
             hiddenInput.Add(HiddenInputProperty.Mode, new PropertyValue((int)HiddenInputModeType.ShowLastCharacter));
@@ -53,46 +31,22 @@ namespace JellyfinTizen.Screens
             hiddenInput.Add(HiddenInputProperty.SubstituteCharacter, new PropertyValue(0x2A));
             _passwordInput.HiddenInputSettings = hiddenInput;
 
-            _loginButton = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                BackgroundColor = new Color(0.25f, 0.25f, 0.25f, 1f),
-                Focusable = true
-            };
+            _loginButton = UiFactory.CreateButton("Login", out _loginText, primary: true);
+            _errorLabel = UiFactory.CreateErrorLabel();
 
-            _loginText = new TextLabel("Login")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 40,
-                TextColor = Color.White
-            };
-
-            _loginButton.Add(_loginText);
-
-            // Error label
-            _errorLabel = new TextLabel(string.Empty)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 32,
-                TextColor = Color.Red,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            container.Add(title);
-            container.Add(_passwordInput);
-            container.Add(_loginButton);
-            container.Add(_errorLabel);
-            Add(container);
+            panel.Add(passwordInputShell);
+            panel.Add(_loginButton);
+            panel.Add(_errorLabel);
+            root.Add(panel);
+            Add(root);
         }
 
         public override void OnShow()
         {
+            _passwordInput.Text = string.Empty;
             FocusManager.Instance.SetCurrentFocusView(_passwordInput);
             _loginFocused = false;
+            UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
         }
 
         public void HandleKey(AppKey key)
@@ -125,12 +79,12 @@ namespace JellyfinTizen.Screens
             if (focused)
             {
                 FocusManager.Instance.SetCurrentFocusView(_loginButton);
-                _loginButton.BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1f);
+                UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: true);
             }
             else
             {
                 FocusManager.Instance.SetCurrentFocusView(_passwordInput);
-                _loginButton.BackgroundColor = new Color(0.25f, 0.25f, 0.25f, 1f);
+                UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
             }
         }
 

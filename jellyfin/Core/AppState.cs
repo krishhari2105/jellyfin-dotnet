@@ -135,14 +135,30 @@ namespace JellyfinTizen.Core
             Jellyfin?.ClearAuthToken();
             Jellyfin?.SetUserId(null);
 
-            Tizen.Applications.Preference.Remove(KeyAccessToken);
-            Tizen.Applications.Preference.Remove(KeyUserId);
-            Tizen.Applications.Preference.Remove(KeyUsername);
+            RemovePreferenceIfExists(KeyAccessToken);
+            RemovePreferenceIfExists(KeyUserId);
+            RemovePreferenceIfExists(KeyUsername);
 
             if (clearServer)
             {
                 ServerUrl = null;
-                Tizen.Applications.Preference.Remove(KeyServerUrl);
+                RemovePreferenceIfExists(KeyServerUrl);
+            }
+        }
+
+        private static void RemovePreferenceIfExists(string key)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+                return;
+
+            try
+            {
+                if (Tizen.Applications.Preference.Contains(key))
+                    Tizen.Applications.Preference.Remove(key);
+            }
+            catch
+            {
+                // Ignore preference storage races/corruption while clearing session.
             }
         }
 

@@ -4,17 +4,18 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
     public class HomeScreen : ScreenBase, IKeyHandler
     {
-        private const int TopBarHeight = 80;
-        private const int RowsStartY = TopBarHeight + 28;
-        private const int SidePadding = 60;
-        private const int FocusBorder = 5;
-        private const int FocusPad = 24;
+        private const int TopBarHeight = UiTheme.HomeTopBarHeight;
+        private const int RowsStartY = TopBarHeight + UiTheme.HomeRowsTopGap;
+        private const int SidePadding = UiTheme.HomeSidePadding;
+        private const int FocusBorder = UiTheme.HomeFocusBorder;
+        private const int FocusPad = UiTheme.HomeFocusPad;
         private const int LibraryTitleImageGap = 12;
         private const float FocusScale = 1.08f;
         private static readonly bool UseLightweightFocusMode = true;
@@ -46,78 +47,27 @@ namespace JellyfinTizen.Screens
         private Animation _horizontalScrollAnimation;
         private Animation _verticalScrollAnimation;
 
-        // Jellyfin Blue (#00A4DC)
-        private readonly Color _focusColor = new Color(0.0f, 0.64f, 0.86f, 1.0f);
-        private readonly Color _focusBorderColor = new Color(0.0f, 0.64f, 0.86f, 0.58f);
+        private readonly Color _focusColor = UiTheme.Accent;
+        private readonly Color _focusBorderColor = UiTheme.AccentSoft;
 
         public HomeScreen(List<HomeRowData> rows)
         {
             _rows = rows ?? new List<HomeRowData>();
 
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
 
-            var topBar = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = TopBarHeight,
-                PositionZ = 10,
-                BackgroundColor = Color.Black,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(16, 0)
-                },
-                Padding = new Extents(SidePadding, SidePadding, 16, 0)
-            };
-
-            var sharedResPath = Tizen.Applications.Application.Current.DirectoryInfo.SharedResource;
-            var title = new TextLabel("Jellyfin")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 40,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Begin,
-                VerticalAlignment = VerticalAlignment.Center,
-                Ellipsis = false
-            };
-            title.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
-
-            _settingsButton = new View
-            {
-                WidthSpecification = 50,
-                HeightSpecification = 50,
-                BackgroundColor = Color.Transparent,
-                Focusable = true
-            };
-
-            var avatarUrl = AppState.GetUserAvatarUrl(512);
-            var hasAvatar = !string.IsNullOrWhiteSpace(avatarUrl);
-            var settingsIcon = new ImageView
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = hasAvatar
-                    ? avatarUrl
-                    : sharedResPath + "settings.svg",
-                FittingMode = FittingModeType.ShrinkToFit,
-                SamplingMode = SamplingModeType.BoxThenLanczos,
-                Padding = hasAvatar
-                    ? new Extents(0, 0, 0, 0)
-                    : new Extents(10, 10, 10, 10),
-                AlphaMaskURL = sharedResPath + "avatar-mask.png",
-                CropToMask = true,
-                MaskingMode = ImageView.MaskingModeType.MaskingOnLoading
-            };
-
-            _settingsButton.Add(settingsIcon);
-
-            topBar.Add(title);
-            topBar.Add(_settingsButton);
+            var topBar = MediaBrowserChrome.CreateTopBar(
+                "Jellyfin",
+                TopBarHeight,
+                SidePadding,
+                SidePadding,
+                positionZ: 10,
+                centerTitle: false,
+                includeLeftSpacer: false,
+                leftBlendOffsetX: -190,
+                leftBlendOffsetY: -140,
+                out _settingsButton
+            );
 
             _verticalContainer = new View
             {
@@ -212,15 +162,8 @@ namespace JellyfinTizen.Screens
                     PositionY = y
                 };
 
-                var title = new TextLabel(row.Title)
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = rowInfo.TitleHeight,
-                    PointSize = 34,
-                    TextColor = Color.White,
-                    HorizontalAlignment = HorizontalAlignment.Begin,
-                    Padding = new Extents(SidePadding, SidePadding, 0, 0)
-                };
+                var title = MediaBrowserChrome.CreateRowTitle(row.Title, SidePadding);
+                title.HeightSpecification = rowInfo.TitleHeight;
 
                 var viewport = new View
                 {
@@ -285,130 +228,28 @@ namespace JellyfinTizen.Screens
         {
             return kind switch
             {
-                HomeRowKind.Libraries => (420, 236, 30, 60, 316, 24),
-                HomeRowKind.NextUp => (420, 236, 30, 60, 316, 24),
-                HomeRowKind.ContinueWatching => (420, 236, 30, 60, 316, 24),
-                _ => (260, 390, 24, 60, 460, 26)
+                HomeRowKind.Libraries => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
+                HomeRowKind.NextUp => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
+                HomeRowKind.ContinueWatching => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
+                _ => (260, 390, 24, UiTheme.MediaRowTitleHeight, 460, 26)
             };
         }
 
         private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight)
         {
-            var isLandscapeRow = kind == HomeRowKind.Libraries ||
-                                 kind == HomeRowKind.NextUp ||
-                                 kind == HomeRowKind.ContinueWatching;
-
             var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
-
-            // Wrapper holds image card + separate text below
-            var wrapper = new View
-            {
-                WidthSpecification = width,
-                HeightSpecification = imageHeight + textHeight,
-                Focusable = true,
-                BackgroundColor = Color.Transparent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical
-                }
-            };
-
-            // Image card (fixed size)
-            var frame = new View
-            {
-                Name = "CardFrame",
-                WidthSpecification = width,
-                HeightSpecification = imageHeight,
-                CornerRadius = 16.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = Color.Transparent,
-                Padding = new Extents(FocusBorder, FocusBorder, FocusBorder, FocusBorder),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal
-                }
-            };
-
-            var inner = new View
-            {
-                Name = "CardInner",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                CornerRadius = 12.0f, // Matches outer radius minus inset roughly
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren,
-                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
-            };
-
-            var imageContainer = new View
-            {
-                Name = "CardContent",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-
-            if (!string.IsNullOrEmpty(item.ImageUrl))
-            {
-                var image = new ImageView
-                {
-                    Name = "CardImage",
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FillToParent,
-                    ResourceUrl = item.ImageUrl,
-                    PreMultipliedAlpha = false
-                };
-                imageContainer.Add(image);
-            }
-
-            inner.Add(imageContainer);
-            frame.Add(inner);
-
-            var textContainer = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = textHeight,
-                BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 12, 0),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 2)
-                }
-            };
-
-            var title = new TextLabel(item.Title ?? string.Empty)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                //PointSize = isLandscapeRow ? 26 : 28,
-                PointSize = 26,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
-            };
-            textContainer.Add(title);
-
-            if (hasSubtitle)
-            {
-                var subtitle = new TextLabel(item.Subtitle)
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FitToChildren,
-                    TextColor = new Color(1, 1, 1, 0.75f),
-                    PointSize = 20,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    MultiLine = false
-                };
-                textContainer.Add(subtitle);
-            }
-
-            wrapper.Add(frame);
-            wrapper.Add(textContainer);
-            return wrapper;
+            return MediaCardFactory.CreateImageCard(
+                width,
+                imageHeight,
+                textHeight,
+                item.Title,
+                hasSubtitle ? item.Subtitle : null,
+                item.ImageUrl,
+                out _,
+                focusBorder: FocusBorder,
+                titlePoint: (int)UiTheme.MediaCardTitle,
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+            );
         }
 
         public void HandleKey(AppKey key)
@@ -479,12 +320,8 @@ namespace JellyfinTizen.Screens
         private void Highlight(bool focused)
         {
             var card = _rowCards[_rowIndex][_colIndex];
-            var frame = GetCardFrame(card);
-            var content = GetCardContent(card);
-
-            // Ensure the card itself stays rounded
-            if (frame != null)
-                frame.CornerRadius = 16.0f;
+            var frame = MediaCardFocus.GetCardFrame(card);
+            var content = MediaCardFocus.GetCardContent(card);
 
             if (focused)
             {
@@ -495,18 +332,7 @@ namespace JellyfinTizen.Screens
                 card.Scale = Vector3.One;
                 card.PositionZ = 30;
 
-                // KEY FIX: Use BackgroundColor as the border mechanism.
-                // Since 'card' has Padding(5), this fills the gap with color, creating a frame.
-                // BackgroundColor respects CornerRadius much better than BorderlineWidth in some cases.
-                if (frame != null)
-                {
-                    frame.BackgroundColor = _focusBorderColor;
-                    frame.BorderlineWidth = 2.0f;
-                    frame.BorderlineColor = _focusColor;
-                    frame.BoxShadow = UseLightweightFocusMode
-                        ? null
-                        : new Shadow(12.0f, new Color(0.0f, 0.64f, 0.86f, 0.36f), new Vector2(0, 0));
-                }
+                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);
             }
             else
             {
@@ -516,14 +342,7 @@ namespace JellyfinTizen.Screens
                 card.Scale = Vector3.One;
                 card.PositionZ = 0;
 
-                // Remove focus effects
-                if (frame != null)
-                {
-                    frame.BackgroundColor = Color.Transparent;
-                    frame.BorderlineWidth = 0.0f;
-                    frame.BorderlineColor = Color.Transparent;
-                    frame.BoxShadow = null;
-                }
+                MediaCardFocus.ClearFrameFocus(frame);
             }
         }
 
@@ -559,38 +378,6 @@ namespace JellyfinTizen.Screens
             );
 
             _focusAnimations[content] = animation;
-        }
-
-        private View GetCardFrame(View card)
-        {
-            foreach (var child in card.Children)
-            {
-                if (child.Name == "CardFrame")
-                    return child;
-            }
-            return null;
-        }
-
-        private View GetCardContent(View card)
-        {
-            foreach (var child in card.Children)
-            {
-                if (child.Name == "CardFrame")
-                {
-                    foreach (var frameChild in child.Children)
-                    {
-                        if (frameChild.Name == "CardInner")
-                        {
-                            foreach (var innerChild in frameChild.Children)
-                            {
-                                if (innerChild.Name == "CardContent")
-                                    return innerChild;
-                            }
-                        }
-                    }
-                }
-            }
-            return null;
         }
 
         private void ScrollHorizontalIfNeeded()
@@ -773,55 +560,17 @@ namespace JellyfinTizen.Screens
         private void CreateSettingsPanel()
         {
             _settingsPanelBaseX = Window.Default.Size.Width - 520;
-
-            _settingsPanel = new View
-            {
-                WidthSpecification = 420,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                BackgroundColor = new Color(0, 0, 0, 1.0f),
-                PositionX = _settingsPanelBaseX,
-                PositionY = TopBarHeight + 16,
-                CornerRadius = 14f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren,
-                BorderlineWidth = 1.5f,
-                BorderlineColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                Padding = new Extents(16, 16, 16, 16),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 12)
-                }
-            };
+            _settingsPanel = MediaBrowserChrome.CreateSettingsPanel(_settingsPanelBaseX, TopBarHeight + 16);
 
             _settingsPanel.Opacity = 1.0f;
             _settingsPanel.Hide();
-
-            var title = new TextLabel("Settings")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 48,
-                PointSize = 26,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var list = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 10)
-                }
-            };
+            var title = MediaBrowserChrome.CreateSettingsPanelTitle();
+            var list = MediaBrowserChrome.CreateSettingsOptionsList();
 
             _settingsOptions.Clear();
-            _settingsOptions.Add(CreateSettingsOption("Playback Settings"));
-            _settingsOptions.Add(CreateSettingsOption("Logout"));
-            _settingsOptions.Add(CreateSettingsOption("Switch Server"));
+            _settingsOptions.Add(MediaBrowserChrome.CreateSettingsOption("Playback Settings"));
+            _settingsOptions.Add(MediaBrowserChrome.CreateSettingsOption("Logout"));
+            _settingsOptions.Add(MediaBrowserChrome.CreateSettingsOption("Switch Server"));
 
             foreach (var opt in _settingsOptions)
                 list.Add(opt);
@@ -830,32 +579,6 @@ namespace JellyfinTizen.Screens
             _settingsPanel.Add(list);
 
             Add(_settingsPanel);
-        }
-
-        private View CreateSettingsOption(string text)
-        {
-            var row = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 56,
-                BackgroundColor = new Color(1, 1, 1, 0.12f),
-                CornerRadius = 10.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-
-            var label = new TextLabel(text)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 24,
-                TextColor = new Color(1, 1, 1, 0.9f),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            row.Add(label);
-            return row;
         }
 
         private void ShowSettingsPanel()
@@ -898,12 +621,7 @@ namespace JellyfinTizen.Screens
 
         private void UpdateSettingsHighlight()
         {
-            for (int i = 0; i < _settingsOptions.Count; i++)
-            {
-                _settingsOptions[i].BackgroundColor = i == _settingsIndex
-                    ? new Color(1, 1, 1, 0.22f)
-                    : new Color(1, 1, 1, 0.12f);
-            }
+            MediaBrowserChrome.UpdateSettingsHighlight(_settingsOptions, _settingsIndex);
         }
 
         private void ActivateSettingsOption()

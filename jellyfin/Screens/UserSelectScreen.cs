@@ -4,6 +4,7 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
+using JellyfinTizen.UI;
 
 namespace JellyfinTizen.Screens
 {
@@ -14,35 +15,32 @@ namespace JellyfinTizen.Screens
 
         public UserSelectScreen(List<JellyfinUser> users)
         {
-            var container = new View
+            var root = UiFactory.CreateAtmosphericBackground();
+            var panel = UiFactory.CreateCenteredPanel();
+            panel.Add(UiFactory.CreateDisplayTitle("Who's Watching?"));
+            panel.Add(UiFactory.CreateSubtitle("Select a profile."));
+
+            var list = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 30)
+                    CellPadding = new Size2D(0, 16)
                 }
             };
-
-            var title = new TextLabel("Who's watching?")
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 56,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-
-            container.Add(title);
 
             foreach (var user in users)
             {
                 var item = CreateUserItem(user);
                 _userViews.Add(item);
-                container.Add(item);
+                list.Add(item);
             }
 
-            Add(container);
+            panel.Add(list);
+            root.Add(panel);
+            Add(root);
         }
 
         public override void OnShow()
@@ -58,18 +56,20 @@ namespace JellyfinTizen.Screens
             var view = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 90,
-                BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
+                HeightSpecification = UiTheme.ListItemHeight,
                 Focusable = true,
-                CornerRadius = 12.0f
+                CornerRadius = 16.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 1.5f
             };
+            UiFactory.SetButtonFocusState(view, primary: false, focused: false);
 
             var label = new TextLabel(user.Name)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 40,
-                TextColor = Color.White,
+                PointSize = 30,
+                TextColor = UiTheme.TextPrimary,
                 VerticalAlignment = VerticalAlignment.Center,
                 HorizontalAlignment = HorizontalAlignment.Center
             };
@@ -88,8 +88,7 @@ namespace JellyfinTizen.Screens
         private void Highlight(int index, bool focused = true)
         {
             var view = _userViews[index];
-            view.BackgroundColor = focused ? new Color(0.35f, 0.35f, 0.35f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
-            view.Scale = focused ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One;
+            UiFactory.SetButtonFocusState(view, primary: false, focused: focused);
         }
 
         private void OnUserSelected(int index)

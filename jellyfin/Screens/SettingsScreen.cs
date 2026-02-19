@@ -3,6 +3,7 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using Tizen.NUI.Components;
 using JellyfinTizen.Core;
+using JellyfinTizen.UI;
 
 namespace JellyfinTizen.Screens
 {
@@ -20,54 +21,44 @@ namespace JellyfinTizen.Screens
 
         private void Initialize()
         {
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = Color.Black
-            };
-            Add(root);
-
-            var title = new TextLabel("Settings")
-            {
-                TextColor = Color.White,
-                PointSize = 64,
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                PositionY = 80
-            };
-            root.Add(title);
+            var root = UiFactory.CreateAtmosphericBackground();
+            var panel = UiFactory.CreateCenteredPanel(width: 960, top: 140);
+            panel.Add(UiFactory.CreateDisplayTitle("Settings"));
+            panel.Add(UiFactory.CreateSubtitle("Playback preferences"));
 
             _burnInToggle = new View
             {
-                WidthSpecification = 500,
-                HeightSpecification = 100,
-                BackgroundColor = new Color(0.2f, 0.2f, 0.2f, 1f),
-                CornerRadius = 50,
-                PositionX = (Window.Default.Size.Width - 500) / 2,
-                PositionY = 240,
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 96,
+                CornerRadius = 20,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 1.5f,
                 Focusable = true
             };
+            UiFactory.SetButtonFocusState(_burnInToggle, primary: false, focused: false);
+
             _burnInLabel = new TextLabel(_burnInEnabled ? "Burn-In Subtitles: ON" : "Burn-In Subtitles: OFF")
             {
-                TextColor = Color.White,
-                PointSize = 34,
+                TextColor = UiTheme.TextPrimary,
+                PointSize = 28,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
             _burnInToggle.Add(_burnInLabel);
-            root.Add(_burnInToggle);
+            panel.Add(_burnInToggle);
+            root.Add(panel);
+            Add(root);
             
             _burnInToggle.FocusGained += (s, e) =>
             {
-                _burnInToggle.Scale = new Vector3(1.05f, 1.05f, 1.0f);
+                UiFactory.SetButtonFocusState(_burnInToggle, primary: false, focused: true);
             };
 
             _burnInToggle.FocusLost += (s, e) =>
             {
-                _burnInToggle.Scale = Vector3.One;
+                UiFactory.SetButtonFocusState(_burnInToggle, primary: false, focused: false);
             };
 
             FocusManager.Instance.SetCurrentFocusView(_burnInToggle);
@@ -91,7 +82,9 @@ namespace JellyfinTizen.Screens
             _burnInEnabled = !_burnInEnabled;
             AppState.BurnInSubtitles = _burnInEnabled;
             _burnInLabel.Text = _burnInEnabled ? "Burn-In Subtitles: ON" : "Burn-In Subtitles: OFF";
-            _burnInToggle.BackgroundColor = _burnInEnabled ? new Color(0.85f, 0.11f, 0.11f, 1f) : new Color(0.2f, 0.2f, 0.2f, 1f);
+            _burnInToggle.BackgroundColor = _burnInEnabled
+                ? new Color(0.00f, 164f / 255f, 220f / 255f, 0.30f)
+                : UiTheme.SurfaceMuted;
         }
     }
 }

@@ -4,6 +4,7 @@ using JellyfinTizen.Models;
 using System.Collections.Generic;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using JellyfinTizen.UI;
 
 namespace JellyfinTizen.Screens
 {
@@ -24,7 +25,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = Color.Black
+                BackgroundColor = UiTheme.Background
             };
             Add(rootView);
 
@@ -32,8 +33,8 @@ namespace JellyfinTizen.Screens
             var title = new TextLabel
             {
                 Text = _movie.Name,
-                PointSize = 24,
-                TextColor = Color.White,
+                PointSize = UiTheme.LegacyDetailsTitle,
+                TextColor = UiTheme.TextPrimary,
                 Position = new Position(20, 20)
             };
             rootView.Add(title);
@@ -44,8 +45,8 @@ namespace JellyfinTizen.Screens
                 Text = _movie.Overview,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
-                PointSize = 16,
-                TextColor = Color.White,
+                PointSize = UiTheme.LegacyDetailsBody,
+                TextColor = UiTheme.TextSecondary,
                 Size = new Size(Window.Default.Size.Width - 40, 400),
                 Position = new Position(20, 80)
             };

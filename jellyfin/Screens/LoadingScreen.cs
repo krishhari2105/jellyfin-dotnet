@@ -1,6 +1,7 @@
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
@@ -17,35 +18,40 @@ namespace JellyfinTizen.Screens
             int screenHeight = Window.Default.Size.Height;
             _centerContainer = new View
             {
-                WidthSpecification = 520,
-                HeightSpecification = 240,
-                PositionX = (screenWidth - 520) / 2,
-                PositionY = (screenHeight - 240) / 2
+                WidthSpecification = UiTheme.LoadingCardWidth,
+                HeightSpecification = UiTheme.LoadingCardHeight,
+                PositionX = (screenWidth - UiTheme.LoadingCardWidth) / 2,
+                PositionY = (screenHeight - UiTheme.LoadingCardHeight) / 2,
+                BackgroundColor = UiTheme.Surface,
+                CornerRadius = 24.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 1.5f,
+                BorderlineColor = UiTheme.SurfaceBorder
             };
 
             _spinnerRing = new View
             {
-                WidthSpecification = 92,
-                HeightSpecification = 92,
-                PositionX = (520 - 92) / 2,
+                WidthSpecification = UiTheme.LoadingSpinnerSize,
+                HeightSpecification = UiTheme.LoadingSpinnerSize,
+                PositionX = (UiTheme.LoadingCardWidth - UiTheme.LoadingSpinnerSize) / 2,
                 PositionY = 24,
-                CornerRadius = 46.0f,
+                CornerRadius = UiTheme.LoadingSpinnerRadius,
                 BackgroundColor = Color.Transparent,
                 BorderlineWidth = 4.0f,
-                BorderlineColor = new Color(1f, 1f, 1f, 0.78f),
+                BorderlineColor = UiTheme.Accent,
                 Opacity = 0.42f,
                 Scale = Vector3.One
             };
 
             var label = new TextLabel(message)
             {
-                WidthSpecification = 520,
+                WidthSpecification = UiTheme.LoadingCardWidth,
                 HeightSpecification = 72,
                 PositionY = 136,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
-                PointSize = 28,
-                TextColor = new Color(1f, 1f, 1f, 0.9f)
+                PointSize = UiTheme.LoadingMessageText,
+                TextColor = UiTheme.TextPrimary
             };
 
             _centerContainer.Add(_spinnerRing);
