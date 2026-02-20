@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
@@ -8,6 +9,7 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.UI;
+using JellyfinTizen.Utils;
 
 using ThreadingTimer = System.Threading.Timer;
 
@@ -15,8 +17,20 @@ namespace JellyfinTizen.Screens
 {
     public class HomeLoadingScreen : ScreenBase, IKeyHandler
     {
+        private const int RecentPerLibraryLimit = 4;
+        private const int RecentFetchConcurrency = 4;
+
         private bool _navigated;
         private ThreadingTimer _fallbackTimer;
+        private static readonly SemaphoreSlim RecentFetchGate = new(RecentFetchConcurrency, RecentFetchConcurrency);
+        private static readonly ConcurrentDictionary<string, string> ImageUrlCache = new();
+
+        private sealed class RecentLibraryResult
+        {
+            public int Index;
+            public List<JellyfinTizen.Models.HomeItemData> Items;
+        }
+
         public HomeLoadingScreen()
         {
             Load();
@@ -53,12 +67,16 @@ namespace JellyfinTizen.Screens
 
             try
             {
+                var loadTimer = PerfTrace.Start();
                 var libs = await WithTimeout(
                     AppState.Jellyfin.GetLibrariesAsync(AppState.UserId),
                     20000
                 );
+                PerfTrace.End("HomeLoadingScreen.Load.GetLibraries", loadTimer);
 
+                var rowsTimer = PerfTrace.Start();
                 var rows = await BuildHomeRowsAsync(libs);
+                PerfTrace.End("HomeLoadingScreen.Load.BuildHomeRows", rowsTimer);
 
                 if (!_navigated)
                 {
@@ -129,7 +147,7 @@ namespace JellyfinTizen.Screens
 
         private async Task<List<JellyfinTizen.Models.HomeRowData>> BuildHomeRowsAsync(List<JellyfinTizen.Models.JellyfinLibrary> libs)
         {
-            var rows = new List<JellyfinTizen.Models.HomeRowData>();
+            var rows = new List<JellyfinTizen.Models.HomeRowData>(libs.Count + 3);
 
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -143,7 +161,9 @@ namespace JellyfinTizen.Screens
             foreach (var lib in libs)
             {
                 var imageUrl = lib.HasPrimaryImage
-                    ? $"{serverUrl}/Items/{lib.Id}/Images/Primary?maxWidth=900&quality=85&api_key={apiKey}"
+                    ? BuildCachedImageUrl(
+                        $"library-primary:{lib.Id}:760:72:{apiKey}",
+                        () => $"{serverUrl}/Items/{lib.Id}/Images/Primary?maxWidth=760&quality=72&api_key={apiKey}")
                     : null;
 
                 librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
@@ -158,43 +178,42 @@ namespace JellyfinTizen.Screens
                 rows.Add(librariesRow);
 
             var tvLib = libs.Find(l => l.CollectionType == "tvshows");
-            if (tvLib != null)
-            {
-                var nextUp = await WithTimeout(
-                    AppState.Jellyfin.GetNextUpAsync(tvLib.Id, 20),
-                    10000
-                );
-
-                if (nextUp.Count > 0)
-                {
-                    var nextUpRow = new JellyfinTizen.Models.HomeRowData
-                    {
-                        Title = "Next Up",
-                        Kind = JellyfinTizen.Models.HomeRowKind.NextUp
-                    };
-
-                    foreach (var item in nextUp)
-                    {
-                        var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 420);
-
-                        nextUpRow.Items.Add(new JellyfinTizen.Models.HomeItemData
-                        {
-                            Title = item.Name,
-                            Subtitle = item.SeriesName,
-                            ImageUrl = imageUrl,
-                            Media = item
-                        });
-                    }
-
-                    rows.Add(nextUpRow);
-                }
-            }
-
-            var continueWatching = await WithTimeout(
+            var nextUpTask = tvLib != null
+                ? WithTimeout(AppState.Jellyfin.GetNextUpAsync(tvLib.Id, 20), 10000)
+                : Task.FromResult(new List<JellyfinTizen.Models.JellyfinMovie>());
+            var continueTask = WithTimeout(
                 AppState.Jellyfin.GetContinueWatchingAsync(20),
                 10000
             );
 
+            await Task.WhenAll(nextUpTask, continueTask);
+
+            var nextUp = nextUpTask.Result;
+            if (nextUp.Count > 0)
+            {
+                var nextUpRow = new JellyfinTizen.Models.HomeRowData
+                {
+                    Title = "Next Up",
+                    Kind = JellyfinTizen.Models.HomeRowKind.NextUp
+                };
+
+                foreach (var item in nextUp)
+                {
+                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 360);
+
+                    nextUpRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                    {
+                        Title = item.Name,
+                        Subtitle = item.SeriesName,
+                        ImageUrl = imageUrl,
+                        Media = item
+                    });
+                }
+
+                rows.Add(nextUpRow);
+            }
+
+            var continueWatching = continueTask.Result;
             if (continueWatching.Count > 0)
             {
                 var continueRow = new JellyfinTizen.Models.HomeRowData
@@ -205,7 +224,7 @@ namespace JellyfinTizen.Screens
 
                 foreach (var item in continueWatching)
                 {
-                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 420);
+                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 360);
 
                     continueRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
@@ -219,44 +238,80 @@ namespace JellyfinTizen.Screens
                 rows.Add(continueRow);
             }
 
-            foreach (var lib in libs)
+            var recentRow = new JellyfinTizen.Models.HomeRowData
+            {
+                Title = "Recently Added",
+                Kind = JellyfinTizen.Models.HomeRowKind.RecentlyAdded
+            };
+
+            var recentTasks = new List<Task<RecentLibraryResult>>(libs.Count);
+            for (int i = 0; i < libs.Count; i++)
+            {
+                recentTasks.Add(BuildRecentItemsForLibraryAsync(libs[i], i, serverUrl, apiKey));
+            }
+
+            var recentResults = await Task.WhenAll(recentTasks);
+            Array.Sort(recentResults, (a, b) => a.Index.CompareTo(b.Index));
+            foreach (var result in recentResults)
+            {
+                if (result?.Items == null || result.Items.Count == 0)
+                    continue;
+
+                recentRow.Items.AddRange(result.Items);
+            }
+
+            if (recentRow.Items.Count > 0)
+                rows.Add(recentRow);
+
+            return rows;
+        }
+
+        private async Task<RecentLibraryResult> BuildRecentItemsForLibraryAsync(
+            JellyfinTizen.Models.JellyfinLibrary lib,
+            int index,
+            string serverUrl,
+            string apiKey)
+        {
+            await RecentFetchGate.WaitAsync();
+            try
             {
                 var includeTypes = lib.CollectionType == "tvshows"
                     ? "Series"
                     : "Movie";
 
+                var timer = PerfTrace.Start();
                 var recent = await WithTimeout(
-                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, includeTypes, 20),
+                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, includeTypes, RecentPerLibraryLimit),
                     10000
                 );
+                PerfTrace.End($"HomeLoadingScreen.RecentFetch.{lib.Name}", timer);
 
-                if (recent.Count == 0)
-                    continue;
-
-                var recentRow = new JellyfinTizen.Models.HomeRowData
-                {
-                    Title = $"Recently Added - {lib.Name}",
-                    Kind = JellyfinTizen.Models.HomeRowKind.RecentlyAdded
-                };
-
+                var items = new List<JellyfinTizen.Models.HomeItemData>(recent.Count);
                 foreach (var item in recent)
                 {
-                    var imageUrl =
-                        $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=320&quality=90&api_key={apiKey}";
+                    var imageUrl = BuildCachedImageUrl(
+                        $"recent-primary:{item.Id}:280:78:{apiKey}",
+                        () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=280&quality=78&api_key={apiKey}");
 
-                    recentRow.Items.Add(new JellyfinTizen.Models.HomeItemData
+                    items.Add(new JellyfinTizen.Models.HomeItemData
                     {
                         Title = item.Name,
-                        Subtitle = item.SeriesName,
+                        Subtitle = string.IsNullOrWhiteSpace(item.SeriesName) ? lib.Name : item.SeriesName,
                         ImageUrl = imageUrl,
                         Media = item
                     });
                 }
 
-                rows.Add(recentRow);
+                return new RecentLibraryResult
+                {
+                    Index = index,
+                    Items = items
+                };
             }
-
-            return rows;
+            finally
+            {
+                RecentFetchGate.Release();
+            }
         }
 
         private static string GetThumbOrBackdropUrl(
@@ -266,15 +321,29 @@ namespace JellyfinTizen.Screens
             int maxWidth)
         {
             if (item.HasThumb)
-                return $"{serverUrl}/Items/{item.Id}/Images/Thumb/0?maxWidth={maxWidth}&quality=90&api_key={apiKey}";
+                return BuildCachedImageUrl(
+                    $"thumb:{item.Id}:{maxWidth}:82:{apiKey}",
+                    () => $"{serverUrl}/Items/{item.Id}/Images/Thumb/0?maxWidth={maxWidth}&quality=82&api_key={apiKey}");
 
             if (item.HasBackdrop)
-                return $"{serverUrl}/Items/{item.Id}/Images/Backdrop/0?maxWidth={maxWidth}&quality=85&api_key={apiKey}";
+                return BuildCachedImageUrl(
+                    $"backdrop:{item.Id}:{maxWidth}:78:{apiKey}",
+                    () => $"{serverUrl}/Items/{item.Id}/Images/Backdrop/0?maxWidth={maxWidth}&quality=78&api_key={apiKey}");
 
             if (item.HasPrimary)
-                return $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=90&api_key={apiKey}";
+                return BuildCachedImageUrl(
+                    $"primary:{item.Id}:{maxWidth}:82:{apiKey}",
+                    () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=82&api_key={apiKey}");
 
             return null;
+        }
+
+        private static string BuildCachedImageUrl(string key, Func<string> factory)
+        {
+            if (string.IsNullOrWhiteSpace(key) || factory == null)
+                return null;
+
+            return ImageUrlCache.GetOrAdd(key, _ => factory());
         }
 
         private static async Task<T> WithTimeout<T>(Task<T> task, int timeoutMs)

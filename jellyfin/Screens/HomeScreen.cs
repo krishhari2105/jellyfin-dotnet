@@ -19,7 +19,7 @@ namespace JellyfinTizen.Screens
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
         private const int LibraryTitleImageGap = 12;
-        private const float FocusScale = 1.08f;
+        private const float FocusScale = UiTheme.MediaCardFocusScale;
         private static readonly bool UseLightweightFocusMode = true;
 
         private readonly List<HomeRowData> _rows;
@@ -121,6 +121,8 @@ namespace JellyfinTizen.Screens
                 Tizen.Applications.CoreApplication.Post(() =>
                 {
                     FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);
+                    ScrollHorizontalIfNeeded();
+                    ScrollVerticalIfNeeded();
                 });
             }
             catch
@@ -317,10 +319,15 @@ namespace JellyfinTizen.Screens
 
         private void Move(int rowDelta, int colDelta)
         {
+            var nextRow = Math.Clamp(_rowIndex + rowDelta, 0, _rowCards.Count - 1);
+            var nextCol = Math.Clamp(_colIndex + colDelta, 0, _rowCards[nextRow].Count - 1);
+            if (nextRow == _rowIndex && nextCol == _colIndex)
+                return;
+
             Highlight(false);
 
-            _rowIndex = Math.Clamp(_rowIndex + rowDelta, 0, _rowCards.Count - 1);
-            _colIndex = Math.Clamp(_colIndex + colDelta, 0, _rowCards[_rowIndex].Count - 1);
+            _rowIndex = nextRow;
+            _colIndex = nextCol;
 
             Highlight(true);
             FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);
@@ -333,63 +340,55 @@ namespace JellyfinTizen.Screens
         {
             var card = _rowCards[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
-            var content = MediaCardFocus.GetCardContent(card);
 
             if (focused)
             {
-                if (content != null)
-                    AnimateCardScale(content, new Vector3(FocusScale, FocusScale, 1f));
-
-                // Keep outer size stable to avoid viewport clipping
-                card.Scale = Vector3.One;
+                AnimateCardScale(card, new Vector3(FocusScale, FocusScale, 1f));
                 card.PositionZ = 30;
 
                 MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);
             }
             else
             {
-                if (content != null)
-                    AnimateCardScale(content, Vector3.One);
-
-                card.Scale = Vector3.One;
+                AnimateCardScale(card, Vector3.One);
                 card.PositionZ = 0;
 
                 MediaCardFocus.ClearFrameFocus(frame);
             }
         }
 
-        private void AnimateCardScale(View content, Vector3 targetScale)
+        private void AnimateCardScale(View card, Vector3 targetScale)
         {
-            if (content == null)
+            if (card == null)
             {
                 return;
             }
 
             if (UseLightweightFocusMode)
             {
-                if (_focusAnimations.TryGetValue(content, out var existingDirect))
+                if (_focusAnimations.TryGetValue(card, out var existingDirect))
                 {
                     UiAnimator.StopAndDispose(ref existingDirect);
-                    _focusAnimations.Remove(content);
+                    _focusAnimations.Remove(card);
                 }
 
-                content.Scale = targetScale;
+                card.Scale = targetScale;
                 return;
             }
 
-            if (_focusAnimations.TryGetValue(content, out var existing))
+            if (_focusAnimations.TryGetValue(card, out var existing))
             {
                 UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(content);
+                _focusAnimations.Remove(card);
             }
 
             var animation = UiAnimator.Start(
                 UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(content, "Scale", targetScale),
-                () => _focusAnimations.Remove(content)
+                anim => anim.AnimateTo(card, "Scale", targetScale),
+                () => _focusAnimations.Remove(card)
             );
 
-            _focusAnimations[content] = animation;
+            _focusAnimations[card] = animation;
         }
 
         private void ScrollHorizontalIfNeeded()

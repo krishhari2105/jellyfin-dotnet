@@ -1430,7 +1430,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 180,
                 PositionX = (int)(screenWidth * 0.70f) - 90,
                 PositionY = (screenHeight / 2) - 90,
-                BackgroundColor = UiTheme.PlayerSeekBackdrop,
+                BackgroundColor = Color.Transparent,
                 CornerRadius = 24.0f,
                 Opacity = 0.0f,
                 Scale = Vector3.One
@@ -1533,7 +1533,7 @@ namespace JellyfinTizen.Screens
                 HeightSpecification = 140,
                 PositionX = (screenWidth / 2) - 70,
                 PositionY = (screenHeight / 2) - 70,
-                BackgroundColor = UiTheme.PlayerFeedbackBackdrop,
+                BackgroundColor = Color.Transparent,
                 CornerRadius = 70.0f,
                 Opacity = 0.0f,
                 Scale = new Vector3(0.9f, 0.9f, 1f)
@@ -1541,10 +1541,10 @@ namespace JellyfinTizen.Screens
 
             _playFeedbackIcon = new ImageView
             {
-                WidthSpecification = 90,
-                HeightSpecification = 90,
-                PositionX = 25,
-                PositionY = 25,
+                WidthSpecification = 110,
+                HeightSpecification = 110,
+                PositionX = 15,
+                PositionY = 15,
                 ResourceUrl = _sharedResPath + "play.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
@@ -1552,10 +1552,10 @@ namespace JellyfinTizen.Screens
 
             _pauseFeedbackIcon = new ImageView
             {
-                WidthSpecification = 90,
-                HeightSpecification = 90,
-                PositionX = 25,
-                PositionY = 25,
+                WidthSpecification = 110,
+                HeightSpecification = 110,
+                PositionX = 15,
+                PositionY = 15,
                 ResourceUrl = _sharedResPath + "pause.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos

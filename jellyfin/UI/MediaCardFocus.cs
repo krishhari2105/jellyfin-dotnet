@@ -27,14 +27,8 @@ namespace JellyfinTizen.UI
 
             foreach (var frameChild in frame.Children)
             {
-                if (frameChild.Name != "CardInner")
-                    continue;
-
-                foreach (var innerChild in frameChild.Children)
-                {
-                    if (innerChild.Name == "CardContent")
-                        return innerChild;
-                }
+                if (frameChild.Name == "CardContent")
+                    return frameChild;
             }
 
             return null;
@@ -45,13 +39,13 @@ namespace JellyfinTizen.UI
             if (frame == null)
                 return;
 
-            frame.CornerRadius = 16.0f;
-            frame.BackgroundColor = fillColor;
+            _ = fillColor;
+            _ = lightweight;
+            frame.CornerRadius = UiTheme.MediaCardRadius;
+            frame.BackgroundColor = Color.Transparent;
             frame.BorderlineWidth = 2.0f;
             frame.BorderlineColor = lineColor;
-            frame.BoxShadow = lightweight
-                ? null
-                : new Shadow(12.0f, new Color(lineColor.R, lineColor.G, lineColor.B, 0.36f), new Vector2(0, 0));
+            frame.BoxShadow = null;
         }
 
         public static void ClearFrameFocus(View frame)
@@ -59,7 +53,7 @@ namespace JellyfinTizen.UI
             if (frame == null)
                 return;
 
-            frame.CornerRadius = 16.0f;
+            frame.CornerRadius = UiTheme.MediaCardRadius;
             frame.BackgroundColor = Color.Transparent;
             frame.BorderlineWidth = 0.0f;
             frame.BorderlineColor = Color.Transparent;

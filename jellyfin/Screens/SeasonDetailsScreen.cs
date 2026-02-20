@@ -17,10 +17,10 @@ namespace JellyfinTizen.Screens
         private const int EpisodeCardWidth = 420;
         private const int EpisodeCardHeight = 236;
         private const int EpisodeCardTextHeight = 90;
-        private const int EpisodeCardSpacing = 30;
+        private const int EpisodeCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
-        private const int FocusPad = 20;
-        private const float FocusScale = 1.14f;
+        private const int FocusPad = UiTheme.HomeFocusPad;
+        private const float FocusScale = UiTheme.MediaCardFocusScale;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _season;
@@ -353,12 +353,7 @@ namespace JellyfinTizen.Screens
         private void ApplyEpisodeFocus(View card, bool focused)
         {
             var frame = MediaCardFocus.GetCardFrame(card);
-            var content = MediaCardFocus.GetCardContent(card);
-
-            if (content != null)
-                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
-
-            card.Scale = Vector3.One;
+            card.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
             card.PositionZ = focused ? 20 : 0;
 
             if (focused)

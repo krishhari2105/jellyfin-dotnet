@@ -19,7 +19,7 @@ namespace JellyfinTizen.UI
         public static readonly Color Danger = new Color(255f / 255f, 90f / 255f, 100f / 255f, 1f);
         public static readonly Color DetailsBackdropDim = new Color(0f, 0f, 0f, 0.62f);
         public static readonly Color DetailsPosterSurface = new Color(17f / 255f, 24f / 255f, 38f / 255f, 1f);
-        public static readonly Color DetailsOverviewText = new Color(183f / 255f, 195f / 255f, 216f / 255f, 1f);
+        public static readonly Color DetailsOverviewText = new Color(1f, 1f, 1f, 1f);
         public static readonly Color DetailsActionButtonBase = new Color(17f / 255f, 24f / 255f, 38f / 255f, 0.78f);
         public static readonly Color DetailsActionButtonFocused = new Color(0f / 255f, 167f / 255f, 225f / 255f, 0.80f);
         public static readonly Color DetailsChipSurface = new Color(31f / 255f, 42f / 255f, 59f / 255f, 1.0f);
@@ -63,6 +63,8 @@ namespace JellyfinTizen.UI
         public const float MediaRowTitle = 34f;
         public const float MediaCardTitle = 26f;
         public const float MediaCardSubtitle = 20f;
+        public const float MediaCardRadius = 18.0f;
+        public const float MediaCardFocusScale = 1.05f;
         public const float SettingsPanelTitle = 26f;
         public const float SettingsPanelOption = 24f;
 
@@ -71,7 +73,7 @@ namespace JellyfinTizen.UI
         public const int HomeRowsTopGap = 28;
         public const int HomeSidePadding = 60;
         public const int HomeFocusBorder = 5;
-        public const int HomeFocusPad = 24;
+        public const int HomeFocusPad = 30;
 
         public const int LibraryTopBarHeight = 90;
         public const int LibraryTopBarPadding = 60;
@@ -80,7 +82,7 @@ namespace JellyfinTizen.UI
         public const int LibraryCardSpacing = 30;
         public const int LibraryRowSpacing = 50;
         public const int LibraryFocusBorder = 5;
-        public const int LibraryFocusPad = 20;
+        public const int LibraryFocusPad = 30;
         public const int LibraryTopGlowPadBoost = 8;
         public const int PlayerOverlayWidth = 450;
         public const int PlayerOverlayHeight = 500;

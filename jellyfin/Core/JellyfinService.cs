@@ -14,6 +14,7 @@ namespace JellyfinTizen.Core
     public class JellyfinService
     {
         private HttpClient _http;
+        private string _connectedServerUrl;
 
         public string ServerUrl { get; private set; }
         public string AccessToken { get; private set; }
@@ -21,33 +22,33 @@ namespace JellyfinTizen.Core
 
         public void Connect(string serverUrl)
         {
-            ServerUrl = serverUrl.TrimEnd('/');
+            var normalizedUrl = serverUrl?.TrimEnd('/');
+            if (string.IsNullOrWhiteSpace(normalizedUrl))
+                throw new ArgumentException("Server URL is required.", nameof(serverUrl));
 
-            _http = new HttpClient();
-            _http.Timeout = System.TimeSpan.FromSeconds(10);
-            _http.DefaultRequestHeaders.Add(
-                "X-Emby-Authorization",
-                "MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\""
-            );
+            ServerUrl = normalizedUrl;
+
+            // Reuse existing client when reconnecting to the same server.
+            if (_http != null &&
+                string.Equals(_connectedServerUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            _http?.Dispose();
+            _http = new HttpClient
+            {
+                Timeout = System.TimeSpan.FromSeconds(10)
+            };
+
+            _connectedServerUrl = normalizedUrl;
+            SetAuthorizationHeader(null);
         }
 
         public void SetAuthToken(string token)
         {
             AccessToken = token;
-
-            // Remove OLD headers to prevent duplicates
-            if (_http.DefaultRequestHeaders.Contains("X-MediaBrowser-Token"))
-                _http.DefaultRequestHeaders.Remove("X-MediaBrowser-Token");
-            
-            if (_http.DefaultRequestHeaders.Contains("X-Emby-Authorization"))
-                _http.DefaultRequestHeaders.Remove("X-Emby-Authorization");
-
-            // ADD NEW Consolidated Header (The Standard Way)
-            // This combines Client, Device, Version, AND Token into one string.
-            _http.DefaultRequestHeaders.Add(
-                "X-Emby-Authorization",
-                $"MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\""
-            );
+            SetAuthorizationHeader(token);
         }
 
         public void SetUserId(string userId)
@@ -58,9 +59,7 @@ namespace JellyfinTizen.Core
         public void ClearAuthToken()
         {
             AccessToken = null;
-
-            if (_http != null && _http.DefaultRequestHeaders.Contains("X-MediaBrowser-Token"))
-                _http.DefaultRequestHeaders.Remove("X-MediaBrowser-Token");
+            SetAuthorizationHeader(null);
         }
 
 
@@ -342,7 +341,7 @@ namespace JellyfinTizen.Core
 
         private List<JellyfinMovie> ParseMediaItems(JsonElement items)
         {
-            var results = new List<JellyfinMovie>();
+            var results = new List<JellyfinMovie>(items.GetArrayLength());
 
             foreach (var item in items.EnumerateArray())
             {
@@ -417,6 +416,24 @@ namespace JellyfinTizen.Core
             }
 
             return results;
+        }
+
+        private void SetAuthorizationHeader(string token)
+        {
+            if (_http == null)
+                return;
+
+            if (_http.DefaultRequestHeaders.Contains("X-MediaBrowser-Token"))
+                _http.DefaultRequestHeaders.Remove("X-MediaBrowser-Token");
+
+            if (_http.DefaultRequestHeaders.Contains("X-Emby-Authorization"))
+                _http.DefaultRequestHeaders.Remove("X-Emby-Authorization");
+
+            var headerValue = string.IsNullOrWhiteSpace(token)
+                ? "MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\""
+                : $"MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\"";
+
+            _http.DefaultRequestHeaders.Add("X-Emby-Authorization", headerValue);
         }
 
         public async Task<List<MediaStream>> GetSubtitleStreamsAsync(string itemId)

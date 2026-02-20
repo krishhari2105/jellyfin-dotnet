@@ -17,6 +17,8 @@ namespace JellyfinTizen.UI
             int titlePoint = 26,
             int subtitlePoint = 20)
         {
+            _ = focusBorder;
+
             var wrapper = new View
             {
                 WidthSpecification = width,
@@ -34,29 +36,15 @@ namespace JellyfinTizen.UI
                 Name = "CardFrame",
                 WidthSpecification = width,
                 HeightSpecification = imageHeight,
-                CornerRadius = 16.0f,
+                CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(
-                    (ushort)focusBorder,
-                    (ushort)focusBorder,
-                    (ushort)focusBorder,
-                    (ushort)focusBorder),
+                ClippingMode = ClippingModeType.ClipChildren,
+                Padding = new Extents(2, 2, 2, 2),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal
                 }
-            };
-
-            var inner = new View
-            {
-                Name = "CardInner",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                CornerRadius = 12.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren,
-                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
             };
 
             var imageContainer = new View
@@ -64,7 +52,10 @@ namespace JellyfinTizen.UI
                 Name = "CardContent",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ClippingMode = ClippingModeType.ClipChildren
+                ClippingMode = ClippingModeType.ClipChildren,
+                CornerRadius = UiTheme.MediaCardRadius,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
             };
 
             imageView = new ImageView
@@ -76,8 +67,7 @@ namespace JellyfinTizen.UI
                 PreMultipliedAlpha = false
             };
             imageContainer.Add(imageView);
-            inner.Add(imageContainer);
-            frame.Add(inner);
+            frame.Add(imageContainer);
 
             var textContainer = new View
             {

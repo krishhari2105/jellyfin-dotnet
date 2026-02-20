@@ -17,10 +17,11 @@ namespace JellyfinTizen.Screens
         private const int SeasonCardWidth = 260;
         private const int SeasonCardHeight = 390;
         private const int SeasonCardTextHeight = 80;
-        private const int SeasonCardSpacing = 24;
+        private const int SeasonCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
-        private const int FocusPad = 20;
-        private const float FocusScale = 1.14f;
+        private const int FocusPad = UiTheme.HomeFocusPad;
+        private const int SeasonRowTopInset = 16;
+        private const float FocusScale = UiTheme.MediaCardFocusScale;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _series;
@@ -243,7 +244,7 @@ namespace JellyfinTizen.Screens
             _seasonRowContainer = new View
             {
                 PositionX = FocusPad,
-                PositionY = FocusPad,
+                PositionY = SeasonRowTopInset,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -378,12 +379,7 @@ namespace JellyfinTizen.Screens
         private void ApplySeasonFocus(View card, bool focused)
         {
             var frame = MediaCardFocus.GetCardFrame(card);
-            var content = MediaCardFocus.GetCardContent(card);
-
-            if (content != null)
-                content.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
-
-            card.Scale = Vector3.One;
+            card.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
             card.PositionZ = focused ? 20 : 0;
 
             if (focused)

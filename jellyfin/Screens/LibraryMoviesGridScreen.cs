@@ -26,7 +26,7 @@ namespace JellyfinTizen.Screens
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
         private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
-        private const float FocusScale = 1.08f;
+        private const float FocusScale = UiTheme.MediaCardFocusScale;
         private static readonly bool UseLightweightFocusMode = true;
         private const int CardTextHeight = 80;
         private const int RowBuildBatchSize = 2;
@@ -45,7 +45,7 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
         private readonly Dictionary<View, Animation> _focusAnimations = new();
-        private readonly Dictionary<ImageView, PosterLoadState> _posterStates = new();
+        private readonly Dictionary<int, List<PosterEntry>> _posterEntriesByRow = new();
 
         private View _contentViewport;
         private View _verticalContainer;
@@ -77,8 +77,13 @@ namespace JellyfinTizen.Screens
         {
             public string LowUrl;
             public string HighUrl;
-            public int Row;
             public PosterQuality Quality;
+        }
+
+        private sealed class PosterEntry
+        {
+            public ImageView Image;
+            public PosterLoadState State;
         }
 
         private enum PosterQuality
@@ -138,6 +143,7 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
+            var timer = PerfTrace.Start();
             var cardHeight = PosterHeight + CardTextHeight;
             var rowHeight = cardHeight + (FocusPad * 2) + RowSpacing;
             int builtRows = 0;
@@ -166,7 +172,7 @@ namespace JellyfinTizen.Screens
                     }
                 };
 
-                var row = new List<View>();
+                var row = new List<View>(_moviesPerRow);
 
                 int rowNumber = _grid.Count;
                 for (int i = 0; i < _moviesPerRow && _nextMovieIndexToBuild < _movies.Count; i++, _nextMovieIndexToBuild++)
@@ -192,6 +198,8 @@ namespace JellyfinTizen.Screens
                 _isGridBuildCompleted = true;
                 _buildTimer?.Stop();
             }
+
+            PerfTrace.End("LibraryMoviesGridScreen.BuildGridBatch", timer);
         }
 
         public override void OnShow()
@@ -219,13 +227,26 @@ namespace JellyfinTizen.Screens
             ResetSettingsPanelVisualState();
 
             Highlight(true);
-            FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
             ScrollHorizontalIfNeeded();
             ScrollVerticalIfNeeded();
             EnsureVisiblePostersLoaded();
             StartBuildTimer();
             StartPosterRefreshTimer();
             StartHighQualityDelayTimer();
+
+            try
+            {
+                Tizen.Applications.CoreApplication.Post(() =>
+                {
+                    FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
+                    ScrollHorizontalIfNeeded();
+                    ScrollVerticalIfNeeded();
+                });
+            }
+            catch
+            {
+                FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
+            }
         }
 
         public override void OnHide()
@@ -274,13 +295,24 @@ namespace JellyfinTizen.Screens
                 subtitlePoint: (int)UiTheme.MediaCardSubtitle
             );
 
-            _posterStates[poster] = new PosterLoadState
+            var state = new PosterLoadState
             {
                 LowUrl = posterLowUrl,
                 HighUrl = posterHighUrl,
-                Row = rowNumber,
                 Quality = PosterQuality.Unloaded
             };
+
+            if (!_posterEntriesByRow.TryGetValue(rowNumber, out var rowEntries))
+            {
+                rowEntries = new List<PosterEntry>(_moviesPerRow);
+                _posterEntriesByRow[rowNumber] = rowEntries;
+            }
+
+            rowEntries.Add(new PosterEntry
+            {
+                Image = poster,
+                State = state
+            });
 
             return wrapper;
         }
@@ -377,8 +409,10 @@ namespace JellyfinTizen.Screens
 
         private void EnsureVisiblePostersLoaded()
         {
-            if (_posterStates.Count == 0 || _grid.Count == 0)
+            if (_posterEntriesByRow.Count == 0 || _grid.Count == 0)
                 return;
+
+            var timer = PerfTrace.Start();
 
             int rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
             int viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
@@ -393,47 +427,94 @@ namespace JellyfinTizen.Screens
             int keepLowMin = Math.Max(0, firstVisibleRow - PosterKeepLowRowBuffer);
             int keepLowMax = Math.Min(_grid.Count - 1, lastVisibleRow + PosterKeepLowRowBuffer);
 
-            foreach (var pair in _posterStates)
+            for (int row = firstVisibleRow; row <= lastVisibleRow; row++)
             {
-                var image = pair.Key;
-                var state = pair.Value;
-                bool isVisibleRange = state.Row >= firstVisibleRow && state.Row <= lastVisibleRow;
-                bool keepLowRange = state.Row >= keepLowMin && state.Row <= keepLowMax;
+                UpgradeRowToVisibleQuality(row);
+            }
 
-                if (isVisibleRange)
-                {
-                    if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
-                    {
-                        image.ResourceUrl = state.LowUrl;
-                        state.Quality = PosterQuality.Low;
-                    }
+            for (int row = keepLowMin; row <= keepLowMax; row++)
+            {
+                if (row >= firstVisibleRow && row <= lastVisibleRow)
+                    continue;
 
-                    if (_allowHighQualityUpgrade &&
-                        state.Quality == PosterQuality.Low &&
-                        !string.IsNullOrWhiteSpace(state.HighUrl))
-                    {
-                        image.ResourceUrl = state.HighUrl;
-                        state.Quality = PosterQuality.High;
-                    }
-                }
-                else if (keepLowRange)
+                KeepRowAtLowQuality(row);
+            }
+
+            foreach (var rowEntry in _posterEntriesByRow)
+            {
+                if (rowEntry.Key >= keepLowMin && rowEntry.Key <= keepLowMax)
+                    continue;
+
+                UnloadRow(rowEntry.Key);
+            }
+
+            PerfTrace.End("LibraryMoviesGridScreen.EnsureVisiblePostersLoaded", timer);
+        }
+
+        private void UpgradeRowToVisibleQuality(int row)
+        {
+            if (!_posterEntriesByRow.TryGetValue(row, out var entries))
+                return;
+
+            foreach (var entry in entries)
+            {
+                var image = entry.Image;
+                var state = entry.State;
+
+                if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
                 {
-                    if (state.Quality == PosterQuality.High && !string.IsNullOrWhiteSpace(state.LowUrl))
-                    {
-                        image.ResourceUrl = state.LowUrl;
-                        state.Quality = PosterQuality.Low;
-                    }
-                    else if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
-                    {
-                        image.ResourceUrl = state.LowUrl;
-                        state.Quality = PosterQuality.Low;
-                    }
+                    image.ResourceUrl = state.LowUrl;
+                    state.Quality = PosterQuality.Low;
                 }
-                else if (state.Quality != PosterQuality.Unloaded)
+
+                if (_allowHighQualityUpgrade &&
+                    state.Quality == PosterQuality.Low &&
+                    !string.IsNullOrWhiteSpace(state.HighUrl))
                 {
-                    image.ResourceUrl = null;
-                    state.Quality = PosterQuality.Unloaded;
+                    image.ResourceUrl = state.HighUrl;
+                    state.Quality = PosterQuality.High;
                 }
+            }
+        }
+
+        private void KeepRowAtLowQuality(int row)
+        {
+            if (!_posterEntriesByRow.TryGetValue(row, out var entries))
+                return;
+
+            foreach (var entry in entries)
+            {
+                var image = entry.Image;
+                var state = entry.State;
+
+                if (state.Quality == PosterQuality.High && !string.IsNullOrWhiteSpace(state.LowUrl))
+                {
+                    image.ResourceUrl = state.LowUrl;
+                    state.Quality = PosterQuality.Low;
+                }
+                else if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
+                {
+                    image.ResourceUrl = state.LowUrl;
+                    state.Quality = PosterQuality.Low;
+                }
+            }
+        }
+
+        private void UnloadRow(int row)
+        {
+            if (!_posterEntriesByRow.TryGetValue(row, out var entries))
+                return;
+
+            foreach (var entry in entries)
+            {
+                var image = entry.Image;
+                var state = entry.State;
+
+                if (state.Quality == PosterQuality.Unloaded)
+                    continue;
+
+                image.ResourceUrl = null;
+                state.Quality = PosterQuality.Unloaded;
             }
         }
 
@@ -491,10 +572,19 @@ namespace JellyfinTizen.Screens
             if (_grid.Count == 0 || _grid[0].Count == 0)
                 return;
 
+            var nextRow = Math.Clamp(_rowIndex + rowDelta, 0, _grid.Count - 1);
+            var nextCol = Math.Clamp(_colIndex + colDelta, 0, _grid[nextRow].Count - 1);
+            if (nextRow == _rowIndex && nextCol == _colIndex)
+                return;
+
+            // Keep navigation smooth by deferring high-quality upgrades until focus settles.
+            _allowHighQualityUpgrade = false;
+            StartHighQualityDelayTimer();
+
             Highlight(false);
 
-            _rowIndex = Math.Clamp(_rowIndex + rowDelta, 0, _grid.Count - 1);
-            _colIndex = Math.Clamp(_colIndex + colDelta, 0, _grid[_rowIndex].Count - 1);
+            _rowIndex = nextRow;
+            _colIndex = nextCol;
 
             Highlight(true);
             FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
@@ -508,11 +598,7 @@ namespace JellyfinTizen.Screens
         {
             var card = _grid[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
-            var content = MediaCardFocus.GetCardContent(card);
-            if (content != null)
-                AnimateCardScale(content, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
-
-            card.Scale = Vector3.One;
+            AnimateCardScale(card, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
             card.PositionZ = focused ? 20 : 0;
 
             if (focused)
@@ -521,38 +607,38 @@ namespace JellyfinTizen.Screens
                 MediaCardFocus.ClearFrameFocus(frame);
         }
 
-        private void AnimateCardScale(View content, Vector3 targetScale)
+        private void AnimateCardScale(View card, Vector3 targetScale)
         {
-            if (content == null)
+            if (card == null)
             {
                 return;
             }
 
             if (UseLightweightFocusMode)
             {
-                if (_focusAnimations.TryGetValue(content, out var existingDirect))
+                if (_focusAnimations.TryGetValue(card, out var existingDirect))
                 {
                     UiAnimator.StopAndDispose(ref existingDirect);
-                    _focusAnimations.Remove(content);
+                    _focusAnimations.Remove(card);
                 }
 
-                content.Scale = targetScale;
+                card.Scale = targetScale;
                 return;
             }
 
-            if (_focusAnimations.TryGetValue(content, out var existing))
+            if (_focusAnimations.TryGetValue(card, out var existing))
             {
                 UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(content);
+                _focusAnimations.Remove(card);
             }
 
             var animation = UiAnimator.Start(
                 UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(content, "Scale", targetScale),
-                () => _focusAnimations.Remove(content)
+                anim => anim.AnimateTo(card, "Scale", targetScale),
+                () => _focusAnimations.Remove(card)
             );
 
-            _focusAnimations[content] = animation;
+            _focusAnimations[card] = animation;
         }
 
         private void FocusSettings(bool focused)
