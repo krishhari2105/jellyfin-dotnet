@@ -12,6 +12,8 @@ namespace JellyfinTizen.UI
         public static readonly Color Accent = new Color(0f / 255f, 167f / 255f, 225f / 255f, 1f);
         public static readonly Color AccentFocused = new Color(30f / 255f, 176f / 255f, 222f / 255f, 1f);
         public static readonly Color AccentSoft = new Color(0f / 255f, 167f / 255f, 225f / 255f, 0.24f);
+        public static readonly Color MediaCardFocusFill = new Color(1f, 1f, 1f, 0.16f);
+        public static readonly Color MediaCardFocusBorder = new Color(1f, 1f, 1f, 0.92f);
         public static readonly Color TextPrimary = new Color(243f / 255f, 247f / 255f, 255f / 255f, 1f);
         public static readonly Color TextSecondary = new Color(183f / 255f, 195f / 255f, 216f / 255f, 1f);
         public static readonly Color Danger = new Color(255f / 255f, 90f / 255f, 100f / 255f, 1f);

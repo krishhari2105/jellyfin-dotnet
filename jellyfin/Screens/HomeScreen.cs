@@ -16,6 +16,8 @@ namespace JellyfinTizen.Screens
         private const int SidePadding = UiTheme.HomeSidePadding;
         private const int FocusBorder = UiTheme.HomeFocusBorder;
         private const int FocusPad = UiTheme.HomeFocusPad;
+        private const int ContentViewportTopInset = 4;
+        private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
         private const int LibraryTitleImageGap = 12;
         private const float FocusScale = 1.08f;
         private static readonly bool UseLightweightFocusMode = true;
@@ -31,6 +33,7 @@ namespace JellyfinTizen.Screens
         private readonly List<int> _rowHeights = new();
         private readonly Dictionary<View, Animation> _focusAnimations = new();
 
+        private View _contentViewport;
         private View _verticalContainer;
         private int _rowIndex;
         private int _colIndex;
@@ -47,8 +50,8 @@ namespace JellyfinTizen.Screens
         private Animation _horizontalScrollAnimation;
         private Animation _verticalScrollAnimation;
 
-        private readonly Color _focusColor = UiTheme.Accent;
-        private readonly Color _focusBorderColor = UiTheme.AccentSoft;
+        private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
+        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
 
         public HomeScreen(List<HomeRowData> rows)
         {
@@ -69,15 +72,24 @@ namespace JellyfinTizen.Screens
                 out _settingsButton
             );
 
+            _contentViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = Math.Max(0, Window.Default.Size.Height - ContentViewportStartY),
+                PositionY = ContentViewportStartY,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
             _verticalContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = RowsStartY,
+                PositionY = 0,
                 PositionZ = 0
             };
 
-            root.Add(_verticalContainer);
+            _contentViewport.Add(_verticalContainer);
+            root.Add(_contentViewport);
             root.Add(topBar);
 
             BuildRows();
@@ -430,8 +442,10 @@ namespace JellyfinTizen.Screens
 
         private void ScrollVerticalIfNeeded()
         {
-            var viewportHeight = Window.Default.Size.Height;
-            var currentOffset = -_verticalContainer.PositionY + RowsStartY;
+            var viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
+                ? _contentViewport.SizeHeight
+                : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
+            var currentOffset = -_verticalContainer.PositionY;
             var targetY = _verticalContainer.PositionY;
 
             var rowTop = _rowTops[_rowIndex];
@@ -451,8 +465,8 @@ namespace JellyfinTizen.Screens
                 targetY += delta;
             }
 
-            if (targetY > RowsStartY)
-                targetY = RowsStartY;
+            if (targetY > 0)
+                targetY = 0;
 
             if (Math.Abs(targetY - _verticalContainer.PositionY) < 0.5f)
             {

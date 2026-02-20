@@ -22,7 +22,7 @@ namespace JellyfinTizen.Screens
         private const int FocusPad = 20;
         private const float FocusScale = 1.14f;
 
-        private readonly Color _focusBorderColor = UiTheme.AccentSoft;
+        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _season;
         private View _infoColumn;
         private View _episodeViewport;
@@ -198,6 +198,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
                 PointSize = 32,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
@@ -215,6 +216,7 @@ namespace JellyfinTizen.Screens
 
             _episodeRowContainer = new View
             {
+                PositionX = FocusPad,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -360,7 +362,7 @@ namespace JellyfinTizen.Screens
             card.PositionZ = focused ? 20 : 0;
 
             if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, UiTheme.Accent, lightweight: false);
+                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, UiTheme.MediaCardFocusBorder, lightweight: false);
             else
                 MediaCardFocus.ClearFrameFocus(frame);
         }
@@ -372,7 +374,7 @@ namespace JellyfinTizen.Screens
 
             if (_episodeIndex == 0)
             {
-                AnimateEpisodeRowTo(0);
+                AnimateEpisodeRowTo(FocusPad);
                 return;
             }
 

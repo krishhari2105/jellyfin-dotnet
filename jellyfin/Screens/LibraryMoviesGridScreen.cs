@@ -23,6 +23,8 @@ namespace JellyfinTizen.Screens
         private const int RowSpacing = UiTheme.LibraryRowSpacing;
         private const int FocusBorder = UiTheme.LibraryFocusBorder;
         private const int FocusPad = UiTheme.LibraryFocusPad;
+        private const int ContentViewportTopInset = 4;
+        private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
         private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
         private const float FocusScale = 1.08f;
         private static readonly bool UseLightweightFocusMode = true;
@@ -34,8 +36,8 @@ namespace JellyfinTizen.Screens
         private const int BuildTickMs = 20;
         private const int HighQualityDelayMs = 320;
 
-        private readonly Color _focusColor = UiTheme.Accent;
-        private readonly Color _focusBorderColor = UiTheme.AccentSoft;
+        private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
+        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
 
         private readonly List<JellyfinMovie> _movies;
 
@@ -45,6 +47,7 @@ namespace JellyfinTizen.Screens
         private readonly Dictionary<View, Animation> _focusAnimations = new();
         private readonly Dictionary<ImageView, PosterLoadState> _posterStates = new();
 
+        private View _contentViewport;
         private View _verticalContainer;
 
         private int _rowIndex;
@@ -105,14 +108,23 @@ namespace JellyfinTizen.Screens
                 out _settingsButton
             );
 
+            _contentViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = Math.Max(0, Window.Default.Size.Height - ContentViewportStartY),
+                PositionY = ContentViewportStartY,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
             _verticalContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PositionY = ContentStartY
+                PositionY = 0
             };
 
-            root.Add(_verticalContainer);
+            _contentViewport.Add(_verticalContainer);
+            root.Add(_contentViewport);
             root.Add(topBar);
 
             Add(root);
@@ -369,8 +381,11 @@ namespace JellyfinTizen.Screens
                 return;
 
             int rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
-            int visibleTop = (int)(-_verticalContainer.PositionY + ContentStartY);
-            int visibleBottom = visibleTop + Window.Default.Size.Height;
+            int viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
+                ? (int)_contentViewport.SizeHeight
+                : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
+            int visibleTop = (int)(-_verticalContainer.PositionY);
+            int visibleBottom = visibleTop + viewportHeight;
 
             int firstVisibleRow = Math.Max(0, (visibleTop / rowHeight) - PosterVisibleRowBuffer);
             int lastVisibleRow = Math.Min(_grid.Count - 1, (visibleBottom / rowHeight) + PosterVisibleRowBuffer);
@@ -728,10 +743,12 @@ namespace JellyfinTizen.Screens
 
         private void ScrollVerticalIfNeeded()
         {
-            var viewportHeight = Window.Default.Size.Height;
+            var viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
+                ? _contentViewport.SizeHeight
+                : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
             var rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
 
-            var currentOffset = -_verticalContainer.PositionY + ContentStartY;
+            var currentOffset = -_verticalContainer.PositionY;
             var targetY = _verticalContainer.PositionY;
 
             var rowTop = _rowIndex * rowHeight;
@@ -753,8 +770,8 @@ namespace JellyfinTizen.Screens
                 targetY += delta;
             }
 
-            if (targetY > ContentStartY)
-                targetY = ContentStartY;
+            if (targetY > 0)
+                targetY = 0;
 
             if (Math.Abs(targetY - _verticalContainer.PositionY) < 0.5f)
             {
