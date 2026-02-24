@@ -74,7 +74,7 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = textHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 12, 0),
+                Padding = new Extents(8, 8, 20, 8),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -91,7 +91,8 @@ namespace JellyfinTizen.UI
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
+                LineWrapMode = LineWrapMode.Word,
+                Ellipsis = true
             });
 
             if (!string.IsNullOrWhiteSpace(subtitle))
@@ -104,7 +105,8 @@ namespace JellyfinTizen.UI
                     PointSize = subtitlePoint,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center,
-                    MultiLine = false
+                    MultiLine = false,
+                    Ellipsis = true
                 });
             }
 

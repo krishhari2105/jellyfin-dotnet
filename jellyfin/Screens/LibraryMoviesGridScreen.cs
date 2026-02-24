@@ -28,7 +28,7 @@ namespace JellyfinTizen.Screens
         private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private static readonly bool UseLightweightFocusMode = true;
-        private const int CardTextHeight = 80;
+        private const int CardTextHeight = 96;
         private const int RowBuildBatchSize = 2;
         private const int PosterVisibleRowBuffer = 1;
         private const int PosterKeepLowRowBuffer = 3;
@@ -598,8 +598,17 @@ namespace JellyfinTizen.Screens
         {
             var card = _grid[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
-            AnimateCardScale(card, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
-            card.PositionZ = focused ? 20 : 0;
+            var scaleTarget = frame ?? card;
+            AnimateCardScale(scaleTarget, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
+            if (frame != null)
+            {
+                frame.PositionZ = focused ? 20 : 0;
+                card.PositionZ = 0;
+            }
+            else
+            {
+                card.PositionZ = focused ? 20 : 0;
+            }
 
             if (focused)
                 MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);

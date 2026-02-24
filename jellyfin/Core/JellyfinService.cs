@@ -526,25 +526,27 @@ namespace JellyfinTizen.Core
             await PostAsync("/Sessions/Playing/Stopped", info);
         }
 
-        public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(string itemId, int? subtitleStreamIndex = null, bool forceBurnIn = false)
+        public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(string itemId, int? subtitleStreamIndex = null, bool forceBurnIn = false, int? audioStreamIndex = null, bool disableDirectPlay = false)
         {
             bool hasExplicitSubtitleSelection = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value >= 0;
-            bool forceServerTranscode = forceBurnIn && hasExplicitSubtitleSelection;
+            bool forceServerTranscode = disableDirectPlay || (forceBurnIn && hasExplicitSubtitleSelection);
             int? effectiveSubtitleStreamIndex = forceBurnIn && !hasExplicitSubtitleSelection
                 ? -1
                 : subtitleStreamIndex;
+            var deviceProfile = ProfileBuilder.BuildTizenProfile(forceBurnIn);
 
             // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
             var body = new 
             { 
                 UserId = UserId,
                 AutoOpenLiveStream = true,
-                DeviceProfile = ProfileBuilder.BuildTizenProfile(forceBurnIn),
+                DeviceProfile = deviceProfile,
                 EnableDirectPlay = !forceServerTranscode,
                 EnableDirectStream = !forceServerTranscode,
                 EnableTranscoding = true,
                 // Always include subtitle stream index, even if null (will be handled properly by server)
-                SubtitleStreamIndex = effectiveSubtitleStreamIndex
+                SubtitleStreamIndex = effectiveSubtitleStreamIndex,
+                AudioStreamIndex = audioStreamIndex
             };
 
             var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
@@ -573,6 +575,7 @@ namespace JellyfinTizen.Core
                         SupportsTranscoding = TryGetBool(src, "SupportsTranscoding", out var supportsTranscoding) && supportsTranscoding,
                         // TranscodingUrl is only present if transcoding is needed/possible
                         TranscodingUrl = TryGetString(src, "TranscodingUrl"),
+                        TranscodingReasons = TryGetStringArray(src, "TranscodingReasons"),
                         MediaStreams = new List<MediaStream>()
                     };
 
@@ -752,6 +755,25 @@ namespace JellyfinTizen.Core
                 return null;
 
             return prop.GetString();
+        }
+
+        private static List<string> TryGetStringArray(JsonElement element, string propertyName)
+        {
+            var values = new List<string>();
+            if (!element.TryGetProperty(propertyName, out var prop) || prop.ValueKind != JsonValueKind.Array)
+                return values;
+
+            foreach (var value in prop.EnumerateArray())
+            {
+                if (value.ValueKind != JsonValueKind.String)
+                    continue;
+
+                var text = value.GetString();
+                if (!string.IsNullOrWhiteSpace(text))
+                    values.Add(text);
+            }
+
+            return values;
         }
 
         public async Task<bool> GetIsAnamorphicAsync(string itemId)

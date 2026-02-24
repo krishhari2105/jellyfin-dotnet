@@ -24,6 +24,7 @@ namespace JellyfinTizen.Screens
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
         private const int ActionButtonHeight = 70;
+        private const int TitleLogoMaxWidth = 760;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -59,6 +60,11 @@ namespace JellyfinTizen.Screens
         private int _overviewMaxScroll;
         private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
         private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
+
+        public bool UsesImageLogoTitle =>
+            _mediaItem != null &&
+            _mediaItem.ItemType != "Episode" &&
+            _mediaItem.HasLogo;
 
         public MovieDetailsScreen(JellyfinMovie movie)
         {
@@ -237,10 +243,10 @@ namespace JellyfinTizen.Screens
         private View CreateDetailsTitleView(string fallbackText)
         {
             // Episodes should always keep textual title.
-            if (_mediaItem.ItemType == "Episode" || !_mediaItem.HasLogo)
+            if (!UsesImageLogoTitle)
                 return CreateDetailsTitleLabel(fallbackText);
 
-            var logoUrl = AppState.GetItemLogoUrl(_mediaItem.Id, 960);
+            var logoUrl = AppState.GetItemLogoUrl(_mediaItem.Id, TitleLogoMaxWidth);
             if (string.IsNullOrWhiteSpace(logoUrl))
                 return CreateDetailsTitleLabel(fallbackText);
 

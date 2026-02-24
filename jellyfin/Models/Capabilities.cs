@@ -16,6 +16,7 @@ namespace JellyfinTizen.Models
         public bool SupportsDirectPlay { get; set; }
         public bool SupportsTranscoding { get; set; }
         public string TranscodingUrl { get; set; }
+        public List<string> TranscodingReasons { get; set; }
         // Note: DirectStreamUrl is often null, so we construct it manually if DirectPlay is supported
         public List<MediaStream> MediaStreams { get; set; }
     }

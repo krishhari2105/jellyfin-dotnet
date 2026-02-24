@@ -19,7 +19,7 @@ using System.Globalization;
 
 namespace JellyfinTizen.Screens
 {
-    public class VideoPlayerScreen : ScreenBase, IKeyHandler
+    public partial class VideoPlayerScreen : ScreenBase, IKeyHandler
     {
         private Player _player;
         private JellyfinMovie _movie;
@@ -302,21 +302,32 @@ namespace JellyfinTizen.Screens
                 _player.Display = new Display(Window.Default);
                 _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
                 _player.DisplaySettings.IsVisible = true;
+                bool burnInActive = _burnIn && _initialSubtitleIndex.HasValue;
 
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(playbackMovie.Id, _initialSubtitleIndex, _burnIn);
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(playbackMovie.Id, _initialSubtitleIndex, burnInActive, _overrideAudioIndex);
                 if (playbackToken != _playbackToken)
                     return;
 
-                if (playbackInfo.MediaSources == null || playbackInfo.MediaSources.Count == 0)
-                    return;
-
-                var mediaSource = playbackInfo.MediaSources[0];
-                if (!string.IsNullOrWhiteSpace(_preferredMediaSourceId))
+                if (ShouldRetryPlaybackInfoForDtsOverride(playbackInfo, burnInActive))
                 {
-                    var preferredSource = playbackInfo.MediaSources.FirstOrDefault(s => s.Id == _preferredMediaSourceId);
-                    if (preferredSource != null)
-                        mediaSource = preferredSource;
+                    var retryPlaybackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
+                        playbackMovie.Id,
+                        _initialSubtitleIndex,
+                        burnInActive,
+                        _overrideAudioIndex,
+                        disableDirectPlay: true
+                    );
+
+                    if (playbackToken != _playbackToken)
+                        return;
+
+                    if (retryPlaybackInfo?.MediaSources != null && retryPlaybackInfo.MediaSources.Count > 0)
+                        playbackInfo = retryPlaybackInfo;
                 }
+
+                var mediaSource = ResolvePreferredMediaSource(playbackInfo);
+                if (mediaSource == null)
+                    return;
                 _currentMediaSource = mediaSource; 
                 _playSessionId = playbackInfo.PlaySessionId;
                 _ = LoadMediaSegmentsAsync();
@@ -339,12 +350,14 @@ namespace JellyfinTizen.Screens
                 bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
                 bool supportsTranscoding = mediaSource.SupportsTranscoding;
                 bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
-                bool forceTranscode = _overrideAudioIndex.HasValue || (_burnIn && _initialSubtitleIndex.HasValue);
+                bool forceTranscode = burnInActive;
 
                 if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
                 {
                     _playMethod = "DirectPlay";
                     streamUrl = $"{serverUrl}/Videos/{playbackMovie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
+                    if (_overrideAudioIndex.HasValue)
+                        streamUrl = UpsertQueryParam(streamUrl, "AudioStreamIndex", _overrideAudioIndex.Value.ToString());
                 }
                 else if (supportsTranscoding || forceTranscode)
                 {
@@ -356,8 +369,8 @@ namespace JellyfinTizen.Screens
                                          vidCodec.Contains("vp9") || vidCodec.Contains("av1");
                     string container = isVideoNative ? "mp4" : "ts";
                     string audioPriority = "ac3,eac3,aac,mp3";
-                    string requestedVideoCodecs = _burnIn ? "h264" : "h264,hevc,vp9,av1";
-                    string requestedAudioCodecs = _burnIn ? "ac3,eac3,aac" : audioPriority;
+                    string requestedVideoCodecs = burnInActive ? "h264" : "h264,hevc,vp9,av1";
+                    string requestedAudioCodecs = burnInActive ? "ac3,eac3,aac" : audioPriority;
                     const int fallbackMaxStreamingBitrate = 120000000;
                     const int fallbackAudioBitrate = 1411200;
                     int fallbackVideoBitrate = Math.Max(1000000, fallbackMaxStreamingBitrate - fallbackAudioBitrate);
@@ -374,6 +387,7 @@ namespace JellyfinTizen.Screens
                         streamUrl += $"&AudioBitrate={fallbackAudioBitrate}";
                         streamUrl += "&MinSegments=1";
                         streamUrl += "&BreakOnNonKeyFrames=True";
+
                     }
                     else
                     {
@@ -383,6 +397,7 @@ namespace JellyfinTizen.Screens
                             streamUrl = UpsertQueryParam(streamUrl, "SegmentContainer", container);
                             streamUrl = UpsertQueryParam(streamUrl, "AudioCodec", requestedAudioCodecs);
                         }
+
                     }
 
                     string AppendParam(string url, string param) 
@@ -399,7 +414,7 @@ namespace JellyfinTizen.Screens
                     if (_initialSubtitleIndex.HasValue)
                     {
                         streamUrl = UpsertQueryParam(streamUrl, "SubtitleStreamIndex", _initialSubtitleIndex.Value.ToString());
-                        if (_burnIn) streamUrl = UpsertQueryParam(streamUrl, "SubtitleMethod", "Encode");
+                        if (burnInActive) streamUrl = UpsertQueryParam(streamUrl, "SubtitleMethod", "Encode");
                     }
 
                     streamUrl = streamUrl.Replace("?&", "?").Replace("&&", "&").Replace(" ", "%20").Replace("\n", "").Replace("\r", "");
@@ -407,7 +422,7 @@ namespace JellyfinTizen.Screens
                 else
                     return;
 
-                if (!_burnIn)
+                if (!burnInActive)
                 {
                     var externalSubStreams = mediaSource.MediaStreams?.Where(s => s.Type == "Subtitle" && s.IsExternal).ToList();
                     if (externalSubStreams != null && externalSubStreams.Count > 0)
@@ -447,6 +462,7 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
+                CaptureStreamDebugEntry(streamUrl, mediaSource, forceTranscode, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
                 var source = new MediaUriSource(streamUrl);
                 SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, _playMethod);
                 _player.SetSource(source);
@@ -456,12 +472,13 @@ namespace JellyfinTizen.Screens
                     return;
 
                 ApplyDisplayModeForCurrentVideo();
+                ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
 
                 try { _ = _player.StreamInfo.GetVideoProperties(); } catch { }
                 try { _ = _player.AudioTrackInfo.GetCount(); } catch { }
                 try 
                 {
-                    if (!_burnIn && _initialSubtitleIndex.HasValue)
+                    if (!burnInActive && _initialSubtitleIndex.HasValue)
                     {
                         var selectedSubStream = mediaSource.MediaStreams?
                             .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
@@ -493,6 +510,7 @@ namespace JellyfinTizen.Screens
                     return;
 
                 ApplyDisplayModeForCurrentVideo();
+                ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
                 ApplySubtitleOffset();
 
                 var info = new PlaybackProgressInfo
@@ -1158,6 +1176,8 @@ namespace JellyfinTizen.Screens
             CreateAudioOverlay();
             CreateSubtitleOverlay();
             CreateSubtitleText();
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+                CreateStreamDebugOverlay();
             
             _osdTimer = new Timer(5000);
             _osdTimer.Tick += OnOsdTimerTick;
@@ -1199,6 +1219,195 @@ namespace JellyfinTizen.Screens
 
             kept.Add($"{key}={value}");
             return $"{baseUrl}?{string.Join("&", kept)}";
+        }
+
+        private MediaSourceInfo ResolvePreferredMediaSource(PlaybackInfoResponse playbackInfo)
+        {
+            if (playbackInfo?.MediaSources == null || playbackInfo.MediaSources.Count == 0)
+                return null;
+
+            var mediaSource = playbackInfo.MediaSources[0];
+            if (!string.IsNullOrWhiteSpace(_preferredMediaSourceId))
+            {
+                var preferredSource = playbackInfo.MediaSources.FirstOrDefault(s => s.Id == _preferredMediaSourceId);
+                if (preferredSource != null)
+                    mediaSource = preferredSource;
+            }
+
+            return mediaSource;
+        }
+
+        private bool ShouldRetryPlaybackInfoForDtsOverride(PlaybackInfoResponse playbackInfo, bool burnInActive)
+        {
+            if (!_overrideAudioIndex.HasValue || burnInActive)
+                return false;
+
+            var mediaSource = ResolvePreferredMediaSource(playbackInfo);
+            if (mediaSource == null || !mediaSource.SupportsTranscoding)
+                return false;
+
+            if (!string.IsNullOrWhiteSpace(mediaSource.TranscodingUrl))
+                return false;
+
+            var selectedAudioStream = mediaSource.MediaStreams?
+                .FirstOrDefault(s => s.Type == "Audio" && s.Index == _overrideAudioIndex.Value);
+            string codec = selectedAudioStream?.Codec;
+            if (!IsDtsCodec(codec))
+                return false;
+
+            // Jellyfin sometimes keeps DirectPlay when switching from a direct-play session
+            // to a DTS track mid-play and does not populate TranscodingUrl on the first call.
+            // Re-requesting PlaybackInfo with direct-play disabled asks the server to emit
+            // its own transcoding URL for the selected audio stream.
+            return true;
+        }
+
+        private static bool IsDtsCodec(string codec)
+        {
+            if (string.IsNullOrWhiteSpace(codec))
+                return false;
+
+            string normalized = codec.Trim().ToLowerInvariant();
+            return normalized.Contains("dts") || normalized.Contains("dca");
+        }
+
+        private static bool IsLikelyNativeAudioCodec(string codec)
+        {
+            if (string.IsNullOrWhiteSpace(codec))
+                return false;
+
+            string normalized = codec.Trim().ToLowerInvariant();
+            return normalized.Contains("aac") ||
+                   normalized.Contains("ac3") ||
+                   normalized.Contains("eac3") ||
+                   normalized.Contains("mp3");
+        }
+
+        private List<MediaStream> GetOrderedAudioStreams(MediaSourceInfo mediaSource = null)
+        {
+            var source = mediaSource ?? _currentMediaSource;
+            return source?.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Index)
+                .ToList();
+        }
+
+        private static List<MediaStream> GetDirectPlayableAudioStreams(List<MediaStream> audioStreams)
+        {
+            if (audioStreams == null || audioStreams.Count == 0)
+                return new List<MediaStream>();
+
+            return audioStreams
+                .Where(s => IsLikelyNativeAudioCodec(s?.Codec))
+                .OrderBy(s => s.Index)
+                .ToList();
+        }
+
+        private void SetAudioIndexByStreamIndex(List<MediaStream> audioStreams, int jellyfinStreamIndex)
+        {
+            if (audioStreams == null || audioStreams.Count == 0)
+            {
+                _audioIndex = 0;
+                return;
+            }
+
+            int matchIndex = audioStreams.FindIndex(s => s.Index == jellyfinStreamIndex);
+            _audioIndex = matchIndex >= 0
+                ? matchIndex
+                : Math.Clamp(_audioIndex, 0, audioStreams.Count - 1);
+        }
+
+        private bool TrySelectNativeAudioTrack(int jellyfinStreamIndex)
+        {
+            if (_player == null || _currentMediaSource == null)
+                return false;
+
+            if (!string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            try
+            {
+                int tizenAudioCount = _player.AudioTrackInfo.GetCount();
+                if (tizenAudioCount <= 0)
+                    return false;
+
+                var audioStreams = GetOrderedAudioStreams();
+                if (audioStreams == null || audioStreams.Count == 0)
+                    return false;
+
+                var directPlayableStreams = GetDirectPlayableAudioStreams(audioStreams);
+                if (directPlayableStreams.Count == 0)
+                    return false;
+
+                int tizenIndex = directPlayableStreams.FindIndex(s => s.Index == jellyfinStreamIndex);
+                if (tizenIndex < 0 || tizenIndex >= tizenAudioCount)
+                    return false;
+
+                _player.AudioTrackInfo.Selected = tizenIndex;
+                _overrideAudioIndex = jellyfinStreamIndex;
+                SetAudioIndexByStreamIndex(audioStreams, jellyfinStreamIndex);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private void SyncAudioSelectionFromPlaybackState(List<MediaStream> audioStreams)
+        {
+            if (audioStreams == null || audioStreams.Count == 0)
+            {
+                _audioIndex = 0;
+                return;
+            }
+
+            int selectedStreamIndex = -1;
+            if (string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase) && _player != null)
+            {
+                try
+                {
+                    int selectedTizenIndex = _player.AudioTrackInfo.Selected;
+                    var directPlayableStreams = GetDirectPlayableAudioStreams(audioStreams);
+                    if (selectedTizenIndex >= 0 && selectedTizenIndex < directPlayableStreams.Count)
+                        selectedStreamIndex = directPlayableStreams[selectedTizenIndex].Index;
+                }
+                catch
+                {
+                }
+            }
+
+            if (selectedStreamIndex < 0 && _overrideAudioIndex.HasValue)
+                selectedStreamIndex = _overrideAudioIndex.Value;
+
+            if (selectedStreamIndex < 0)
+                selectedStreamIndex = audioStreams[0].Index;
+
+            SetAudioIndexByStreamIndex(audioStreams, selectedStreamIndex);
+        }
+
+        private void ApplyPendingNativeAudioOverride(int playbackToken, MediaSourceInfo mediaSource)
+        {
+            if (!_overrideAudioIndex.HasValue || mediaSource == null)
+                return;
+
+            if (!string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            int requestedStreamIndex = _overrideAudioIndex.Value;
+            if (TrySelectNativeAudioTrack(requestedStreamIndex))
+                return;
+
+            _ = RetryNativeAudioOverrideSelectionAsync(playbackToken, requestedStreamIndex);
+        }
+
+        private async Task RetryNativeAudioOverrideSelectionAsync(int playbackToken, int jellyfinStreamIndex)
+        {
+            await Task.Delay(140);
+            if (playbackToken != _playbackToken)
+                return;
+
+            TrySelectNativeAudioTrack(jellyfinStreamIndex);
         }
 
         private bool OnOsdTimerTick(object sender, Timer.TickEventArgs e)
@@ -2976,10 +3185,7 @@ namespace JellyfinTizen.Screens
             ExitSubtitleOffsetAdjustMode();
             var wasVisible = _audioOverlayVisible;
 
-            var audioStreams = _currentMediaSource?.MediaStreams?
-                .Where(s => s.Type == "Audio")
-                .OrderBy(s => s.Index)
-                .ToList();
+            var audioStreams = GetOrderedAudioStreams();
 
             if (audioStreams == null || audioStreams.Count == 0) return;
             
@@ -3004,6 +3210,7 @@ namespace JellyfinTizen.Screens
                     _audioListContainer.Add(row);
                 }
             }
+            SyncAudioSelectionFromPlaybackState(audioStreams);
             UpdateAudioVisuals();
             ScrollAudioSelectionIntoView();
             _audioOverlay.Show();
@@ -3183,34 +3390,19 @@ namespace JellyfinTizen.Screens
             var selectedStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             string codec = selectedStream?.Codec?.ToLower() ?? "";
             
-            bool isLikelyNative = _playMethod == "DirectPlay" && 
-                                  (codec.Contains("aac") || codec.Contains("ac3") || codec.Contains("eac3") || codec.Contains("mp3"));
+            bool isLikelyNative = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase) &&
+                                  IsLikelyNativeAudioCodec(codec);
 
             if (isLikelyNative)
             {
-                try
-                {
-                    var supportedTracks = _currentMediaSource.MediaStreams
-                        .Where(s => s.Type == "Audio" && 
-                               (s.Codec != null && (s.Codec.ToLower().Contains("aac") || s.Codec.ToLower().Contains("ac3") || 
-                                s.Codec.ToLower().Contains("eac3") || s.Codec.ToLower().Contains("mp3"))))
-                        .OrderBy(s => s.Index)
-                        .ToList();
-
-                    int tizenIndex = supportedTracks.FindIndex(s => s.Index == jellyfinStreamIndex);
-                    if (tizenIndex != -1 && tizenIndex < _player.AudioTrackInfo.GetCount())
-                    {
-                        _player.AudioTrackInfo.Selected = tizenIndex;
-                        return;
-                    }
-                }
-                catch {}
+                if (TrySelectNativeAudioTrack(jellyfinStreamIndex))
+                    return;
             }
 
             long currentPos = GetPlayPositionMs();
+            _overrideAudioIndex = jellyfinStreamIndex;
             _suppressStopReportOnce = true;
             StopPlayback();
-            _overrideAudioIndex = jellyfinStreamIndex;
             _startPositionMs = (int)currentPos;
             StartPlayback();
         }
@@ -3523,6 +3715,7 @@ namespace JellyfinTizen.Screens
             ClearReportingContext();
             _currentMediaSource = null;
             _playSessionId = null;
+            RefreshStreamDebugOverlay();
             
             try
             {
@@ -3581,6 +3774,9 @@ namespace JellyfinTizen.Screens
                     break;
                 case AppKey.MediaStop: NavigationService.NavigateBack(); break;
                 case AppKey.MediaNext: PlayNextEpisode(); break;
+                case AppKey.MediaPrevious:
+                    ToggleStreamDebugOverlay();
+                    break;
                 case AppKey.MediaRewind:
                     if (_osdVisible) Scrub(-30);
                     else HandleHiddenDirectionalSeek(-1);

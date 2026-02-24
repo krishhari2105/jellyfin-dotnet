@@ -16,7 +16,7 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const int EpisodeCardWidth = 420;
         private const int EpisodeCardHeight = 236;
-        private const int EpisodeCardTextHeight = 90;
+        private const int EpisodeCardTextHeight = 104;
         private const int EpisodeCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
         private const int FocusPad = UiTheme.HomeFocusPad;
@@ -353,8 +353,17 @@ namespace JellyfinTizen.Screens
         private void ApplyEpisodeFocus(View card, bool focused)
         {
             var frame = MediaCardFocus.GetCardFrame(card);
-            card.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
-            card.PositionZ = focused ? 20 : 0;
+            var scaleTarget = frame ?? card;
+            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+            if (frame != null)
+            {
+                frame.PositionZ = focused ? 20 : 0;
+                card.PositionZ = 0;
+            }
+            else
+            {
+                card.PositionZ = focused ? 20 : 0;
+            }
 
             if (focused)
                 MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, UiTheme.MediaCardFocusBorder, lightweight: false);

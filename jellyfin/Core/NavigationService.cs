@@ -10,21 +10,48 @@ namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
+        private enum TransitionProfile
+        {
+            Slide,
+            CinematicPlayer
+        }
+
         private readonly struct TransitionSpec
         {
-            public TransitionSpec(int durationMs, float slideDistance, bool deferIncomingOnShow, bool deferOutgoingOnHide)
+            public TransitionSpec(
+                int durationMs,
+                float slideDistance,
+                bool deferIncomingOnShow,
+                bool deferOutgoingOnHide,
+                TransitionProfile profile)
             {
                 DurationMs = durationMs;
                 SlideDistance = slideDistance;
                 DeferIncomingOnShow = deferIncomingOnShow;
                 DeferOutgoingOnHide = deferOutgoingOnHide;
+                Profile = profile;
             }
 
             public int DurationMs { get; }
             public float SlideDistance { get; }
             public bool DeferIncomingOnShow { get; }
             public bool DeferOutgoingOnHide { get; }
+            public TransitionProfile Profile { get; }
         }
+
+        private static readonly Vector3 UnitScale = new(1f, 1f, 1f);
+        private static readonly Vector3 CinematicIncomingStartScale = new(1.035f, 1.035f, 1f);
+        private static readonly Vector3 CinematicIncomingBackStartScale = new(0.965f, 0.965f, 1f);
+        private static readonly Vector3 CinematicOutgoingForwardEndScale = new(0.94f, 0.94f, 1f);
+        private static readonly Vector3 CinematicOutgoingBackEndScale = new(1.04f, 1.04f, 1f);
+        private const int CinematicTransitionDurationMs = 210;
+        private const float CinematicForwardIncomingShiftFactor = 0.16f;
+        private const float CinematicForwardOutgoingShiftFactor = 0.22f;
+        private const float CinematicForwardOutgoingHeavyShiftFactor = 0.14f;
+        private const float CinematicBackIncomingShiftFactor = 0.22f;
+        private const float CinematicBackIncomingHeavyShiftFactor = 0.14f;
+        private const float CinematicBackOutgoingShiftFactor = 0.18f;
+        private const float CinematicBackOutgoingHeavyShiftFactor = 0.14f;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
@@ -124,8 +151,7 @@ namespace JellyfinTizen.Core
                 outgoing.OnHide();
             if (addToStack) _stack.Push(outgoing);
 
-            incoming.PositionX = slide;
-            incoming.Opacity = 0.0f;
+            PrepareIncomingForNavigate(incoming, slide, transition.Profile);
             _window.Add(incoming);
             _currentScreen = incoming;
             if (!transition.DeferIncomingOnShow)
@@ -137,13 +163,11 @@ namespace JellyfinTizen.Core
                     transition.DurationMs,
                     animation =>
                     {
-                        animation.AnimateTo(incoming, "PositionX", 0.0f);
-                        animation.AnimateTo(incoming, "Opacity", 1.0f);
-                        animation.AnimateTo(outgoing, "PositionX", -slide * 0.6f);
-                        animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                        ConfigureNavigateAnimation(animation, incoming, outgoing, slide, transition.Profile);
                     },
                     () =>
                     {
+                        ResetScreenTransform(incoming);
                         if (transition.DeferOutgoingOnHide)
                         {
                             try { outgoing.OnHide(); } catch { }
@@ -244,8 +268,7 @@ namespace JellyfinTizen.Core
             if (!transition.DeferOutgoingOnHide)
                 outgoing.OnHide();
 
-            incoming.PositionX = -slide * 0.6f;
-            incoming.Opacity = 0.0f;
+            PrepareIncomingForNavigateBack(incoming, slide, transition.Profile);
             _window.Add(incoming);
             _currentScreen = incoming;
             if (!transition.DeferIncomingOnShow)
@@ -257,13 +280,11 @@ namespace JellyfinTizen.Core
                     transition.DurationMs,
                     animation =>
                     {
-                        animation.AnimateTo(incoming, "PositionX", 0.0f);
-                        animation.AnimateTo(incoming, "Opacity", 1.0f);
-                        animation.AnimateTo(outgoing, "PositionX", slide);
-                        animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                        ConfigureNavigateBackAnimation(animation, incoming, outgoing, slide, transition.Profile);
                     },
                     () =>
                     {
+                        ResetScreenTransform(incoming);
                         if (transition.DeferOutgoingOnHide)
                         {
                             try { outgoing.OnHide(); } catch { }
@@ -310,11 +331,16 @@ namespace JellyfinTizen.Core
             {
                 _currentScreen.OnHide();
                 _window.Remove(_currentScreen);
-                if (addToStack) _stack.Push(_currentScreen);
+                if (addToStack)
+                {
+                    ResetScreenTransform(_currentScreen);
+                    _stack.Push(_currentScreen);
+                }
                 else _currentScreen.Dispose();
             }
 
             _currentScreen = screen;
+            ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
         }
@@ -332,6 +358,7 @@ namespace JellyfinTizen.Core
             _currentScreen.Dispose();
             _currentScreen = _stack.Pop();
             if (_currentScreen == null) return;
+            ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
         }
@@ -345,7 +372,9 @@ namespace JellyfinTizen.Core
                 try
                 {
                     outgoing.PositionX = 0.0f;
+                    outgoing.PositionY = 0.0f;
                     outgoing.Opacity = 1.0f;
+                    outgoing.Scale = UnitScale;
                 }
                 catch { }
             }
@@ -367,11 +396,15 @@ namespace JellyfinTizen.Core
         {
             bool outgoingIsVideoPlayer = outgoing is VideoPlayerScreen;
             bool incomingIsVideoPlayer = incoming is VideoPlayerScreen;
+            var profile = UseCinematicPlayerProfile(outgoing, incoming)
+                ? TransitionProfile.CinematicPlayer
+                : TransitionProfile.Slide;
             return new TransitionSpec(
-                UiAnimator.ScreenDurationMs,
+                profile == TransitionProfile.CinematicPlayer ? CinematicTransitionDurationMs : UiAnimator.ScreenDurationMs,
                 GetSlideDistance(),
                 deferIncomingOnShow: incomingIsVideoPlayer,
-                deferOutgoingOnHide: outgoingIsVideoPlayer);
+                deferOutgoingOnHide: outgoingIsVideoPlayer,
+                profile: profile);
         }
 
         private static bool ShouldAnimateTransition(ScreenBase outgoing, ScreenBase incoming, bool animated)
@@ -381,10 +414,124 @@ namespace JellyfinTizen.Core
 
         private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
         {
+            return UseCinematicPlayerProfile(outgoing, incoming);
+        }
+
+        private static bool UseCinematicPlayerProfile(ScreenBase outgoing, ScreenBase incoming)
+        {
             return (outgoing is MovieDetailsScreen && incoming is VideoPlayerScreen) ||
                    (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen) ||
                    (outgoing is EpisodeDetailsScreen && incoming is VideoPlayerScreen) ||
                    (outgoing is VideoPlayerScreen && incoming is EpisodeDetailsScreen);
+        }
+
+        private static void PrepareIncomingForNavigate(ScreenBase incoming, float slide, TransitionProfile profile)
+        {
+            if (profile == TransitionProfile.CinematicPlayer)
+            {
+                incoming.PositionX = slide * CinematicForwardIncomingShiftFactor;
+                incoming.Opacity = 0.0f;
+                incoming.Scale = CinematicIncomingStartScale;
+                return;
+            }
+
+            incoming.PositionX = slide;
+            incoming.Opacity = 0.0f;
+            incoming.Scale = UnitScale;
+        }
+
+        private static void PrepareIncomingForNavigateBack(ScreenBase incoming, float slide, TransitionProfile profile)
+        {
+            if (profile == TransitionProfile.CinematicPlayer)
+            {
+                bool incomingHasHeavyLogoTitle = HasHeavyLogoTitle(incoming);
+                incoming.PositionX = -slide * (incomingHasHeavyLogoTitle
+                    ? CinematicBackIncomingHeavyShiftFactor
+                    : CinematicBackIncomingShiftFactor);
+                incoming.Opacity = 0.0f;
+                incoming.Scale = incomingHasHeavyLogoTitle ? UnitScale : CinematicIncomingBackStartScale;
+                return;
+            }
+
+            incoming.PositionX = -slide * 0.6f;
+            incoming.Opacity = 0.0f;
+            incoming.Scale = UnitScale;
+        }
+
+        private static void ConfigureNavigateAnimation(
+            Animation animation,
+            ScreenBase incoming,
+            ScreenBase outgoing,
+            float slide,
+            TransitionProfile profile)
+        {
+            if (profile == TransitionProfile.CinematicPlayer)
+            {
+                bool outgoingHasHeavyLogoTitle = HasHeavyLogoTitle(outgoing);
+                animation.AnimateTo(incoming, "PositionX", 0.0f);
+                animation.AnimateTo(incoming, "Opacity", 1.0f);
+                animation.AnimateTo(incoming, "Scale", UnitScale);
+                animation.AnimateTo(outgoing, "PositionX", -slide * (outgoingHasHeavyLogoTitle
+                    ? CinematicForwardOutgoingHeavyShiftFactor
+                    : CinematicForwardOutgoingShiftFactor));
+                animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                if (!outgoingHasHeavyLogoTitle)
+                    animation.AnimateTo(outgoing, "Scale", CinematicOutgoingForwardEndScale);
+                return;
+            }
+
+            animation.AnimateTo(incoming, "PositionX", 0.0f);
+            animation.AnimateTo(incoming, "Opacity", 1.0f);
+            animation.AnimateTo(outgoing, "PositionX", -slide * 0.6f);
+            animation.AnimateTo(outgoing, "Opacity", 0.0f);
+        }
+
+        private static void ConfigureNavigateBackAnimation(
+            Animation animation,
+            ScreenBase incoming,
+            ScreenBase outgoing,
+            float slide,
+            TransitionProfile profile)
+        {
+            if (profile == TransitionProfile.CinematicPlayer)
+            {
+                bool incomingHasHeavyLogoTitle = HasHeavyLogoTitle(incoming);
+                animation.AnimateTo(incoming, "PositionX", 0.0f);
+                animation.AnimateTo(incoming, "Opacity", 1.0f);
+                if (!incomingHasHeavyLogoTitle)
+                    animation.AnimateTo(incoming, "Scale", UnitScale);
+                animation.AnimateTo(outgoing, "PositionX", slide * (incomingHasHeavyLogoTitle
+                    ? CinematicBackOutgoingHeavyShiftFactor
+                    : CinematicBackOutgoingShiftFactor));
+                animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                animation.AnimateTo(outgoing, "Scale", CinematicOutgoingBackEndScale);
+                return;
+            }
+
+            animation.AnimateTo(incoming, "PositionX", 0.0f);
+            animation.AnimateTo(incoming, "Opacity", 1.0f);
+            animation.AnimateTo(outgoing, "PositionX", slide);
+            animation.AnimateTo(outgoing, "Opacity", 0.0f);
+        }
+
+        private static void ResetScreenTransform(ScreenBase screen)
+        {
+            if (screen == null)
+                return;
+
+            try
+            {
+                screen.PositionX = 0.0f;
+                screen.PositionY = 0.0f;
+                screen.Opacity = 1.0f;
+                screen.Scale = UnitScale;
+            }
+            catch { }
+        }
+
+        private static bool HasHeavyLogoTitle(ScreenBase screen)
+        {
+            return screen is MovieDetailsScreen movieDetails && movieDetails.UsesImageLogoTitle;
         }
     }
 }

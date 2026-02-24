@@ -161,7 +161,7 @@ namespace JellyfinTizen.Screens
 
                 var rowInfo = GetRowStyle(row.Kind);
 
-                var textHeight = GetCardTextHeight(row.Kind);
+                var textHeight = GetCardTextHeight(row);
                 var cardHeight = rowInfo.CardHeight + textHeight;
                 var rowHeight = rowInfo.RowHeight + textHeight;
                 //var titleImageGap = row.Kind == HomeRowKind.Libraries ? LibraryTitleImageGap : 0;
@@ -227,14 +227,26 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private int GetCardTextHeight(HomeRowKind kind)
+        private int GetCardTextHeight(HomeRowData row)
         {
-            return kind switch
+            bool hasSubtitle = row?.Kind != HomeRowKind.Libraries &&
+                               row?.Items != null &&
+                               row.Items.Exists(item => !string.IsNullOrWhiteSpace(item?.Subtitle));
+
+            if (!hasSubtitle)
             {
-                HomeRowKind.Libraries => 68,
-                HomeRowKind.NextUp => 84,
-                HomeRowKind.ContinueWatching => 84,
-                _ => 80
+                return row?.Kind switch
+                {
+                    HomeRowKind.Libraries => 72,
+                    _ => 90
+                };
+            }
+
+            return row.Kind switch
+            {
+                HomeRowKind.NextUp => 108,
+                HomeRowKind.ContinueWatching => 108,
+                _ => 104
             };
         }
 
@@ -340,17 +352,28 @@ namespace JellyfinTizen.Screens
         {
             var card = _rowCards[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
+            var scaleTarget = frame ?? card;
 
             if (focused)
             {
-                AnimateCardScale(card, new Vector3(FocusScale, FocusScale, 1f));
-                card.PositionZ = 30;
+                AnimateCardScale(scaleTarget, new Vector3(FocusScale, FocusScale, 1f));
+                if (frame != null)
+                {
+                    frame.PositionZ = 30;
+                    card.PositionZ = 0;
+                }
+                else
+                {
+                    card.PositionZ = 30;
+                }
 
                 MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);
             }
             else
             {
-                AnimateCardScale(card, Vector3.One);
+                AnimateCardScale(scaleTarget, Vector3.One);
+                if (frame != null)
+                    frame.PositionZ = 0;
                 card.PositionZ = 0;
 
                 MediaCardFocus.ClearFrameFocus(frame);
