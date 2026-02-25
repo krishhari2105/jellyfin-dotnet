@@ -181,10 +181,13 @@ namespace JellyfinTizen.Core
                 $"&quality=95&v=2&api_key={apiKey}";
         }
 
-        public static string GetItemLogoUrl(string itemId, int maxWidth = 900)
+        public static string GetItemLogoUrl(string itemId, int maxWidth = 900, int quality = 90)
         {
             if (maxWidth <= 0)
                 maxWidth = 900;
+            if (quality <= 0)
+                quality = 90;
+            quality = Math.Clamp(quality, 30, 100);
 
             if (string.IsNullOrWhiteSpace(itemId) ||
                 string.IsNullOrWhiteSpace(ServerUrl) ||
@@ -196,7 +199,7 @@ namespace JellyfinTizen.Core
             var apiKey = Uri.EscapeDataString(AccessToken);
             return
                 $"{ServerUrl.TrimEnd('/')}/Items/{itemId}/Images/Logo/0" +
-                $"?maxWidth={maxWidth}&quality=95&api_key={apiKey}";
+                $"?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
         }
     }
 }

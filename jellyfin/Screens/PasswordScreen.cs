@@ -18,12 +18,12 @@ namespace JellyfinTizen.Screens
         {
             AppState.Username = username;
 
-            var root = UiFactory.CreateAtmosphericBackground();
-            var panel = UiFactory.CreateCenteredPanel();
-            panel.Add(UiFactory.CreateDisplayTitle($"Sign In As {username}"));
-            panel.Add(UiFactory.CreateSubtitle("Enter your password to continue."));
+            var root = MonochromeAuthFactory.CreateBackground();
+            var panel = MonochromeAuthFactory.CreatePanel();
+            panel.Add(MonochromeAuthFactory.CreateTitle($"Sign In As {username}"));
+            panel.Add(MonochromeAuthFactory.CreateSubtitle("Enter your password to continue."));
 
-            var passwordInputShell = UiFactory.CreateInputFieldShell("Password", out _passwordInput);
+            var passwordInputShell = MonochromeAuthFactory.CreateInputFieldShell("Password", out _passwordInput);
 
             var hiddenInput = new PropertyMap();
             hiddenInput.Add(HiddenInputProperty.Mode, new PropertyValue((int)HiddenInputModeType.ShowLastCharacter));
@@ -31,8 +31,8 @@ namespace JellyfinTizen.Screens
             hiddenInput.Add(HiddenInputProperty.SubstituteCharacter, new PropertyValue(0x2A));
             _passwordInput.HiddenInputSettings = hiddenInput;
 
-            _loginButton = UiFactory.CreateButton("Login", out _loginText, primary: true);
-            _errorLabel = UiFactory.CreateErrorLabel();
+            _loginButton = MonochromeAuthFactory.CreateButton("Login", out _loginText, primary: true);
+            _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(passwordInputShell);
             panel.Add(_loginButton);
@@ -46,7 +46,7 @@ namespace JellyfinTizen.Screens
             _passwordInput.Text = string.Empty;
             FocusManager.Instance.SetCurrentFocusView(_passwordInput);
             _loginFocused = false;
-            UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
+            MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
         }
 
         public void HandleKey(AppKey key)
@@ -79,12 +79,12 @@ namespace JellyfinTizen.Screens
             if (focused)
             {
                 FocusManager.Instance.SetCurrentFocusView(_loginButton);
-                UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: true);
+                MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: true);
             }
             else
             {
                 FocusManager.Instance.SetCurrentFocusView(_passwordInput);
-                UiFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
+                MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
             }
         }
 

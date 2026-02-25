@@ -19,9 +19,13 @@ namespace JellyfinTizen.Screens
     {
         private const int RecentPerLibraryLimit = 4;
         private const int RecentFetchConcurrency = 4;
+        private const int ImageUrlCacheMaxEntries = 2500;
 
         private bool _navigated;
+        private bool _loaded;
         private ThreadingTimer _fallbackTimer;
+        private AppleTvLoadingVisual _loadingVisual;
+        private static readonly object ImageUrlCacheTrimLock = new();
         private static readonly SemaphoreSlim RecentFetchGate = new(RecentFetchConcurrency, RecentFetchConcurrency);
         private static readonly ConcurrentDictionary<string, string> ImageUrlCache = new();
 
@@ -33,22 +37,40 @@ namespace JellyfinTizen.Screens
 
         public HomeLoadingScreen()
         {
+        }
+
+        public override void OnShow()
+        {
+            if (_loaded)
+            {
+                _loadingVisual?.Start();
+                return;
+            }
+
+            _loaded = true;
             Load();
+        }
+
+        public override void OnHide()
+        {
+            _loadingVisual?.Stop();
+            _fallbackTimer?.Dispose();
+            _fallbackTimer = null;
         }
 
         private async void Load()
         {
-            var label = new TextLabel("Loading libraries...")
+            if (_loadingVisual == null)
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                PointSize = UiTheme.HomeLoadingText,
-                TextColor = UiTheme.TextPrimary
-            };
+                _loadingVisual = new AppleTvLoadingVisual("Loading libraries...");
+                Add(_loadingVisual.Root);
+            }
+            else
+            {
+                _loadingVisual.SetMessage("Loading libraries...");
+            }
 
-            Add(label);
+            _loadingVisual.Start();
 
             _fallbackTimer = new ThreadingTimer(_ =>
             {
@@ -342,6 +364,15 @@ namespace JellyfinTizen.Screens
         {
             if (string.IsNullOrWhiteSpace(key) || factory == null)
                 return null;
+
+            if (!ImageUrlCache.ContainsKey(key) && ImageUrlCache.Count >= ImageUrlCacheMaxEntries)
+            {
+                lock (ImageUrlCacheTrimLock)
+                {
+                    if (!ImageUrlCache.ContainsKey(key) && ImageUrlCache.Count >= ImageUrlCacheMaxEntries)
+                        ImageUrlCache.Clear();
+                }
+            }
 
             return ImageUrlCache.GetOrAdd(key, _ => factory());
         }

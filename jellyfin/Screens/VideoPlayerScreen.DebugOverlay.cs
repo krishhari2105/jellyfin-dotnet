@@ -8,7 +8,6 @@ using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
-using Tizen.NUI.Components;
 
 namespace JellyfinTizen.Screens
 {

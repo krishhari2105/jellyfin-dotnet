@@ -22,6 +22,10 @@ namespace JellyfinTizen.Screens
         private const int FocusPad = UiTheme.HomeFocusPad;
         private const int SeasonRowTopInset = 16;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
+        private const int TitleLogoMaxWidth = 420;
+        private const int TitleLogoQuality = 76;
+        private const int TitleLogoDisplayWidth = 520;
+        private const int TitleLogoDisplayHeight = 96;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _series;
@@ -145,25 +149,30 @@ namespace JellyfinTizen.Screens
             if (!_series.HasLogo)
                 return CreateDetailsTitleLabel(fallbackText);
 
-            var logoUrl = AppState.GetItemLogoUrl(_series.Id, 960);
+            var logoUrl = AppState.GetItemLogoUrl(_series.Id, TitleLogoMaxWidth, TitleLogoQuality);
             if (string.IsNullOrWhiteSpace(logoUrl))
                 return CreateDetailsTitleLabel(fallbackText);
 
             var logoContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 140,
-                ClippingMode = ClippingModeType.ClipChildren
+                HeightSpecification = TitleLogoDisplayHeight,
+                ClippingMode = ClippingModeType.ClipChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                }
             };
 
             var logo = new ImageView
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                WidthSpecification = TitleLogoDisplayWidth,
+                HeightSpecification = TitleLogoDisplayHeight,
                 ResourceUrl = logoUrl,
                 PreMultipliedAlpha = false,
                 FittingMode = FittingModeType.ShrinkToFit,
-                SamplingMode = SamplingModeType.BoxThenLanczos
+                SamplingMode = SamplingModeType.Linear
             };
 
             logoContainer.Add(logo);

@@ -24,7 +24,10 @@ namespace JellyfinTizen.Screens
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
         private const int ActionButtonHeight = 70;
-        private const int TitleLogoMaxWidth = 760;
+        private const int TitleLogoMaxWidth = 420;
+        private const int TitleLogoQuality = 76;
+        private const int TitleLogoDisplayWidth = 520;
+        private const int TitleLogoDisplayHeight = 96;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -42,12 +45,15 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
+        private ImageView _titleLogoImage;
+        private bool _deferTitleLogoShowUntilTransitionCompletes;
 
         private List<MediaStream> _subtitleStreams;
         private List<MediaSourceInfo> _mediaSources = new();
         private int _selectedMediaSourceIndex = 0;
         private int? _selectedSubtitleIndex = null;
         private readonly Dictionary<View, Animation> _focusAnimations = new();
+        private readonly Dictionary<string, string> _darkButtonIconPathCache = new(StringComparer.OrdinalIgnoreCase);
         private View _metadataContainer;
         private View _metadataSummaryRow;
         private TextLabel _metadataSummaryLabel;
@@ -222,6 +228,9 @@ namespace JellyfinTizen.Screens
         }
         public override void OnShow()
         {
+            if (!_deferTitleLogoShowUntilTransitionCompletes)
+                ShowTitleLogoIfHidden();
+
             if (_mediaItem.ItemType == "Series")
             {
                 _ = LoadEpisodesAsync();
@@ -240,33 +249,70 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
+        public void PrepareForPlayerTransition()
+        {
+            try { _titleLogoImage?.Hide(); } catch { }
+        }
+
+        public void PrepareForIncomingTransition()
+        {
+            _deferTitleLogoShowUntilTransitionCompletes = true;
+            try { _titleLogoImage?.Hide(); } catch { }
+        }
+
+        public void CompleteIncomingTransition()
+        {
+            if (!_deferTitleLogoShowUntilTransitionCompletes)
+                return;
+
+            _deferTitleLogoShowUntilTransitionCompletes = false;
+            ShowTitleLogoIfHidden();
+        }
+
+        private void ShowTitleLogoIfHidden()
+        {
+            try { _titleLogoImage?.Show(); } catch { }
+        }
+
         private View CreateDetailsTitleView(string fallbackText)
         {
             // Episodes should always keep textual title.
             if (!UsesImageLogoTitle)
+            {
+                _titleLogoImage = null;
                 return CreateDetailsTitleLabel(fallbackText);
+            }
 
-            var logoUrl = AppState.GetItemLogoUrl(_mediaItem.Id, TitleLogoMaxWidth);
+            var logoUrl = AppState.GetItemLogoUrl(_mediaItem.Id, TitleLogoMaxWidth, TitleLogoQuality);
             if (string.IsNullOrWhiteSpace(logoUrl))
+            {
+                _titleLogoImage = null;
                 return CreateDetailsTitleLabel(fallbackText);
+            }
 
             var logoContainer = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 140,
-                ClippingMode = ClippingModeType.ClipChildren
+                HeightSpecification = TitleLogoDisplayHeight,
+                ClippingMode = ClippingModeType.ClipChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center
+                }
             };
 
             var logo = new ImageView
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                WidthSpecification = TitleLogoDisplayWidth,
+                HeightSpecification = TitleLogoDisplayHeight,
                 ResourceUrl = logoUrl,
                 PreMultipliedAlpha = false,
                 FittingMode = FittingModeType.ShrinkToFit,
-                SamplingMode = SamplingModeType.BoxThenLanczos
+                SamplingMode = SamplingModeType.Linear
             };
 
+            _titleLogoImage = logo;
             logoContainer.Add(logo);
             return logoContainer;
         }
@@ -542,9 +588,13 @@ namespace JellyfinTizen.Screens
             var button = new View
             {
                 HeightSpecification = ActionButtonHeight,
-                BackgroundColor = UiTheme.DetailsActionButtonBase,
+                BackgroundColor = Color.Black,
                 Focusable = true,
-                CornerRadius = ActionButtonHeight / 2.0f
+                CornerRadius = ActionButtonHeight / 2.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 2.0f,
+                BorderlineColor = Color.White,
+                ClippingMode = ClippingModeType.ClipChildren
             };
             bool autoWidth = !width.HasValue;
             if (autoWidth)
@@ -565,12 +615,12 @@ namespace JellyfinTizen.Screens
 
             if (!string.IsNullOrWhiteSpace(iconFile))
             {
-                var iconPath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
                 var icon = new ImageView
                 {
                     WidthSpecification = iconSize,
                     HeightSpecification = iconSize,
-                    ResourceUrl = iconPath,
+                    ResourceUrl = ResolveActionIconPath(iconFile, focused: false),
+                    Name = iconFile,
                     PreMultipliedAlpha = false,
                     FittingMode = FittingModeType.ShrinkToFit,
                     SamplingMode = SamplingModeType.BoxThenLanczos,
@@ -611,7 +661,8 @@ namespace JellyfinTizen.Screens
                     {
                         WidthSpecification = iconSize,
                         HeightSpecification = iconSize,
-                        ResourceUrl = iconPath,
+                        ResourceUrl = ResolveActionIconPath(iconFile, focused: false),
+                        Name = iconFile,
                         PreMultipliedAlpha = false,
                         FittingMode = FittingModeType.ShrinkToFit,
                         SamplingMode = SamplingModeType.BoxThenLanczos
@@ -641,7 +692,88 @@ namespace JellyfinTizen.Screens
                 button.Add(label);
             }
 
+            ApplyActionButtonVisual(button, focused: false);
             return button;
+        }
+
+        private void ApplyActionButtonVisual(View button, bool focused)
+        {
+            if (button == null)
+                return;
+
+            UiFactory.SetButtonFocusState(button, primary: true, focused: focused);
+            ApplyActionButtonIconState(button, focused);
+        }
+
+        private void ApplyActionButtonIconState(View view, bool focused)
+        {
+            if (view == null)
+                return;
+
+            if (view is ImageView icon && !string.IsNullOrWhiteSpace(icon.Name))
+                icon.ResourceUrl = ResolveActionIconPath(icon.Name, focused);
+
+            uint childCount = view.ChildCount;
+            for (uint i = 0; i < childCount; i++)
+            {
+                if (view.GetChildAt(i) is View child)
+                    ApplyActionButtonIconState(child, focused);
+            }
+        }
+
+        private string ResolveActionIconPath(string iconFile, bool focused)
+        {
+            if (string.IsNullOrWhiteSpace(iconFile))
+                return string.Empty;
+
+            string sourcePath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
+            if (!focused ||
+                !iconFile.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ||
+                !File.Exists(sourcePath))
+            {
+                return sourcePath;
+            }
+
+            string versionToken;
+            try
+            {
+                versionToken = File.GetLastWriteTimeUtc(sourcePath)
+                    .Ticks
+                    .ToString(CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                versionToken = "0";
+            }
+
+            string cacheKey = $"{sourcePath}|{versionToken}";
+            if (_darkButtonIconPathCache.TryGetValue(cacheKey, out var cachedPath) && File.Exists(cachedPath))
+                return cachedPath;
+
+            try
+            {
+                string svg = File.ReadAllText(sourcePath);
+                string darkSvg = svg
+                    .Replace("#FFFFFF", "#000000", StringComparison.OrdinalIgnoreCase)
+                    .Replace("fill=\"white\"", "fill=\"#000000\"", StringComparison.OrdinalIgnoreCase)
+                    .Replace("stroke=\"#FFFFFF\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase)
+                    .Replace("stroke=\"white\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase);
+
+                string cacheDir = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.Data, "icon-cache");
+                Directory.CreateDirectory(cacheDir);
+
+                string baseName = System.IO.Path.GetFileNameWithoutExtension(iconFile);
+                string darkPath = System.IO.Path.Combine(cacheDir, $"{baseName}_dark_{versionToken}.svg");
+                if (!File.Exists(darkPath))
+                    File.WriteAllText(darkPath, darkSvg);
+
+                _darkButtonIconPathCache[cacheKey] = darkPath;
+                return darkPath;
+            }
+            catch
+            {
+                return sourcePath;
+            }
         }
 
         private static View CreateButtonRow()
@@ -728,16 +860,7 @@ namespace JellyfinTizen.Screens
                 var focused = i == _buttonIndex;
                 var button = _buttons[i];
                 AnimateScale(button, focused ? new Vector3(ButtonFocusScale, ButtonFocusScale, 1f) : Vector3.One);
-                
-                // Add focused look
-                if (focused)
-                {
-                    button.BackgroundColor = UiTheme.DetailsActionButtonFocused;
-                }
-                else
-                {
-                    button.BackgroundColor = UiTheme.DetailsActionButtonBase;
-                }
+                ApplyActionButtonVisual(button, focused);
             }
 
             if (_buttonIndex >= 0)

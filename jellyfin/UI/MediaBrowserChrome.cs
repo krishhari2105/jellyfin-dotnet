@@ -26,29 +26,9 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = height,
                 PositionZ = positionZ,
-                BackgroundColor = UiTheme.Background,
+                BackgroundColor = Color.Transparent,
                 ClippingMode = ClippingModeType.ClipChildren
             };
-
-            // Blend layer: mirrors the atmospheric backdrop behavior in the top strip.
-            var blendLayer = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
-
-            var leftBlend = new View
-            {
-                WidthSpecification = 720,
-                HeightSpecification = 720,
-                PositionX = leftBlendOffsetX,
-                PositionY = leftBlendOffsetY,
-                CornerRadius = 360.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = new Color(0.00f, 164f / 255f, 220f / 255f, 0.14f)
-            };
-
-            blendLayer.Add(leftBlend);
 
             var contentRow = new View
             {
@@ -88,7 +68,6 @@ namespace JellyfinTizen.UI
             settingsButton = CreateProfileButton();
             contentRow.Add(settingsButton);
 
-            topBar.Add(blendLayer);
             topBar.Add(contentRow);
             return topBar;
         }
@@ -200,8 +179,10 @@ namespace JellyfinTizen.UI
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = 56,
-                BackgroundColor = new Color(1, 1, 1, 0.12f),
-                CornerRadius = 10.0f,
+                BackgroundColor = MonochromeAuthFactory.PanelFallbackColor,
+                BorderlineWidth = 2.0f,
+                BorderlineColor = MonochromeAuthFactory.PanelFallbackBorder,
+                CornerRadius = 28.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 ClippingMode = ClippingModeType.ClipChildren
             };
@@ -217,6 +198,7 @@ namespace JellyfinTizen.UI
             };
 
             row.Add(label);
+            UiFactory.SetButtonFocusState(row, primary: false, focused: false);
             return row;
         }
 
@@ -227,9 +209,13 @@ namespace JellyfinTizen.UI
 
             for (int i = 0; i < options.Count; i++)
             {
-                options[i].BackgroundColor = i == selectedIndex
-                    ? new Color(1, 1, 1, 0.22f)
-                    : new Color(1, 1, 1, 0.12f);
+                bool focused = i == selectedIndex;
+                UiFactory.SetButtonFocusState(options[i], primary: false, focused: focused);
+
+                if (options[i].ChildCount > 0 && options[i].GetChildAt(0) is TextLabel label)
+                {
+                    label.TextColor = focused ? Color.Black : Color.White;
+                }
             }
         }
     }

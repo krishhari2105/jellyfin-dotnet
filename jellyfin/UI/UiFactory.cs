@@ -7,42 +7,24 @@ namespace JellyfinTizen.UI
     {
         private const int HiddenCursorWidth = 0;
         private const int VisibleCursorWidth = 2;
+        private static readonly Color UnifiedBackdrop = new Color(9f / 255f, 15f / 255f, 31f / 255f, 1f);
+        private static readonly Color UnifiedBackdropWash = new Color(22f / 255f, 35f / 255f, 68f / 255f, 0.08f);
+
         public static View CreateAtmosphericBackground()
         {
-            int width = Window.Default.Size.Width;
-            int height = Window.Default.Size.Height;
-
             var background = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = UiTheme.Background
+                BackgroundColor = UnifiedBackdrop
             };
 
-            var bloomLeft = new View
+            background.Add(new View
             {
-                WidthSpecification = 720,
-                HeightSpecification = 720,
-                PositionX = -190,
-                PositionY = -140,
-                CornerRadius = 360.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = new Color(0.00f, 164f / 255f, 220f / 255f, 0.14f)
-            };
-
-            var bloomRight = new View
-            {
-                WidthSpecification = 840,
-                HeightSpecification = 840,
-                PositionX = width - 350,
-                PositionY = height - 570,
-                CornerRadius = 420.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = new Color(0.24f, 0.45f, 0.98f, 0.10f)
-            };
-
-            background.Add(bloomLeft);
-            background.Add(bloomRight);
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                BackgroundColor = UnifiedBackdropWash
+            });
             return background;
         }
 
@@ -233,9 +215,9 @@ namespace JellyfinTizen.UI
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = UiTheme.ButtonHeight,
-                CornerRadius = 18.0f,
+                CornerRadius = UiTheme.ButtonHeight / 2.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 1.5f,
+                BorderlineWidth = 2.0f,
                 Focusable = true
             };
 
@@ -256,29 +238,7 @@ namespace JellyfinTizen.UI
 
         public static void SetButtonFocusState(View button, bool primary, bool focused)
         {
-            if (button == null)
-                return;
-
-            if (primary)
-            {
-                button.BackgroundColor = focused
-                    ? UiTheme.AccentFocused
-                    : UiTheme.Accent;
-                button.BorderlineColor = focused
-                    ? new Color(1f, 1f, 1f, 0.42f)
-                    : new Color(1f, 1f, 1f, 0.18f);
-            }
-            else
-            {
-                button.BackgroundColor = focused
-                    ? UiTheme.SurfaceFocused
-                    : UiTheme.SurfaceMuted;
-                button.BorderlineColor = focused
-                    ? UiTheme.AccentSoft
-                    : new Color(1f, 1f, 1f, 0.12f);
-            }
-
-            button.Scale = focused ? new Vector3(1.03f, 1.03f, 1f) : Vector3.One;
+            MonochromeAuthFactory.SetButtonFocusState(button, primary, focused);
         }
 
         public static TextLabel CreateErrorLabel()

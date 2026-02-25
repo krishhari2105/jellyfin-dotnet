@@ -82,9 +82,6 @@ namespace JellyfinTizen.Screens
             _burnInEnabled = !_burnInEnabled;
             AppState.BurnInSubtitles = _burnInEnabled;
             _burnInLabel.Text = _burnInEnabled ? "Burn-In Subtitles: ON" : "Burn-In Subtitles: OFF";
-            _burnInToggle.BackgroundColor = _burnInEnabled
-                ? new Color(0.00f, 164f / 255f, 220f / 255f, 0.30f)
-                : UiTheme.SurfaceMuted;
         }
     }
 }

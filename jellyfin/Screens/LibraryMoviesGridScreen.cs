@@ -33,6 +33,7 @@ namespace JellyfinTizen.Screens
         private const int PosterVisibleRowBuffer = 1;
         private const int PosterKeepLowRowBuffer = 3;
         private const int PosterRefreshIntervalMs = 260;
+        private const int PosterRefreshBurstTicks = 4;
         private const int BuildTickMs = 20;
         private const int HighQualityDelayMs = 320;
 
@@ -68,6 +69,7 @@ namespace JellyfinTizen.Screens
         private Timer _buildTimer;
         private Timer _posterRefreshTimer;
         private Timer _highQualityDelayTimer;
+        private int _posterRefreshTicksRemaining;
         private int _nextMovieIndexToBuild;
         private int _nextRowY;
         private bool _isGridBuildCompleted;
@@ -257,6 +259,7 @@ namespace JellyfinTizen.Screens
             _buildTimer?.Stop();
             _posterRefreshTimer?.Stop();
             _highQualityDelayTimer?.Stop();
+            _posterRefreshTicksRemaining = 0;
         }
 
         private void ResetSettingsPanelVisualState()
@@ -375,8 +378,9 @@ namespace JellyfinTizen.Screens
             return true;
         }
 
-        private void StartPosterRefreshTimer()
+        private void StartPosterRefreshTimer(int burstTicks = PosterRefreshBurstTicks)
         {
+            _posterRefreshTicksRemaining = Math.Max(_posterRefreshTicksRemaining, Math.Max(1, burstTicks));
             _posterRefreshTimer ??= new Timer(PosterRefreshIntervalMs);
             _posterRefreshTimer.Stop();
             _posterRefreshTimer.Tick -= OnPosterRefreshTick;
@@ -387,6 +391,14 @@ namespace JellyfinTizen.Screens
         private bool OnPosterRefreshTick(object sender, Timer.TickEventArgs e)
         {
             EnsureVisiblePostersLoaded();
+
+            _posterRefreshTicksRemaining--;
+            if (_posterRefreshTicksRemaining <= 0)
+            {
+                _posterRefreshTimer?.Stop();
+                return false;
+            }
+
             return true;
         }
 
@@ -592,6 +604,7 @@ namespace JellyfinTizen.Screens
             ScrollHorizontalIfNeeded();
             ScrollVerticalIfNeeded();
             EnsureVisiblePostersLoaded();
+            StartPosterRefreshTimer();
         }
 
         private void Highlight(bool focused)
@@ -826,6 +839,7 @@ namespace JellyfinTizen.Screens
             {
                 UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
                 rowContainer.PositionX = targetX;
+                StartPosterRefreshTimer(1);
                 return;
             }
 
@@ -834,6 +848,7 @@ namespace JellyfinTizen.Screens
                 UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
             );
             EnsureVisiblePostersLoaded();
+            StartPosterRefreshTimer();
         }
 
         private void ScrollVerticalIfNeeded()
@@ -877,6 +892,7 @@ namespace JellyfinTizen.Screens
             {
                 UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
                 _verticalContainer.PositionY = targetY;
+                StartPosterRefreshTimer(1);
                 return;
             }
 
@@ -885,6 +901,7 @@ namespace JellyfinTizen.Screens
                 UiAnimator.AnimateTo(_verticalContainer, "PositionY", targetY, UiAnimator.ScrollDurationMs)
             );
             EnsureVisiblePostersLoaded();
+            StartPosterRefreshTimer();
         }
 
 

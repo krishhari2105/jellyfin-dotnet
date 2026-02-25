@@ -16,14 +16,14 @@ namespace JellyfinTizen.Screens
 
         public ServerSetupScreen()
         {
-            var root = UiFactory.CreateAtmosphericBackground();
-            var panel = UiFactory.CreateCenteredPanel();
-            panel.Add(UiFactory.CreateDisplayTitle("Connect To Your Jellyfin Server"));
-            panel.Add(UiFactory.CreateSubtitle("Enter your server URL to continue."));
+            var root = MonochromeAuthFactory.CreateBackground();
+            var panel = MonochromeAuthFactory.CreatePanel();
+            panel.Add(MonochromeAuthFactory.CreateTitle("Connect To Your Jellyfin Server"));
+            panel.Add(MonochromeAuthFactory.CreateSubtitle("Enter your server URL to continue."));
 
-            var serverInputShell = UiFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
-            _continueButton = UiFactory.CreateButton("Continue", out _continueText, primary: true);
-            _errorLabel = UiFactory.CreateErrorLabel();
+            var serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
+            _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _continueText, primary: true);
+            _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(serverInputShell);
             panel.Add(_continueButton);
@@ -86,7 +86,7 @@ namespace JellyfinTizen.Screens
 
         private void HighlightButton(bool focused)
         {
-            UiFactory.SetButtonFocusState(_continueButton, primary: true, focused: focused);
+            MonochromeAuthFactory.SetButtonFocusState(_continueButton, primary: true, focused: focused);
         }
 
         private async void OnContinue()

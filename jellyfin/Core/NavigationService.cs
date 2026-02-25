@@ -47,11 +47,8 @@ namespace JellyfinTizen.Core
         private const int CinematicTransitionDurationMs = 210;
         private const float CinematicForwardIncomingShiftFactor = 0.16f;
         private const float CinematicForwardOutgoingShiftFactor = 0.22f;
-        private const float CinematicForwardOutgoingHeavyShiftFactor = 0.14f;
         private const float CinematicBackIncomingShiftFactor = 0.22f;
-        private const float CinematicBackIncomingHeavyShiftFactor = 0.14f;
         private const float CinematicBackOutgoingShiftFactor = 0.18f;
-        private const float CinematicBackOutgoingHeavyShiftFactor = 0.14f;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
@@ -144,6 +141,13 @@ namespace JellyfinTizen.Core
 
             var transition = GetTransitionSpec(outgoing, incoming);
             var slide = transition.SlideDistance;
+
+            if (transition.Profile == TransitionProfile.CinematicPlayer &&
+                outgoing is MovieDetailsScreen movieDetailsOutgoing &&
+                incoming is VideoPlayerScreen)
+            {
+                movieDetailsOutgoing.PrepareForPlayerTransition();
+            }
 
             _isTransitioning = true;
 
@@ -263,6 +267,13 @@ namespace JellyfinTizen.Core
                 return;
             }
 
+            if (transition.Profile == TransitionProfile.CinematicPlayer &&
+                outgoing is VideoPlayerScreen &&
+                incoming is MovieDetailsScreen movieDetailsIncoming)
+            {
+                movieDetailsIncoming.PrepareForIncomingTransition();
+            }
+
             _isTransitioning = true;
 
             if (!transition.DeferOutgoingOnHide)
@@ -294,6 +305,11 @@ namespace JellyfinTizen.Core
                         if (transition.DeferIncomingOnShow)
                         {
                             try { incoming.OnShow(); } catch { }
+                        }
+                        if (transition.Profile == TransitionProfile.CinematicPlayer &&
+                            incoming is MovieDetailsScreen movieDetailsIncoming)
+                        {
+                            movieDetailsIncoming.CompleteIncomingTransition();
                         }
                         _isTransitioning = false;
                         _screenTransitionAnimation = null;
@@ -444,12 +460,9 @@ namespace JellyfinTizen.Core
         {
             if (profile == TransitionProfile.CinematicPlayer)
             {
-                bool incomingHasHeavyLogoTitle = HasHeavyLogoTitle(incoming);
-                incoming.PositionX = -slide * (incomingHasHeavyLogoTitle
-                    ? CinematicBackIncomingHeavyShiftFactor
-                    : CinematicBackIncomingShiftFactor);
+                incoming.PositionX = -slide * CinematicBackIncomingShiftFactor;
                 incoming.Opacity = 0.0f;
-                incoming.Scale = incomingHasHeavyLogoTitle ? UnitScale : CinematicIncomingBackStartScale;
+                incoming.Scale = CinematicIncomingBackStartScale;
                 return;
             }
 
@@ -467,16 +480,12 @@ namespace JellyfinTizen.Core
         {
             if (profile == TransitionProfile.CinematicPlayer)
             {
-                bool outgoingHasHeavyLogoTitle = HasHeavyLogoTitle(outgoing);
                 animation.AnimateTo(incoming, "PositionX", 0.0f);
                 animation.AnimateTo(incoming, "Opacity", 1.0f);
                 animation.AnimateTo(incoming, "Scale", UnitScale);
-                animation.AnimateTo(outgoing, "PositionX", -slide * (outgoingHasHeavyLogoTitle
-                    ? CinematicForwardOutgoingHeavyShiftFactor
-                    : CinematicForwardOutgoingShiftFactor));
+                animation.AnimateTo(outgoing, "PositionX", -slide * CinematicForwardOutgoingShiftFactor);
                 animation.AnimateTo(outgoing, "Opacity", 0.0f);
-                if (!outgoingHasHeavyLogoTitle)
-                    animation.AnimateTo(outgoing, "Scale", CinematicOutgoingForwardEndScale);
+                animation.AnimateTo(outgoing, "Scale", CinematicOutgoingForwardEndScale);
                 return;
             }
 
@@ -495,14 +504,10 @@ namespace JellyfinTizen.Core
         {
             if (profile == TransitionProfile.CinematicPlayer)
             {
-                bool incomingHasHeavyLogoTitle = HasHeavyLogoTitle(incoming);
                 animation.AnimateTo(incoming, "PositionX", 0.0f);
                 animation.AnimateTo(incoming, "Opacity", 1.0f);
-                if (!incomingHasHeavyLogoTitle)
-                    animation.AnimateTo(incoming, "Scale", UnitScale);
-                animation.AnimateTo(outgoing, "PositionX", slide * (incomingHasHeavyLogoTitle
-                    ? CinematicBackOutgoingHeavyShiftFactor
-                    : CinematicBackOutgoingShiftFactor));
+                animation.AnimateTo(incoming, "Scale", UnitScale);
+                animation.AnimateTo(outgoing, "PositionX", slide * CinematicBackOutgoingShiftFactor);
                 animation.AnimateTo(outgoing, "Opacity", 0.0f);
                 animation.AnimateTo(outgoing, "Scale", CinematicOutgoingBackEndScale);
                 return;
@@ -529,9 +534,5 @@ namespace JellyfinTizen.Core
             catch { }
         }
 
-        private static bool HasHeavyLogoTitle(ScreenBase screen)
-        {
-            return screen is MovieDetailsScreen movieDetails && movieDetails.UsesImageLogoTitle;
-        }
     }
 }
