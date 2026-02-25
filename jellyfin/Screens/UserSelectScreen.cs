@@ -11,7 +11,10 @@ namespace JellyfinTizen.Screens
     public class UserSelectScreen : ScreenBase, IKeyHandler
     {
         private const int AvatarSize = 126;
-        private const int AvatarImageInset = 6;
+        private const int AvatarFetchSize = AvatarSize * 2;
+        private const int AvatarImageInset = 0;
+        private const float AvatarFocusRingWidth = 4.0f;
+        private const float AvatarImageOverscan = 1.10f;
         private const int TileWidth = 196;
         private const int TileHeight = 222;
         private const int TileSpacing = 30;
@@ -28,6 +31,7 @@ namespace JellyfinTizen.Screens
             public JellyfinUser User;
             public View Root;
             public View Avatar;
+            public View AvatarFocusRing;
             public View AvatarImageHost;
             public ImageView AvatarImage;
             public bool HasAvatarImage;
@@ -116,7 +120,7 @@ namespace JellyfinTizen.Screens
         {
             string userName = string.IsNullOrWhiteSpace(user?.Name) ? "User" : user.Name;
             string initials = GetUserInitials(userName);
-            string avatarUrl = BuildUserAvatarUrl(user, AvatarSize);
+            string avatarUrl = BuildUserAvatarUrl(user, AvatarFetchSize);
 
             var tileRoot = new View
             {
@@ -134,9 +138,7 @@ namespace JellyfinTizen.Screens
                 PositionY = 0,
                 CornerRadius = AvatarSize / 2.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 2.0f,
-                BorderlineColor = new Color(1f, 1f, 1f, 0.52f),
-                BackgroundColor = new Color(1f, 1f, 1f, 0.10f),
+                BackgroundColor = Color.Transparent,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
@@ -149,9 +151,22 @@ namespace JellyfinTizen.Screens
                 PositionY = AvatarImageInset,
                 CornerRadius = avatarImageSize / 2.0f,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BackgroundColor = new Color(1f, 1f, 1f, 0.10f),
                 ClippingMode = ClippingModeType.ClipChildren
             };
             avatar.Add(avatarImageHost);
+
+            var avatarFocusRing = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                CornerRadius = AvatarSize / 2.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BackgroundColor = Color.Transparent,
+                BorderlineColor = new Color(1f, 1f, 1f, 0.96f),
+                BorderlineWidth = 0.0f
+            };
+            avatar.Add(avatarFocusRing);
 
             var initialsLabel = new TextLabel(initials)
             {
@@ -173,8 +188,15 @@ namespace JellyfinTizen.Screens
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightResizePolicy = ResizePolicyType.FillToParent,
+                    PositionUsesPivotPoint = true,
+                    ParentOrigin = Tizen.NUI.ParentOrigin.Center,
+                    PivotPoint = Tizen.NUI.PivotPoint.Center,
+                    Scale = new Vector3(AvatarImageOverscan, AvatarImageOverscan, 1f),
                     ResourceUrl = avatarUrl,
                     BackgroundColor = Color.Transparent,
+                    PreMultipliedAlpha = false,
+                    FittingMode = FittingModeType.ScaleToFill,
+                    SamplingMode = SamplingModeType.BoxThenLanczos,
                     AlphaMaskURL = sharedResPath + "avatar-mask.png",
                     CropToMask = true,
                     MaskingMode = ImageView.MaskingModeType.MaskingOnLoading
@@ -204,6 +226,7 @@ namespace JellyfinTizen.Screens
                 User = user,
                 Root = tileRoot,
                 Avatar = avatar,
+                AvatarFocusRing = avatarFocusRing,
                 AvatarImageHost = avatarImageHost,
                 AvatarImage = avatarImage,
                 HasAvatarImage = hasAvatarImage,
@@ -231,7 +254,7 @@ namespace JellyfinTizen.Screens
 
             string url =
                 $"{serverUrl.TrimEnd('/')}/Users/{Uri.EscapeDataString(user.Id)}/Images/Primary" +
-                $"?width={size}&height={size}&quality=95";
+                $"?width={size}&height={size}&fillWidth={size}&fillHeight={size}&quality=95";
 
             if (!string.IsNullOrWhiteSpace(user.PrimaryImageTag))
                 url += $"&tag={Uri.EscapeDataString(user.PrimaryImageTag)}";
@@ -267,13 +290,12 @@ namespace JellyfinTizen.Screens
 
             tile.Root.PositionZ = focused ? 20 : 0;
             tile.Avatar.Scale = focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One;
-            tile.Avatar.BackgroundColor = focused
-                ? UiTheme.MediaCardFocusFill
-                : new Color(1f, 1f, 1f, 0.10f);
-            tile.Avatar.BorderlineColor = focused
-                ? UiTheme.MediaCardFocusBorder
-                : new Color(1f, 1f, 1f, 0.52f);
-            tile.Avatar.BorderlineWidth = focused ? 4.0f : 2.0f;
+            tile.Avatar.BackgroundColor = Color.Transparent;
+            tile.Avatar.BorderlineWidth = 0.0f;
+            tile.AvatarFocusRing.BorderlineWidth = focused ? AvatarFocusRingWidth : 0.0f;
+            tile.AvatarImageHost.BackgroundColor = tile.HasAvatarImage
+                ? Color.Transparent
+                : (focused ? UiTheme.MediaCardFocusFill : new Color(1f, 1f, 1f, 0.10f));
             tile.Initials.TextColor = focused && !tile.HasAvatarImage ? Color.Black : Color.White;
             tile.Name.TextColor = focused
                 ? new Color(1f, 1f, 1f, 0.98f)

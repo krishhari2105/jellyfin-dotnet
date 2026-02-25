@@ -24,8 +24,8 @@ namespace JellyfinTizen.Screens
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int TitleLogoMaxWidth = 420;
         private const int TitleLogoQuality = 76;
-        private const int TitleLogoDisplayWidth = 520;
-        private const int TitleLogoDisplayHeight = 96;
+        private const int TitleLogoDisplayWidth = 560;
+        private const int TitleLogoDisplayHeight = 104;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _series;

@@ -26,8 +26,8 @@ namespace JellyfinTizen.Screens
         private const int ActionButtonHeight = 70;
         private const int TitleLogoMaxWidth = 420;
         private const int TitleLogoQuality = 76;
-        private const int TitleLogoDisplayWidth = 520;
-        private const int TitleLogoDisplayHeight = 96;
+        private const int TitleLogoDisplayWidth = 560;
+        private const int TitleLogoDisplayHeight = 104;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
