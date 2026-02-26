@@ -13,7 +13,7 @@ namespace JellyfinTizen.Core
         private enum TransitionProfile
         {
             Slide,
-            CinematicPlayer
+            BlackScreen
         }
 
         private readonly struct TransitionSpec
@@ -40,15 +40,7 @@ namespace JellyfinTizen.Core
         }
 
         private static readonly Vector3 UnitScale = new(1f, 1f, 1f);
-        private static readonly Vector3 CinematicIncomingStartScale = new(1.035f, 1.035f, 1f);
-        private static readonly Vector3 CinematicIncomingBackStartScale = new(0.965f, 0.965f, 1f);
-        private static readonly Vector3 CinematicOutgoingForwardEndScale = new(0.94f, 0.94f, 1f);
-        private static readonly Vector3 CinematicOutgoingBackEndScale = new(1.04f, 1.04f, 1f);
-        private const int CinematicTransitionDurationMs = 210;
-        private const float CinematicForwardIncomingShiftFactor = 0.16f;
-        private const float CinematicForwardOutgoingShiftFactor = 0.22f;
-        private const float CinematicBackIncomingShiftFactor = 0.22f;
-        private const float CinematicBackOutgoingShiftFactor = 0.18f;
+        private const int BlackScreenTransitionDurationMs = 180;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
@@ -141,13 +133,6 @@ namespace JellyfinTizen.Core
 
             var transition = GetTransitionSpec(outgoing, incoming);
             var slide = transition.SlideDistance;
-
-            if (transition.Profile == TransitionProfile.CinematicPlayer &&
-                outgoing is MovieDetailsScreen movieDetailsOutgoing &&
-                incoming is VideoPlayerScreen)
-            {
-                movieDetailsOutgoing.PrepareForPlayerTransition();
-            }
 
             _isTransitioning = true;
 
@@ -267,13 +252,6 @@ namespace JellyfinTizen.Core
                 return;
             }
 
-            if (transition.Profile == TransitionProfile.CinematicPlayer &&
-                outgoing is VideoPlayerScreen &&
-                incoming is MovieDetailsScreen movieDetailsIncoming)
-            {
-                movieDetailsIncoming.PrepareForIncomingTransition();
-            }
-
             _isTransitioning = true;
 
             if (!transition.DeferOutgoingOnHide)
@@ -305,11 +283,6 @@ namespace JellyfinTizen.Core
                         if (transition.DeferIncomingOnShow)
                         {
                             try { incoming.OnShow(); } catch { }
-                        }
-                        if (transition.Profile == TransitionProfile.CinematicPlayer &&
-                            incoming is MovieDetailsScreen movieDetailsIncoming)
-                        {
-                            movieDetailsIncoming.CompleteIncomingTransition();
                         }
                         _isTransitioning = false;
                         _screenTransitionAnimation = null;
@@ -412,11 +385,11 @@ namespace JellyfinTizen.Core
         {
             bool outgoingIsVideoPlayer = outgoing is VideoPlayerScreen;
             bool incomingIsVideoPlayer = incoming is VideoPlayerScreen;
-            var profile = UseCinematicPlayerProfile(outgoing, incoming)
-                ? TransitionProfile.CinematicPlayer
+            var profile = UseBlackScreenProfile(outgoing, incoming)
+                ? TransitionProfile.BlackScreen
                 : TransitionProfile.Slide;
             return new TransitionSpec(
-                profile == TransitionProfile.CinematicPlayer ? CinematicTransitionDurationMs : UiAnimator.ScreenDurationMs,
+                profile == TransitionProfile.BlackScreen ? BlackScreenTransitionDurationMs : UiAnimator.ScreenDurationMs,
                 GetSlideDistance(),
                 deferIncomingOnShow: incomingIsVideoPlayer,
                 deferOutgoingOnHide: outgoingIsVideoPlayer,
@@ -425,15 +398,23 @@ namespace JellyfinTizen.Core
 
         private static bool ShouldAnimateTransition(ScreenBase outgoing, ScreenBase incoming, bool animated)
         {
-            return animated && UseFullTransitionProfile(outgoing, incoming);
+            if (!animated)
+                return false;
+
+            // On lower-end TVs, even lightweight fades around player attach can hitch.
+            // Prefer an instant swap for details <-> player navigation.
+            if (UseBlackScreenProfile(outgoing, incoming))
+                return false;
+
+            return UseFullTransitionProfile(outgoing, incoming);
         }
 
         private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
         {
-            return UseCinematicPlayerProfile(outgoing, incoming);
+            return UseBlackScreenProfile(outgoing, incoming);
         }
 
-        private static bool UseCinematicPlayerProfile(ScreenBase outgoing, ScreenBase incoming)
+        private static bool UseBlackScreenProfile(ScreenBase outgoing, ScreenBase incoming)
         {
             return (outgoing is MovieDetailsScreen && incoming is VideoPlayerScreen) ||
                    (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen) ||
@@ -443,11 +424,11 @@ namespace JellyfinTizen.Core
 
         private static void PrepareIncomingForNavigate(ScreenBase incoming, float slide, TransitionProfile profile)
         {
-            if (profile == TransitionProfile.CinematicPlayer)
+            if (profile == TransitionProfile.BlackScreen)
             {
-                incoming.PositionX = slide * CinematicForwardIncomingShiftFactor;
+                incoming.PositionX = 0.0f;
                 incoming.Opacity = 0.0f;
-                incoming.Scale = CinematicIncomingStartScale;
+                incoming.Scale = UnitScale;
                 return;
             }
 
@@ -458,11 +439,11 @@ namespace JellyfinTizen.Core
 
         private static void PrepareIncomingForNavigateBack(ScreenBase incoming, float slide, TransitionProfile profile)
         {
-            if (profile == TransitionProfile.CinematicPlayer)
+            if (profile == TransitionProfile.BlackScreen)
             {
-                incoming.PositionX = -slide * CinematicBackIncomingShiftFactor;
+                incoming.PositionX = 0.0f;
                 incoming.Opacity = 0.0f;
-                incoming.Scale = CinematicIncomingBackStartScale;
+                incoming.Scale = UnitScale;
                 return;
             }
 
@@ -478,14 +459,18 @@ namespace JellyfinTizen.Core
             float slide,
             TransitionProfile profile)
         {
-            if (profile == TransitionProfile.CinematicPlayer)
+            if (profile == TransitionProfile.BlackScreen)
             {
-                animation.AnimateTo(incoming, "PositionX", 0.0f);
-                animation.AnimateTo(incoming, "Opacity", 1.0f);
-                animation.AnimateTo(incoming, "Scale", UnitScale);
-                animation.AnimateTo(outgoing, "PositionX", -slide * CinematicForwardOutgoingShiftFactor);
-                animation.AnimateTo(outgoing, "Opacity", 0.0f);
-                animation.AnimateTo(outgoing, "Scale", CinematicOutgoingForwardEndScale);
+                // For details -> player, fade in the incoming black screen instead of
+                // fading out the heavy details tree to keep the transition smooth.
+                if (incoming is VideoPlayerScreen)
+                {
+                    animation.AnimateTo(incoming, "Opacity", 1.0f);
+                }
+                else
+                {
+                    animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                }
                 return;
             }
 
@@ -502,14 +487,16 @@ namespace JellyfinTizen.Core
             float slide,
             TransitionProfile profile)
         {
-            if (profile == TransitionProfile.CinematicPlayer)
+            if (profile == TransitionProfile.BlackScreen)
             {
-                animation.AnimateTo(incoming, "PositionX", 0.0f);
-                animation.AnimateTo(incoming, "Opacity", 1.0f);
-                animation.AnimateTo(incoming, "Scale", UnitScale);
-                animation.AnimateTo(outgoing, "PositionX", slide * CinematicBackOutgoingShiftFactor);
-                animation.AnimateTo(outgoing, "Opacity", 0.0f);
-                animation.AnimateTo(outgoing, "Scale", CinematicOutgoingBackEndScale);
+                if (incoming is VideoPlayerScreen)
+                {
+                    animation.AnimateTo(incoming, "Opacity", 1.0f);
+                }
+                else
+                {
+                    animation.AnimateTo(outgoing, "Opacity", 0.0f);
+                }
                 return;
             }
 

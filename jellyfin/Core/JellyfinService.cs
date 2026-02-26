@@ -460,6 +460,8 @@ namespace JellyfinTizen.Core
                             Codec = stream.TryGetProperty("Codec", out var c) ? c.GetString() : null,
                             DeliveryUrl = stream.TryGetProperty("DeliveryUrl", out var du) ? du.GetString() : null,
                             IsExternal = stream.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
+                            IsDefault = stream.TryGetProperty("IsDefault", out var isDefault) && isDefault.GetBoolean(),
+                            IsForced = stream.TryGetProperty("IsForced", out var isForced) && isForced.GetBoolean(),
                             Width = null,
                             Height = null,
                             VideoRange = null,
@@ -526,28 +528,45 @@ namespace JellyfinTizen.Core
             await PostAsync("/Sessions/Playing/Stopped", info);
         }
 
-        public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(string itemId, int? subtitleStreamIndex = null, bool forceBurnIn = false, int? audioStreamIndex = null, bool disableDirectPlay = false)
+        public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(
+            string itemId,
+            int? subtitleStreamIndex = null,
+            bool forceBurnIn = false,
+            int? audioStreamIndex = null,
+            bool disableDirectPlay = false,
+            bool subtitleHandlingDisabled = false,
+            string mediaSourceId = null)
         {
             bool hasExplicitSubtitleSelection = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value >= 0;
-            bool forceServerTranscode = disableDirectPlay || (forceBurnIn && hasExplicitSubtitleSelection);
-            int? effectiveSubtitleStreamIndex = forceBurnIn && !hasExplicitSubtitleSelection
-                ? -1
-                : subtitleStreamIndex;
-            var deviceProfile = ProfileBuilder.BuildTizenProfile(forceBurnIn);
+            bool subtitleIndexExplicitlyOff = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value < 0;
+            bool effectiveSubtitlesDisabled = !hasExplicitSubtitleSelection && (subtitleHandlingDisabled || subtitleIndexExplicitlyOff);
+            bool effectiveForceBurnIn = forceBurnIn && hasExplicitSubtitleSelection;
+            bool forceServerTranscode = disableDirectPlay || effectiveForceBurnIn;
+            var deviceProfile = ProfileBuilder.BuildTizenProfile(
+                forceBurnIn: effectiveForceBurnIn,
+                disableSubtitles: effectiveSubtitlesDisabled && !effectiveForceBurnIn);
 
             // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
-            var body = new 
-            { 
-                UserId = UserId,
-                AutoOpenLiveStream = true,
-                DeviceProfile = deviceProfile,
-                EnableDirectPlay = !forceServerTranscode,
-                EnableDirectStream = !forceServerTranscode,
-                EnableTranscoding = true,
-                // Always include subtitle stream index, even if null (will be handled properly by server)
-                SubtitleStreamIndex = effectiveSubtitleStreamIndex,
-                AudioStreamIndex = audioStreamIndex
+            var body = new Dictionary<string, object>
+            {
+                ["UserId"] = UserId,
+                ["AutoOpenLiveStream"] = true,
+                ["DeviceProfile"] = deviceProfile,
+                ["EnableDirectPlay"] = !forceServerTranscode,
+                ["EnableDirectStream"] = !forceServerTranscode,
+                ["EnableTranscoding"] = true,
+                ["AlwaysBurnInSubtitleWhenTranscoding"] = effectiveForceBurnIn
             };
+
+            if (audioStreamIndex.HasValue)
+                body["AudioStreamIndex"] = audioStreamIndex.Value;
+
+            // Send subtitle index when provided, including -1 (explicit subtitles OFF).
+            if (subtitleStreamIndex.HasValue)
+                body["SubtitleStreamIndex"] = subtitleStreamIndex.Value;
+
+            if (!string.IsNullOrWhiteSpace(mediaSourceId))
+                body["MediaSourceId"] = mediaSourceId;
 
             var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
             
@@ -596,6 +615,8 @@ namespace JellyfinTizen.Core
                                 Codec = TryGetString(s, "Codec"),
                                 DeliveryUrl = TryGetString(s, "DeliveryUrl"),
                                 IsExternal = s.TryGetProperty("IsExternal", out var e) && e.GetBoolean(),
+                                IsDefault = s.TryGetProperty("IsDefault", out var isDefault) && isDefault.GetBoolean(),
+                                IsForced = s.TryGetProperty("IsForced", out var isForced) && isForced.GetBoolean(),
                                 Width = s.TryGetProperty("Width", out var widthProp) && widthProp.TryGetInt32(out var widthValue)
                                     ? widthValue
                                     : null,

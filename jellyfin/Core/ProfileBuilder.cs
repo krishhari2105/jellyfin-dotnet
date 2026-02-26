@@ -5,7 +5,7 @@ namespace JellyfinTizen.Core
 {
     public static class ProfileBuilder
     {
-        public static DeviceProfile BuildTizenProfile(bool forceBurnIn = false)
+        public static DeviceProfile BuildTizenProfile(bool forceBurnIn = false, bool disableSubtitles = false)
         {
             var profile = new DeviceProfile
             {
@@ -112,6 +112,13 @@ namespace JellyfinTizen.Core
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgs", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "pgssub", Method = "Encode" });
                 profile.SubtitleProfiles.Add(new SubtitleProfile { Format = "mov_text", Method = "Encode" });
+            }
+            else if (disableSubtitles)
+            {
+                // Explicit subtitle-off negotiation mode:
+                // advertise no subtitle delivery methods so server doesn't negotiate
+                // subtitle burn-in while subtitles are disabled by user choice.
+                profile.SubtitleProfiles = new List<SubtitleProfile>();
             }
             else
             {

@@ -283,7 +283,7 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id);
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
                 _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
             }
             catch

@@ -45,9 +45,6 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
-        private ImageView _titleLogoImage;
-        private bool _deferTitleLogoShowUntilTransitionCompletes;
-
         private List<MediaStream> _subtitleStreams;
         private List<MediaSourceInfo> _mediaSources = new();
         private int _selectedMediaSourceIndex = 0;
@@ -228,9 +225,6 @@ namespace JellyfinTizen.Screens
         }
         public override void OnShow()
         {
-            if (!_deferTitleLogoShowUntilTransitionCompletes)
-                ShowTitleLogoIfHidden();
-
             if (_mediaItem.ItemType == "Series")
             {
                 _ = LoadEpisodesAsync();
@@ -249,46 +243,15 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
-        public void PrepareForPlayerTransition()
-        {
-            try { _titleLogoImage?.Hide(); } catch { }
-        }
-
-        public void PrepareForIncomingTransition()
-        {
-            _deferTitleLogoShowUntilTransitionCompletes = true;
-            try { _titleLogoImage?.Hide(); } catch { }
-        }
-
-        public void CompleteIncomingTransition()
-        {
-            if (!_deferTitleLogoShowUntilTransitionCompletes)
-                return;
-
-            _deferTitleLogoShowUntilTransitionCompletes = false;
-            ShowTitleLogoIfHidden();
-        }
-
-        private void ShowTitleLogoIfHidden()
-        {
-            try { _titleLogoImage?.Show(); } catch { }
-        }
-
         private View CreateDetailsTitleView(string fallbackText)
         {
             // Episodes should always keep textual title.
             if (!UsesImageLogoTitle)
-            {
-                _titleLogoImage = null;
                 return CreateDetailsTitleLabel(fallbackText);
-            }
 
             var logoUrl = AppState.GetItemLogoUrl(_mediaItem.Id, TitleLogoMaxWidth, TitleLogoQuality);
             if (string.IsNullOrWhiteSpace(logoUrl))
-            {
-                _titleLogoImage = null;
                 return CreateDetailsTitleLabel(fallbackText);
-            }
 
             var logoContainer = new View
             {
@@ -312,7 +275,6 @@ namespace JellyfinTizen.Screens
                 SamplingMode = SamplingModeType.Linear
             };
 
-            _titleLogoImage = logo;
             logoContainer.Add(logo);
             return logoContainer;
         }
@@ -417,7 +379,7 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id);
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id, subtitleHandlingDisabled: true);
                 _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
             }
             catch

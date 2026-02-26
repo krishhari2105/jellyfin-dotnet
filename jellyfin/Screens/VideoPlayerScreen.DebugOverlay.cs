@@ -14,10 +14,12 @@ namespace JellyfinTizen.Screens
     public partial class VideoPlayerScreen
     {
         private const int StreamDebugOverlayMaxEntries = 4;
+        private const int StreamDebugOverlayMaxEvents = 18;
 
         private View _streamDebugOverlay;
         private TextLabel _streamDebugOverlayLabel;
         private readonly List<string> _streamDebugEntries = new();
+        private readonly List<string> _streamDebugEvents = new();
         private string _currentTranscodeReason = "Not available yet";
         private string _currentSanitizedStreamUrl = string.Empty;
         private string _currentJellyfinTranscodingUrl = "null";
@@ -178,6 +180,20 @@ namespace JellyfinTizen.Screens
                 }
             }
 
+            sb.Append("\n\nRecent debug events:");
+            if (_streamDebugEvents.Count == 0)
+            {
+                sb.Append("\n  (no events yet)");
+            }
+            else
+            {
+                for (int i = _streamDebugEvents.Count - 1; i >= 0; i--)
+                {
+                    sb.Append('\n');
+                    sb.Append(_streamDebugEvents[i]);
+                }
+            }
+
             _streamDebugOverlayLabel.Text = sb.ToString();
             _streamDebugOverlay.RaiseToTop();
         }
@@ -187,6 +203,27 @@ namespace JellyfinTizen.Screens
             _streamDebugOverlayVisible = false;
             _streamDebugOverlay?.Hide();
             _streamDebugEntries.Clear();
+            _streamDebugEvents.Clear();
+        }
+
+        private void CaptureStreamDebugEvent(string stage, string details)
+        {
+            if (!DebugSwitches.EnablePlaybackDebugOverlay)
+                return;
+
+            string timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            string safeStage = string.IsNullOrWhiteSpace(stage) ? "Event" : stage.Trim();
+            string safeDetails = string.IsNullOrWhiteSpace(details) ? "(no details)" : details.Trim();
+            if (safeDetails.Length > 240)
+                safeDetails = safeDetails.Substring(0, 240) + "...";
+
+            string entry = $"{timestamp} | {safeStage}: {safeDetails}";
+            _streamDebugEvents.Add(entry);
+            while (_streamDebugEvents.Count > StreamDebugOverlayMaxEvents)
+                _streamDebugEvents.RemoveAt(0);
+
+            try { Console.WriteLine($"[PlaybackDebug] {entry}"); } catch { }
+            RefreshStreamDebugOverlay();
         }
 
         private string BuildTranscodeReasonText(MediaSourceInfo mediaSource, bool forceTranscode, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
@@ -196,7 +233,7 @@ namespace JellyfinTizen.Screens
             if (_overrideAudioIndex.HasValue)
                 reasons.Add($"Audio stream override requested ({_overrideAudioIndex.Value})");
 
-            if (_burnIn && _initialSubtitleIndex.HasValue)
+            if (_burnIn && _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0)
                 reasons.Add("Subtitle burn-in requested");
 
             if (mediaSource?.TranscodingReasons != null)

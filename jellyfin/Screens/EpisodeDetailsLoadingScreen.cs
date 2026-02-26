@@ -36,7 +36,7 @@ namespace JellyfinTizen.Screens
             try
             {
                 var subtitleTask = AppState.Jellyfin.GetSubtitleStreamsAsync(_episode.Id);
-                var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id);
+                var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
                 await Task.WhenAll(subtitleTask, playbackTask);
 
                 subtitleStreams = subtitleTask.Result ?? new List<MediaStream>();
