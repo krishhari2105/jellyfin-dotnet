@@ -236,6 +236,9 @@ namespace JellyfinTizen.Screens
             Window.Default.BackgroundColor = Color.Transparent;
             BackgroundColor = Color.Transparent;
 
+            // Hidden transport feedback must exist even before OSD is first created.
+            EnsureTransientFeedbackViewsCreated();
+
             // Build OSD lazily on first interaction to avoid heavy view work
             // on the details -> player startup path.
             _useFullscreenAspectMode = false;
@@ -254,6 +257,15 @@ namespace JellyfinTizen.Screens
             _smartActionTimer?.Stop();
 
             StartPlayback();
+        }
+
+        private void EnsureTransientFeedbackViewsCreated()
+        {
+            if (_seekFeedbackContainer == null)
+                CreateSeekFeedback();
+
+            if (_playPauseFeedbackContainer == null)
+                CreatePlayPauseFeedback();
         }
 
         public override void OnHide()
@@ -325,6 +337,26 @@ namespace JellyfinTizen.Screens
                     mediaSourceId: requestedMediaSourceId);
                 if (playbackToken != _playbackToken)
                     return;
+
+                // Episode switches can carry a stale media source id from the previous item.
+                // Retry once without pinning the source to avoid black-screen stalls.
+                if ((playbackInfo?.MediaSources == null || playbackInfo.MediaSources.Count == 0) &&
+                    !string.IsNullOrWhiteSpace(requestedMediaSourceId))
+                {
+                    requestedMediaSourceId = null;
+                    var fallbackPlaybackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
+                        playbackMovie.Id,
+                        requestedSubtitleStreamIndex,
+                        burnInActive,
+                        _overrideAudioIndex,
+                        subtitleHandlingDisabled: !hasSelectedSubtitle,
+                        mediaSourceId: null);
+                    if (playbackToken != _playbackToken)
+                        return;
+
+                    if (fallbackPlaybackInfo?.MediaSources != null && fallbackPlaybackInfo.MediaSources.Count > 0)
+                        playbackInfo = fallbackPlaybackInfo;
+                }
 
                 // Jellyfin applies explicit subtitle/audio stream indices only when MediaSourceId is provided.
                 // If details screen did not preselect a source in time, re-request using resolved source id.
@@ -1297,9 +1329,9 @@ namespace JellyfinTizen.Screens
             _osd.Add(_subtitleOffsetTrackContainer);
             _osd.Add(_controlsContainer);
             Add(_osd);
-            CreateTrickplayPreview();
-            CreateSeekFeedback();
-            CreatePlayPauseFeedback();
+            if (_trickplayPreviewContainer == null) CreateTrickplayPreview();
+            if (_seekFeedbackContainer == null) CreateSeekFeedback();
+            if (_playPauseFeedbackContainer == null) CreatePlayPauseFeedback();
             CreateSmartActionPopup();
 
             CreateAudioOverlay();
@@ -1827,9 +1859,7 @@ namespace JellyfinTizen.Screens
             if (_seekFeedbackContainer == null || _seekFeedbackIcon == null || _seekFeedbackLabel == null)
                 return;
 
-            _seekFeedbackIcon.ResourceUrl = direction > 0
-                ? _sharedResPath + "forward.svg"
-                : _sharedResPath + "reverse.svg";
+            _seekFeedbackIcon.ResourceUrl = ResolveFreshIconPath(direction > 0 ? "forward.svg" : "reverse.svg");
             _seekFeedbackLabel.Text = $"{Math.Abs(seekSeconds)}s";
             _seekFeedbackContainer.PositionX = direction > 0
                 ? (int)(Window.Default.Size.Width * 0.70f) - 90
@@ -1976,8 +2006,10 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = SmartPopupMinWidth,
                 HeightSpecification = SmartPopupIntroHeight,
-                BackgroundColor = UiTheme.PlayerPanel,
+                BackgroundColor = MonochromeAuthFactory.PanelFallbackColor,
                 CornerRadius = 8.0f,
+                BorderlineWidth = 2.0f,
+                BorderlineColor = MonochromeAuthFactory.PanelFallbackBorder,
                 Opacity = 0.0f,
                 Scale = new Vector3(0.98f, 0.98f, 1f)
             };
@@ -2019,6 +2051,7 @@ namespace JellyfinTizen.Screens
                 PositionX = SmartPopupMinWidth - 44,
                 PositionY = (SmartPopupIntroHeight - 30) / 2,
                 ResourceUrl = ResolveFreshIconPath("next.svg"),
+                Name = "next.svg",
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
             };
@@ -2027,6 +2060,8 @@ namespace JellyfinTizen.Screens
             content.Add(_smartActionSubtitleLabel);
             content.Add(_smartActionIcon);
             _smartActionPopup.Add(content);
+            UiFactory.SetButtonFocusState(_smartActionPopup, primary: true, focused: false);
+            ApplySmartPopupIconState(focused: false);
             UpdateSmartPopupPosition();
             _smartActionPopup.Hide();
             Add(_smartActionPopup);
@@ -2110,10 +2145,19 @@ namespace JellyfinTizen.Screens
             if (_smartActionPopup == null)
                 return;
 
-            _smartActionPopup.BackgroundColor = _smartPopupFocused
-                ? UiTheme.PlayerPanelFocused
-                : UiTheme.PlayerPanel;
+            UiFactory.SetButtonFocusState(_smartActionPopup, primary: true, focused: _smartPopupFocused);
+            ApplySmartPopupIconState(_smartPopupFocused);
             AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? new Vector3(1.04f, 1.04f, 1f) : Vector3.One);
+        }
+
+        private void ApplySmartPopupIconState(bool focused)
+        {
+            if (_smartActionIcon == null)
+                return;
+
+            string iconFile = "next.svg";
+            _smartActionIcon.Name = iconFile;
+            _smartActionIcon.ResourceUrl = ResolveOsdIconPath(iconFile, focused);
         }
 
         private void ShowSmartPopup(string title, string subtitle, bool isIntro, bool focused)
@@ -4427,6 +4471,7 @@ namespace JellyfinTizen.Screens
             if (_clockLabel != null) _clockLabel.Text = FormatClockTime(DateTime.Now);
             if (_endsAtLabel != null) _endsAtLabel.Text = string.Empty;
             _overrideAudioIndex = null;
+            _preferredMediaSourceId = null;
             _useParsedSubtitleRenderer = false;
             _subtitleCues.Clear();
             _activeSubtitleCueIndex = -1;
