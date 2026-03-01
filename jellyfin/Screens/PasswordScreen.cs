@@ -3,6 +3,8 @@ using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.UI;
 using System;
+using System.Net;
+using System.Net.Http;
 
 namespace JellyfinTizen.Screens
 {
@@ -90,7 +92,8 @@ namespace JellyfinTizen.Screens
 
         private async void Login()
         {
-            var password = _passwordInput.Text;
+            var password = SanitizePassword(_passwordInput.Text);
+            var username = AppState.Username?.Trim();
 
             if (string.IsNullOrEmpty(password))
                 return;
@@ -105,7 +108,7 @@ namespace JellyfinTizen.Screens
             try
             {
                 var result = await AppState.Jellyfin.AuthenticateAsync(
-                    AppState.Username,
+                    username,
                     password
                 );
 
@@ -129,16 +132,59 @@ namespace JellyfinTizen.Screens
                     );
                 });
             }
-            catch
+            catch (HttpRequestException ex)
             {
+                var errorMessage = GetFriendlyLoginError(ex);
                 RunOnUiThread(() =>
                 {
                     // Return to password screen with clear password and show error
                     _passwordInput.Text = string.Empty;
                     NavigationService.NavigateBack();
-                    ShowErrorMessage("Invalid password. Please try again.");
+                    ShowErrorMessage(errorMessage);
                 });
             }
+            catch
+            {
+                RunOnUiThread(() =>
+                {
+                    _passwordInput.Text = string.Empty;
+                    NavigationService.NavigateBack();
+                    ShowErrorMessage("Sign-in failed. Please try again.");
+                });
+            }
+        }
+
+        private static string SanitizePassword(string password)
+        {
+            if (string.IsNullOrEmpty(password))
+                return string.Empty;
+
+            // Tizen IME can occasionally leave newline characters when submitting.
+            return password.Replace("\r", string.Empty).Replace("\n", string.Empty);
+        }
+
+        private static string GetFriendlyLoginError(HttpRequestException ex)
+        {
+            if (ex?.StatusCode == HttpStatusCode.Unauthorized ||
+                ex?.StatusCode == HttpStatusCode.Forbidden)
+            {
+                return "Incorrect password. Check case and symbols.";
+            }
+
+            if (ex?.StatusCode == HttpStatusCode.BadRequest)
+            {
+                return "Sign-in request rejected. Try again.";
+            }
+
+            var raw = $"{ex?.Message} {ex?.Data?["ResponseContent"]}".ToLowerInvariant();
+            if (raw.Contains("ssl") || raw.Contains("certificate"))
+                return "HTTPS certificate issue on TV. Try HTTP or trusted cert.";
+            if (raw.Contains("timed out") || raw.Contains("timeout"))
+                return "Server timeout. Check connection and try again.";
+            if (raw.Contains("name or service not known") || raw.Contains("nodename") || raw.Contains("dns"))
+                return "DNS/domain issue on TV network. Check server URL.";
+
+            return "Unable to sign in. Check server reachability.";
         }
 
         private void ShowErrorMessage(string message)

@@ -137,7 +137,9 @@ namespace JellyfinTizen.Screens
                     CellPadding = new Size2D(0, 26)
                 }
             };
-            var titleText = _mediaItem.ItemType == "Episode" ? $"{_mediaItem.SeriesName} - {_mediaItem.Name}" : _mediaItem.Name;
+            var titleText = _mediaItem.ItemType == "Episode"
+                ? BuildEpisodeTitle(_mediaItem)
+                : _mediaItem.Name;
             var title = CreateDetailsTitleView(titleText);
             _metadataContainer = CreateMetadataView();
             var overviewText = string.IsNullOrEmpty(_mediaItem.Overview)
@@ -293,6 +295,20 @@ namespace JellyfinTizen.Screens
                 VerticalAlignment = VerticalAlignment.Top
             };
         }
+
+        private static string BuildEpisodeTitle(JellyfinMovie episode)
+        {
+            if (episode == null)
+                return string.Empty;
+
+            if (episode.ParentIndexNumber > 0 && episode.IndexNumber > 0)
+                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber} - {episode.Name}";
+
+            if (episode.IndexNumber > 0)
+                return $"E{episode.IndexNumber} - {episode.Name}";
+
+            return episode.Name ?? string.Empty;
+        }
         private async Task LoadEpisodesAsync()
         {
             var loading = new TextLabel("Loading episodes...")
@@ -303,7 +319,7 @@ namespace JellyfinTizen.Screens
                 HorizontalAlignment = HorizontalAlignment.Center
             };
             _infoColumn.Add(loading);
-            _episodes = await AppState.Jellyfin.GetEpisodesAsync(_mediaItem.Id);
+            _episodes = await AppState.Jellyfin.GetEpisodesAsync(_mediaItem.Id, lightweight: true);
             _infoColumn.Remove(loading);
             _episodesView = new View
             {

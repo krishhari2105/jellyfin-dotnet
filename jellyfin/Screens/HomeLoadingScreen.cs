@@ -222,10 +222,14 @@ namespace JellyfinTizen.Screens
                 foreach (var item in nextUp)
                 {
                     var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 360);
+                    var episodePrefix = FormatEpisodeCode(item);
+                    var title = string.IsNullOrWhiteSpace(episodePrefix)
+                        ? item.Name
+                        : $"{episodePrefix} - {item.Name}";
 
                     nextUpRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
-                        Title = item.Name,
+                        Title = title,
                         Subtitle = item.SeriesName,
                         ImageUrl = imageUrl,
                         Media = item
@@ -358,6 +362,20 @@ namespace JellyfinTizen.Screens
                     () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=82&api_key={apiKey}");
 
             return null;
+        }
+
+        private static string FormatEpisodeCode(JellyfinTizen.Models.JellyfinMovie item)
+        {
+            if (item == null)
+                return string.Empty;
+
+            if (item.ParentIndexNumber > 0 && item.IndexNumber > 0)
+                return $"S{item.ParentIndexNumber}:E{item.IndexNumber}";
+
+            if (item.IndexNumber > 0)
+                return $"E{item.IndexNumber}";
+
+            return string.Empty;
         }
 
         private static string BuildCachedImageUrl(string key, Func<string> factory)

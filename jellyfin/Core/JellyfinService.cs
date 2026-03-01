@@ -19,6 +19,10 @@ namespace JellyfinTizen.Core
         public string ServerUrl { get; private set; }
         public string AccessToken { get; private set; }
         public string UserId { get; private set; }
+        private const string FullMediaFields =
+            "Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
+        private const string EpisodeListFields =
+            "UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId";
 
         public void Connect(string serverUrl)
         {
@@ -86,7 +90,10 @@ namespace JellyfinTizen.Core
             if (!response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
+                var httpEx = new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                    null,
+                    response.StatusCode);
                 httpEx.Data["ResponseContent"] = responseContent;
                 throw httpEx;
             }
@@ -101,7 +108,10 @@ namespace JellyfinTizen.Core
             if (!response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException($"HTTP {response.StatusCode}: {responseContent}");
+                var httpEx = new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                    null,
+                    response.StatusCode);
                 httpEx.Data["ResponseContent"] = responseContent;
                 throw httpEx;
             }
@@ -134,21 +144,63 @@ namespace JellyfinTizen.Core
         string username,
         string password)
         {
-            var body = new
+            var normalizedUsername = username?.Trim();
+            var normalizedPassword = password ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(normalizedUsername))
+                throw new ArgumentException("Username is required.", nameof(username));
+
+            try
             {
-                Username = username,
-                Pw = password
-            };
+                var legacyBody = new
+                {
+                    Username = normalizedUsername,
+                    Pw = normalizedPassword
+                };
 
-            var json = await PostAsync("/Users/AuthenticateByName", body);
+                var json = await PostAsync("/Users/AuthenticateByName", legacyBody);
+                return ParseAuthenticationResponse(json);
+            }
+            catch (HttpRequestException ex) when (ShouldRetryAuthenticationWithPassword(ex))
+            {
+                var fallbackBody = new
+                {
+                    Username = normalizedUsername,
+                    Password = normalizedPassword
+                };
 
+                var json = await PostAsync("/Users/AuthenticateByName", fallbackBody);
+                return ParseAuthenticationResponse(json);
+            }
+        }
+
+        private static (string accessToken, string userId) ParseAuthenticationResponse(string json)
+        {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            var token = root.GetProperty("AccessToken").GetString();
-            var userId = root.GetProperty("User").GetProperty("Id").GetString();
+            var token = root.TryGetProperty("AccessToken", out var tokenProp)
+                ? tokenProp.GetString()
+                : null;
+            var userId = root.TryGetProperty("User", out var userProp) &&
+                         userProp.TryGetProperty("Id", out var userIdProp)
+                ? userIdProp.GetString()
+                : null;
+
+            if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(userId))
+                throw new InvalidOperationException("Authentication response was missing token or user id.");
 
             return (token, userId);
+        }
+
+        private static bool ShouldRetryAuthenticationWithPassword(HttpRequestException ex)
+        {
+            // Some server versions/builds expect Password instead of Pw.
+            if (ex?.StatusCode == null)
+                return false;
+
+            return ex.StatusCode == System.Net.HttpStatusCode.BadRequest ||
+                   ex.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
+                   ex.StatusCode == System.Net.HttpStatusCode.Forbidden;
         }
 
         public async Task<List<JellyfinLibrary>> GetLibrariesAsync(string userId)
@@ -198,7 +250,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={libraryId}" +
                 $"&IncludeItemTypes={includeItemTypes}" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
+                $"&Fields={FullMediaFields}" +
                 "&SortBy=SortName" +
                 $"&UserId={UserId}";
 
@@ -216,7 +268,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={seriesId}" +
                 "&IncludeItemTypes=Season" +
                 "&Recursive=false" +
-                "&Fields=Overview,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
+                $"&Fields={FullMediaFields}" +
                 "&SortBy=IndexNumber" +
                 $"&UserId={UserId}";
 
@@ -228,22 +280,82 @@ namespace JellyfinTizen.Core
             return ParseMediaItems(items);
         }
 
-        public async Task<List<JellyfinMovie>> GetEpisodesAsync(string seasonId)
+        public async Task<(List<JellyfinMovie> Items, int TotalRecordCount)> GetEpisodesPageAsync(
+            string seasonId,
+            int startIndex,
+            int limit,
+            bool lightweight = true)
         {
+            int clampedStart = Math.Max(0, startIndex);
+            int clampedLimit = Math.Max(1, limit);
+            string fields = lightweight ? EpisodeListFields : FullMediaFields;
+
             var url =
                 $"/Users/{UserId}/Items?ParentId={seasonId}" +
                 "&IncludeItemTypes=Episode" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
+                $"&Fields={fields}" +
                 "&SortBy=IndexNumber" +
+                $"&StartIndex={clampedStart}" +
+                $"&Limit={clampedLimit}" +
                 $"&UserId={UserId}";
 
             var json = await GetAsync(url);
 
             using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
+            var root = doc.RootElement;
 
-            return ParseMediaItems(items);
+            if (!root.TryGetProperty("Items", out var items) || items.ValueKind != JsonValueKind.Array)
+                return (new List<JellyfinMovie>(), 0);
+
+            var parsedItems = ParseMediaItems(items);
+            int totalRecordCount = root.TryGetProperty("TotalRecordCount", out var totalProp) &&
+                                   totalProp.TryGetInt32(out var parsedTotal)
+                ? parsedTotal
+                : clampedStart + parsedItems.Count;
+
+            return (parsedItems, Math.Max(totalRecordCount, clampedStart + parsedItems.Count));
+        }
+
+        public async Task<List<JellyfinMovie>> GetEpisodesAsync(string seasonId, bool lightweight = false)
+        {
+            const int PageSize = 200;
+            int nextStart = 0;
+            int totalCount = int.MaxValue;
+            var allEpisodes = new List<JellyfinMovie>();
+
+            while (nextStart < totalCount)
+            {
+                var (items, totalRecordCount) = await GetEpisodesPageAsync(
+                    seasonId,
+                    nextStart,
+                    PageSize,
+                    lightweight);
+
+                if (items == null || items.Count == 0)
+                    break;
+
+                allEpisodes.AddRange(items);
+                nextStart += items.Count;
+                totalCount = Math.Max(totalRecordCount, allEpisodes.Count);
+
+                if (items.Count < PageSize)
+                    break;
+            }
+
+            return allEpisodes;
+        }
+
+        public async Task<JellyfinMovie> GetItemAsync(string itemId)
+        {
+            var url =
+                $"/Users/{UserId}/Items/{itemId}" +
+                $"?Fields={FullMediaFields}" +
+                $"&UserId={UserId}";
+
+            var json = await GetAsync(url);
+            using var doc = JsonDocument.Parse(json);
+            return ParseMediaItem(doc.RootElement);
         }
 
         public async Task<List<JellyfinMovie>> GetRecentlyAddedAsync(string libraryId, string includeItemTypes, int limit)
@@ -252,7 +364,7 @@ namespace JellyfinTizen.Core
                 $"/Users/{UserId}/Items?ParentId={libraryId}" +
                 $"&IncludeItemTypes={includeItemTypes}" +
                 "&Recursive=true" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating" +
+                $"&Fields={FullMediaFields}" +
                 "&SortBy=DateCreated" +
                 "&SortOrder=Descending" +
                 $"&Limit={limit}" +
@@ -272,7 +384,7 @@ namespace JellyfinTizen.Core
                 $"/Shows/NextUp?UserId={UserId}" +
                 $"&ParentId={tvLibraryId}" +
                 $"&Limit={limit}" +
-                "&Fields=Overview,SeriesName,UserData,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
+                $"&Fields={FullMediaFields}";
 
             var json = await GetAsync(url);
 
@@ -292,7 +404,7 @@ namespace JellyfinTizen.Core
                 "&SortBy=DatePlayed" +
                 "&SortOrder=Descending" +
                 $"&Limit={limit}" +
-                "&Fields=Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
+                $"&Fields={FullMediaFields}";
 
             var json = await GetAsync(url);
 
@@ -345,77 +457,92 @@ namespace JellyfinTizen.Core
 
             foreach (var item in items.EnumerateArray())
             {
-                var hasPrimary = false;
-                var hasThumb = false;
-                var hasBackdrop = false;
-                var hasLogo = false;
-
-                if (item.TryGetProperty("ImageTags", out var imageTags) &&
-                    imageTags.ValueKind == JsonValueKind.Object)
-                {
-                    if (imageTags.TryGetProperty("Primary", out _))
-                        hasPrimary = true;
-
-                    if (imageTags.TryGetProperty("Thumb", out _))
-                        hasThumb = true;
-
-                    if (imageTags.TryGetProperty("Logo", out _))
-                        hasLogo = true;
-                }
-
-                if (item.TryGetProperty("BackdropImageTags", out var backdropTags) &&
-                    backdropTags.ValueKind == JsonValueKind.Array &&
-                    backdropTags.GetArrayLength() > 0)
-                {
-                    hasBackdrop = true;
-                }
-
-                results.Add(new JellyfinMovie
-                {
-                    Id = item.GetProperty("Id").GetString(),
-                    Name = item.GetProperty("Name").GetString(),
-                    Overview = item.TryGetProperty("Overview", out var o)
-                        ? o.GetString()
-                        : string.Empty,
-                    PlaybackPositionTicks = item.TryGetProperty("UserData", out var userData) &&
-                                             userData.TryGetProperty("PlaybackPositionTicks", out var ticks)
-                        ? ticks.GetInt64()
-                        : 0,
-                    RunTimeTicks = item.TryGetProperty("RunTimeTicks", out var rt)
-                        ? rt.GetInt64()
-                        : 0,
-                    ProductionYear = item.TryGetProperty("ProductionYear", out var py) && py.TryGetInt32(out var productionYear)
-                        ? productionYear
-                        : 0,
-                    OfficialRating = item.TryGetProperty("OfficialRating", out var officialRating)
-                        ? officialRating.GetString()
-                        : string.Empty,
-                    CommunityRating = item.TryGetProperty("CommunityRating", out var communityRating) && communityRating.ValueKind == JsonValueKind.Number
-                        ? communityRating.GetDouble()
-                        : null,
-                    SeriesName = item.TryGetProperty("SeriesName", out var s)
-                        ? s.GetString()
-                        : string.Empty,
-                    ItemType = item.TryGetProperty("Type", out var t)
-                        ? t.GetString()
-                        : string.Empty,
-                    SeriesId = item.TryGetProperty("SeriesId", out var si)
-                        ? si.GetString()
-                        : string.Empty,
-                    IndexNumber = item.TryGetProperty("IndexNumber", out var i)
-                        ? i.GetInt32()
-                        : 0,
-                    ParentIndexNumber = item.TryGetProperty("ParentIndexNumber", out var pi)
-                        ? pi.GetInt32()
-                        : 0,
-                    HasPrimary = hasPrimary,
-                    HasThumb = hasThumb,
-                    HasBackdrop = hasBackdrop,
-                    HasLogo = hasLogo
-                });
+                var parsed = ParseMediaItem(item);
+                if (parsed != null)
+                    results.Add(parsed);
             }
 
             return results;
+        }
+
+        private JellyfinMovie ParseMediaItem(JsonElement item)
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                return null;
+
+            var hasPrimary = false;
+            var hasThumb = false;
+            var hasBackdrop = false;
+            var hasLogo = false;
+
+            if (item.TryGetProperty("ImageTags", out var imageTags) &&
+                imageTags.ValueKind == JsonValueKind.Object)
+            {
+                if (imageTags.TryGetProperty("Primary", out _))
+                    hasPrimary = true;
+
+                if (imageTags.TryGetProperty("Thumb", out _))
+                    hasThumb = true;
+
+                if (imageTags.TryGetProperty("Logo", out _))
+                    hasLogo = true;
+            }
+
+            if (item.TryGetProperty("BackdropImageTags", out var backdropTags) &&
+                backdropTags.ValueKind == JsonValueKind.Array &&
+                backdropTags.GetArrayLength() > 0)
+            {
+                hasBackdrop = true;
+            }
+
+            var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
+            var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+                return null;
+
+            return new JellyfinMovie
+            {
+                Id = id,
+                Name = name,
+                Overview = item.TryGetProperty("Overview", out var overviewProp)
+                    ? overviewProp.GetString()
+                    : string.Empty,
+                PlaybackPositionTicks = item.TryGetProperty("UserData", out var userData) &&
+                                         userData.TryGetProperty("PlaybackPositionTicks", out var ticks)
+                    ? ticks.GetInt64()
+                    : 0,
+                RunTimeTicks = item.TryGetProperty("RunTimeTicks", out var rt)
+                    ? rt.GetInt64()
+                    : 0,
+                ProductionYear = item.TryGetProperty("ProductionYear", out var py) && py.TryGetInt32(out var productionYear)
+                    ? productionYear
+                    : 0,
+                OfficialRating = item.TryGetProperty("OfficialRating", out var officialRating)
+                    ? officialRating.GetString()
+                    : string.Empty,
+                CommunityRating = item.TryGetProperty("CommunityRating", out var communityRating) && communityRating.ValueKind == JsonValueKind.Number
+                    ? communityRating.GetDouble()
+                    : null,
+                SeriesName = item.TryGetProperty("SeriesName", out var seriesName)
+                    ? seriesName.GetString()
+                    : string.Empty,
+                ItemType = item.TryGetProperty("Type", out var itemType)
+                    ? itemType.GetString()
+                    : string.Empty,
+                SeriesId = item.TryGetProperty("SeriesId", out var seriesId)
+                    ? seriesId.GetString()
+                    : string.Empty,
+                IndexNumber = item.TryGetProperty("IndexNumber", out var indexNumber)
+                    ? indexNumber.GetInt32()
+                    : 0,
+                ParentIndexNumber = item.TryGetProperty("ParentIndexNumber", out var parentIndexNumber)
+                    ? parentIndexNumber.GetInt32()
+                    : 0,
+                HasPrimary = hasPrimary,
+                HasThumb = hasThumb,
+                HasBackdrop = hasBackdrop,
+                HasLogo = hasLogo
+            };
         }
 
         private void SetAuthorizationHeader(string token)

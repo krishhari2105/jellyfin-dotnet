@@ -4385,7 +4385,7 @@ namespace JellyfinTizen.Screens
                 var orderedEpisodes = new List<JellyfinMovie>();
                 foreach (var season in seasons)
                 {
-                    var eps = await AppState.Jellyfin.GetEpisodesAsync(season.Id) ?? new List<JellyfinMovie>();
+                    var eps = await AppState.Jellyfin.GetEpisodesAsync(season.Id, lightweight: true) ?? new List<JellyfinMovie>();
                     var orderedSeasonEpisodes = eps
                         .Where(e => e != null && e.ItemType == "Episode")
                         .OrderBy(e => e.IndexNumber)

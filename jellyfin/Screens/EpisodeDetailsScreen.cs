@@ -23,6 +23,7 @@ namespace JellyfinTizen.Screens
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
         private const int ActionButtonHeight = 70;
+        private const float SeriesTitlePointSize = 28f;
         private readonly JellyfinMovie _episode;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -155,7 +156,23 @@ namespace JellyfinTizen.Screens
                     CellPadding = new Size2D(0, 26)
                 }
             };
-            var titleText = $"{_episode.SeriesName} - {_episode.Name}";
+            var seriesTitleText = BuildSeriesTitle(_episode);
+            TextLabel seriesTitle = null;
+            if (!string.IsNullOrWhiteSpace(seriesTitleText))
+            {
+                seriesTitle = new TextLabel(seriesTitleText)
+                {
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FitToChildren,
+                    PointSize = SeriesTitlePointSize,
+                    TextColor = new Color(1f, 1f, 1f, 0.74f),
+                    MultiLine = false,
+                    Ellipsis = true,
+                    VerticalAlignment = VerticalAlignment.Top
+                };
+            }
+
+            var titleText = BuildEpisodeTitle(_episode);
             var titlePointSize = GetAdaptiveTitlePointSize(titleText);
             var title = new TextLabel(titleText)
             {
@@ -194,6 +211,8 @@ namespace JellyfinTizen.Screens
             };
 
             _overviewViewport.Add(_overviewLabel);
+            if (seriesTitle != null)
+                topContent.Add(seriesTitle);
             topContent.Add(title);
             topContent.Add(_metadataContainer);
             topContent.Add(_overviewViewport);
@@ -249,6 +268,45 @@ namespace JellyfinTizen.Screens
             if (length > 90) return 46f;
             if (length > 65) return 50f;
             return 56f;
+        }
+
+        private static string BuildSeriesTitle(JellyfinMovie episode)
+        {
+            if (episode == null)
+                return string.Empty;
+
+            return string.IsNullOrWhiteSpace(episode.SeriesName)
+                ? string.Empty
+                : episode.SeriesName.Trim();
+        }
+
+        private static string BuildEpisodeTitle(JellyfinMovie episode)
+        {
+            if (episode == null)
+                return string.Empty;
+
+            var episodeCode = GetEpisodeCode(episode);
+            if (string.IsNullOrWhiteSpace(episodeCode))
+                return episode.Name ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(episode.Name))
+                return episodeCode;
+
+            return $"{episodeCode} - {episode.Name}";
+        }
+
+        private static string GetEpisodeCode(JellyfinMovie episode)
+        {
+            if (episode == null)
+                return string.Empty;
+
+            if (episode.ParentIndexNumber > 0 && episode.IndexNumber > 0)
+                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber}";
+
+            if (episode.IndexNumber > 0)
+                return $"E{episode.IndexNumber}";
+
+            return string.Empty;
         }
 
         public override void OnShow()

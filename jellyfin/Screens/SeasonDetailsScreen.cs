@@ -21,6 +21,8 @@ namespace JellyfinTizen.Screens
         private const int FocusBorder = 4;
         private const int FocusPad = UiTheme.HomeFocusPad;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
+        private const int EpisodePageSize = 40;
+        private const int EpisodePrefetchThreshold = 8;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _season;
@@ -31,6 +33,11 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
+        private bool _isEpisodeLoadInProgress;
+        private bool _hasMoreEpisodes;
+        private int _nextEpisodeStartIndex;
+        private int _totalEpisodeCount;
+        private TextLabel _episodeLoadingText;
         private Animation _episodeScrollAnimation;
 
         public SeasonDetailsScreen(JellyfinMovie season)
@@ -182,6 +189,10 @@ namespace JellyfinTizen.Screens
 
         private async Task LoadEpisodesAsync()
         {
+            if (_isEpisodeLoadInProgress)
+                return;
+
+            _isEpisodeLoadInProgress = true;
             var loading = new TextLabel("Loading episodes...")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -191,8 +202,53 @@ namespace JellyfinTizen.Screens
             };
             _infoColumn.Add(loading);
 
-            _episodes = await AppState.Jellyfin.GetEpisodesAsync(_season.Id);
-            _infoColumn.Remove(loading);
+            try
+            {
+                var (items, totalRecordCount) = await AppState.Jellyfin.GetEpisodesPageAsync(
+                    _season.Id,
+                    startIndex: 0,
+                    limit: EpisodePageSize,
+                    lightweight: true);
+
+                var firstPage = items ?? new List<JellyfinMovie>();
+                _episodes = new List<JellyfinMovie>();
+                _totalEpisodeCount = Math.Max(totalRecordCount, firstPage.Count);
+                _nextEpisodeStartIndex = firstPage.Count;
+                _hasMoreEpisodes = firstPage.Count > 0 || _totalEpisodeCount > 0;
+
+                EnsureEpisodeSection();
+                AppendEpisodeCards(firstPage);
+                _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount;
+            }
+            catch
+            {
+                _episodes = new List<JellyfinMovie>();
+                _totalEpisodeCount = 0;
+                _nextEpisodeStartIndex = 0;
+                _hasMoreEpisodes = false;
+            }
+            finally
+            {
+                _infoColumn.Remove(loading);
+                _isEpisodeLoadInProgress = false;
+            }
+            EnsureEpisodeSection();
+
+            if (_episodeViews.Count == 0)
+            {
+                SetEpisodeLoadingText("No episodes found.", visible: true);
+                return;
+            }
+
+            _isEpisodeViewFocused = true;
+            FocusEpisode(0);
+            _ = LoadMoreEpisodesAsync(force: false);
+        }
+
+        private void EnsureEpisodeSection()
+        {
+            if (_episodeViewport != null)
+                return;
 
             var episodesTitle = new TextLabel("Episodes")
             {
@@ -225,20 +281,105 @@ namespace JellyfinTizen.Screens
                 }
             };
 
+            _episodeLoadingText = new TextLabel
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 24,
+                TextColor = new Color(1f, 1f, 1f, 0.82f),
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
+                Ellipsis = false
+            };
+            _episodeLoadingText.Hide();
+
             _episodeViews.Clear();
 
-            foreach (var episode in _episodes)
+            _episodeViewport.Add(_episodeRowContainer);
+            _infoColumn.Add(episodesTitle);
+            _infoColumn.Add(_episodeViewport);
+            _infoColumn.Add(_episodeLoadingText);
+        }
+
+        private void AppendEpisodeCards(List<JellyfinMovie> episodes)
+        {
+            if (episodes == null || episodes.Count == 0 || _episodeRowContainer == null)
+                return;
+
+            foreach (var episode in episodes)
             {
+                _episodes ??= new List<JellyfinMovie>();
+                if (_episodes.Exists(e => e != null && e.Id == episode.Id))
+                    continue;
+
+                _episodes.Add(episode);
+
                 var card = CreateEpisodeCard(episode);
                 _episodeViews.Add(card);
                 _episodeRowContainer.Add(card);
             }
 
-            _episodeViewport.Add(_episodeRowContainer);
-            _infoColumn.Add(episodesTitle);
-            _infoColumn.Add(_episodeViewport);
-            _isEpisodeViewFocused = true;
-            FocusEpisode(0);
+        }
+
+        private void SetEpisodeLoadingText(string text, bool visible)
+        {
+            if (_episodeLoadingText == null)
+                return;
+
+            _episodeLoadingText.Text = text ?? string.Empty;
+
+            if (visible)
+                _episodeLoadingText.Show();
+            else
+                _episodeLoadingText.Hide();
+        }
+
+        private async Task LoadMoreEpisodesAsync(bool force)
+        {
+            if (_isEpisodeLoadInProgress || !_hasMoreEpisodes)
+                return;
+
+            if (!force)
+            {
+                if (_episodeViews.Count == 0 || _episodeIndex < 0)
+                    return;
+
+                int remaining = _episodeViews.Count - _episodeIndex - 1;
+                if (remaining > EpisodePrefetchThreshold)
+                    return;
+            }
+
+            _isEpisodeLoadInProgress = true;
+            SetEpisodeLoadingText("Loading more episodes...", visible: true);
+
+            try
+            {
+                var (items, totalRecordCount) = await AppState.Jellyfin.GetEpisodesPageAsync(
+                    _season.Id,
+                    startIndex: _nextEpisodeStartIndex,
+                    limit: EpisodePageSize,
+                    lightweight: true);
+
+                var pageItems = items ?? new List<JellyfinMovie>();
+                _nextEpisodeStartIndex += pageItems.Count;
+                _totalEpisodeCount = Math.Max(totalRecordCount, _totalEpisodeCount);
+
+                if (pageItems.Count > 0)
+                {
+                    AppendEpisodeCards(pageItems);
+                }
+
+                _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount && pageItems.Count > 0;
+            }
+            catch
+            {
+                // Keep the screen responsive; user can retry by navigating right again.
+            }
+            finally
+            {
+                _isEpisodeLoadInProgress = false;
+                SetEpisodeLoadingText(string.Empty, visible: false);
+            }
         }
 
         private View CreateEpisodeCard(JellyfinMovie episode)
@@ -292,7 +433,7 @@ namespace JellyfinTizen.Screens
             switch (key)
             {
                 case AppKey.Down:
-                    if (_episodes != null)
+                    if (_episodeViews.Count > 0)
                     {
                         _isEpisodeViewFocused = true;
                         FocusEpisode(0);
@@ -312,6 +453,11 @@ namespace JellyfinTizen.Screens
                     MoveEpisodeFocus(-1);
                     break;
                 case AppKey.Right:
+                    if (_episodeIndex >= _episodeViews.Count - 1 && _hasMoreEpisodes)
+                    {
+                        _ = LoadMoreEpisodesAsync(force: true);
+                        return;
+                    }
                     MoveEpisodeFocus(1);
                     break;
                 case AppKey.Enter:
@@ -343,6 +489,7 @@ namespace JellyfinTizen.Screens
             _episodeIndex = Math.Clamp(index, 0, _episodeViews.Count - 1);
             ApplyEpisodeFocus(_episodeViews[_episodeIndex], true);
             ScrollEpisodesIfNeeded();
+            _ = LoadMoreEpisodesAsync(force: false);
 
             Tizen.Applications.CoreApplication.Post(() =>
             {
