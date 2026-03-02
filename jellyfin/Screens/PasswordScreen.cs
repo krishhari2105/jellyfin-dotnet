@@ -165,10 +165,26 @@ namespace JellyfinTizen.Screens
 
         private static string GetFriendlyLoginError(HttpRequestException ex)
         {
+            var responseContent = ex?.Data?["ResponseContent"]?.ToString() ?? string.Empty;
+            var requestPath = ex?.Data?["RequestPath"]?.ToString() ?? string.Empty;
+            var raw = $"{ex?.Message} {responseContent}".ToLowerInvariant();
+            string snippet = responseContent;
+            if (!string.IsNullOrWhiteSpace(snippet) && snippet.Length > 140)
+                snippet = snippet.Substring(0, 140) + "...";
+
             if (ex?.StatusCode == HttpStatusCode.Unauthorized ||
                 ex?.StatusCode == HttpStatusCode.Forbidden)
             {
-                return "Incorrect password. Check case and symbols.";
+                if (raw.Contains("invalid token") || raw.Contains("customauthentication"))
+                    return "Server auth plugin rejected this sign-in request (not a password typo).";
+
+                if (!string.IsNullOrWhiteSpace(snippet))
+                    return $"Sign-in unauthorized: {snippet}";
+
+                if (!string.IsNullOrWhiteSpace(requestPath))
+                    return $"Sign-in unauthorized on {requestPath} (401/403).";
+
+                return "Sign-in unauthorized by server (401/403). Check credentials and auth plugin settings.";
             }
 
             if (ex?.StatusCode == HttpStatusCode.BadRequest)
@@ -176,7 +192,6 @@ namespace JellyfinTizen.Screens
                 return "Sign-in request rejected. Try again.";
             }
 
-            var raw = $"{ex?.Message} {ex?.Data?["ResponseContent"]}".ToLowerInvariant();
             if (raw.Contains("ssl") || raw.Contains("certificate"))
                 return "HTTPS certificate issue on TV. Try HTTP or trusted cert.";
             if (raw.Contains("timed out") || raw.Contains("timeout"))

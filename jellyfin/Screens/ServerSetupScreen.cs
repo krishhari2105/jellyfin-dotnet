@@ -103,6 +103,8 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
+            // Reset stale runtime/session auth before starting a new server login flow.
+            AppState.ClearSession(clearServer: false);
             AppState.SaveServer(validatedUrl);
             AppState.Jellyfin.Connect(validatedUrl);
             RunOnUiThread(() =>
@@ -137,38 +139,54 @@ namespace JellyfinTizen.Screens
             if (url.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase) ||
                 url.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase))
             {
-                return url;
+                return await ResolveServerBaseUrl(url);
             }
 
-            // Try with http first
-            string httpUrl = "http://" + url;
-            if (await IsServerReachable(httpUrl))
-            {
-                return httpUrl;
-            }
-
-            // Try with https if http failed
+            // Prefer https first so we do not persist an http endpoint that only works via redirect.
             string httpsUrl = "https://" + url;
-            if (await IsServerReachable(httpsUrl))
+            var resolvedHttps = await ResolveServerBaseUrl(httpsUrl);
+            if (!string.IsNullOrEmpty(resolvedHttps))
             {
-                return httpsUrl;
+                return resolvedHttps;
+            }
+
+            // Fallback to http only when https is unavailable.
+            string httpUrl = "http://" + url;
+            var resolvedHttp = await ResolveServerBaseUrl(httpUrl);
+            if (!string.IsNullOrEmpty(resolvedHttp))
+            {
+                return resolvedHttp;
             }
 
             return null;
         }
 
-        private async Task<bool> IsServerReachable(string url)
+        private async Task<string> ResolveServerBaseUrl(string url)
         {
             try
             {
                 using var httpClient = new System.Net.Http.HttpClient();
                 httpClient.Timeout = System.TimeSpan.FromSeconds(5);
-                var response = await httpClient.GetAsync(url + "/System/Info/Public");
-                return response.IsSuccessStatusCode;
+                var normalizedInput = url.TrimEnd('/');
+                var response = await httpClient.GetAsync(normalizedInput + "/System/Info/Public");
+                if (!response.IsSuccessStatusCode)
+                    return null;
+
+                // Capture the final URL after redirects (http->https, reverse proxy path rewrites, etc).
+                var finalUri = response.RequestMessage?.RequestUri;
+                if (finalUri == null)
+                    return normalizedInput;
+
+                var absolute = finalUri.GetLeftPart(System.UriPartial.Authority) + finalUri.AbsolutePath;
+                const string infoPublicSuffix = "/System/Info/Public";
+                if (absolute.EndsWith(infoPublicSuffix, System.StringComparison.OrdinalIgnoreCase))
+                    absolute = absolute.Substring(0, absolute.Length - infoPublicSuffix.Length);
+
+                return absolute.TrimEnd('/');
             }
             catch
             {
-                return false;
+                return null;
             }
         }
 

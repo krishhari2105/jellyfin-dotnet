@@ -202,6 +202,8 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex)
             {
+                AppState.AccessToken = null;
+                AppState.Jellyfin.ClearAuthToken();
                 if (IsUnauthorized(ex))
                     AppState.ClearSession(clearServer: false);
 

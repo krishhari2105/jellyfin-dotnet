@@ -1,6 +1,6 @@
 using System;
+using System.Net;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -13,12 +13,21 @@ namespace JellyfinTizen.Core
 {
     public class JellyfinService
     {
+        private const string DefaultDeviceId = "tizen-tv";
+        private const string ClientName = "Jellyfin for Tizen";
+        private const string ClientVersion = "1.0";
+        private const string DeviceName = "Samsung TV";
+        private const string AuthenticateByNamePath = "/Users/authenticatebyname";
+        private const string AuthenticateAcceptHeader =
+            "application/json,application/json; profile=CamelCase,application/json; profile=PascalCase,text/html";
+
         private HttpClient _http;
         private string _connectedServerUrl;
 
         public string ServerUrl { get; private set; }
         public string AccessToken { get; private set; }
         public string UserId { get; private set; }
+        public string DeviceId { get; set; } = DefaultDeviceId;
         private const string FullMediaFields =
             "Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
         private const string EpisodeListFields =
@@ -36,6 +45,8 @@ namespace JellyfinTizen.Core
             if (_http != null &&
                 string.Equals(_connectedServerUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase))
             {
+                // Ensure reused client header is refreshed (prevents stale token reuse).
+                SetAuthorizationHeader(AccessToken);
                 return;
             }
 
@@ -44,6 +55,7 @@ namespace JellyfinTizen.Core
             {
                 Timeout = System.TimeSpan.FromSeconds(10)
             };
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinTizen/1.0");
 
             _connectedServerUrl = normalizedUrl;
             SetAuthorizationHeader(null);
@@ -77,28 +89,7 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body)
         {
-            var options = new JsonSerializerOptions 
-            { 
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase 
-            };
-            
-            var json = JsonSerializer.Serialize(body, options);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            var response = await _http.PostAsync(ServerUrl + path, content);
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException(
-                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
-                    null,
-                    response.StatusCode);
-                httpEx.Data["ResponseContent"] = responseContent;
-                throw httpEx;
-            }
-            
-            return await response.Content.ReadAsStringAsync();
+            return await PostAsync(path, body, useCamelCase: true);
         }
 
         public async Task PostAsync(string path)
@@ -113,6 +104,7 @@ namespace JellyfinTizen.Core
                     null,
                     response.StatusCode);
                 httpEx.Data["ResponseContent"] = responseContent;
+                httpEx.Data["RequestPath"] = path;
                 throw httpEx;
             }
         }
@@ -149,27 +141,51 @@ namespace JellyfinTizen.Core
             if (string.IsNullOrWhiteSpace(normalizedUsername))
                 throw new ArgumentException("Username is required.", nameof(username));
 
+            // Login requests must not carry an old token.
+            AccessToken = null;
+            SetAuthorizationHeader(null);
+
+            var authBody = new Dictionary<string, string>
+            {
+                ["Username"] = normalizedUsername,
+                ["Pw"] = normalizedPassword
+            };
             try
             {
-                var legacyBody = new
-                {
-                    Username = normalizedUsername,
-                    Pw = normalizedPassword
-                };
-
-                var json = await PostAsync("/Users/AuthenticateByName", legacyBody);
+                var json = await PostAuthenticateByNameAsync(authBody);
                 return ParseAuthenticationResponse(json);
             }
-            catch (HttpRequestException ex) when (ShouldRetryAuthenticationWithPassword(ex))
+            catch (HttpRequestException ex) when (
+                IsAuthenticationRejection(ex.StatusCode) &&
+                !string.IsNullOrWhiteSpace(ServerUrl) &&
+                ServerUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
             {
-                var fallbackBody = new
-                {
-                    Username = normalizedUsername,
-                    Password = normalizedPassword
-                };
+                // Some deployments expose HTTP for discovery but require HTTPS for credential POSTs.
+                var originalServerUrl = ServerUrl;
+                var httpsServerUrl = "https://" + originalServerUrl.Substring("http://".Length);
+                var authenticatedOverHttps = false;
 
-                var json = await PostAsync("/Users/AuthenticateByName", fallbackBody);
-                return ParseAuthenticationResponse(json);
+                try
+                {
+                    Connect(httpsServerUrl);
+                    AccessToken = null;
+                    SetAuthorizationHeader(null);
+
+                    var json = await PostAuthenticateByNameAsync(authBody);
+                    authenticatedOverHttps = true;
+                    return ParseAuthenticationResponse(json);
+                }
+                finally
+                {
+                    // Revert server URL only if auth did not succeed over HTTPS.
+                    if (!authenticatedOverHttps &&
+                        string.Equals(ServerUrl, httpsServerUrl, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Connect(originalServerUrl);
+                        AccessToken = null;
+                        SetAuthorizationHeader(null);
+                    }
+                }
             }
         }
 
@@ -192,15 +208,60 @@ namespace JellyfinTizen.Core
             return (token, userId);
         }
 
-        private static bool ShouldRetryAuthenticationWithPassword(HttpRequestException ex)
+        public async Task<string> PostAsync(string path, object body, bool useCamelCase)
         {
-            // Some server versions/builds expect Password instead of Pw.
-            if (ex?.StatusCode == null)
-                return false;
+            var json = SerializeJson(body, useCamelCase);
+            var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            return ex.StatusCode == System.Net.HttpStatusCode.BadRequest ||
-                   ex.StatusCode == System.Net.HttpStatusCode.Unauthorized ||
-                   ex.StatusCode == System.Net.HttpStatusCode.Forbidden;
+            var response = await _http.PostAsync(ServerUrl + path, content);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var httpEx = new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                    null,
+                    response.StatusCode);
+                httpEx.Data["ResponseContent"] = responseContent;
+                httpEx.Data["RequestPath"] = path;
+                throw httpEx;
+            }
+
+            return await response.Content.ReadAsStringAsync();
+        }
+
+        private static bool IsAuthenticationRejection(HttpStatusCode? statusCode)
+        {
+            return statusCode == HttpStatusCode.BadRequest ||
+                   statusCode == HttpStatusCode.Unauthorized ||
+                   statusCode == HttpStatusCode.Forbidden;
+        }
+
+        private async Task<string> PostAuthenticateByNameAsync(Dictionary<string, string> body)
+        {
+            var json = SerializeJson(body, useCamelCase: false);
+            using var request = new HttpRequestMessage(HttpMethod.Post, ServerUrl + AuthenticateByNamePath)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+
+            request.Headers.TryAddWithoutValidation("Accept", AuthenticateAcceptHeader);
+            request.Headers.TryAddWithoutValidation("Authorization", BuildAuthorizationHeader(string.Empty));
+
+            var response = await _http.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                var responseContent = await response.Content.ReadAsStringAsync();
+                var httpEx = new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                    null,
+                    response.StatusCode);
+                httpEx.Data["ResponseContent"] = responseContent;
+                httpEx.Data["RequestPath"] = AuthenticateByNamePath;
+                throw httpEx;
+            }
+
+            return await response.Content.ReadAsStringAsync();
         }
 
         public async Task<List<JellyfinLibrary>> GetLibrariesAsync(string userId)
@@ -556,11 +617,44 @@ namespace JellyfinTizen.Core
             if (_http.DefaultRequestHeaders.Contains("X-Emby-Authorization"))
                 _http.DefaultRequestHeaders.Remove("X-Emby-Authorization");
 
-            var headerValue = string.IsNullOrWhiteSpace(token)
-                ? "MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\""
-                : $"MediaBrowser Client=\"Jellyfin for Tizen\", Device=\"Samsung TV\", DeviceId=\"tizen-tv\", Version=\"1.0\", Token=\"{token}\"";
+            if (_http.DefaultRequestHeaders.Contains("Authorization"))
+                _http.DefaultRequestHeaders.Remove("Authorization");
+            
+            if (string.IsNullOrWhiteSpace(token))
+                return;
 
-            _http.DefaultRequestHeaders.Add("X-Emby-Authorization", headerValue);
+            var normalizedToken = token.Trim();
+            var headerValue = BuildAuthorizationHeader(normalizedToken);
+
+            // Primary official header used by jellyfin-web/@jellyfin/sdk.
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
+            // Compatibility for older/third-party servers/clients.
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", headerValue);
+            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", normalizedToken);
+        }
+
+        public string BuildAuthorizationHeader(string token)
+        {
+            var normalizedDeviceId = string.IsNullOrWhiteSpace(DeviceId)
+                ? DefaultDeviceId
+                : DeviceId.Trim();
+            var normalizedToken = token ?? string.Empty;
+
+            return
+                $"MediaBrowser Client=\"{Uri.EscapeDataString(ClientName)}\", " +
+                $"Device=\"{Uri.EscapeDataString(DeviceName)}\", " +
+                $"DeviceId=\"{Uri.EscapeDataString(normalizedDeviceId)}\", " +
+                $"Version=\"{Uri.EscapeDataString(ClientVersion)}\", " +
+                $"Token=\"{Uri.EscapeDataString(normalizedToken)}\"";
+        }
+
+        private static string SerializeJson(object body, bool useCamelCase)
+        {
+            var options = useCamelCase
+                ? new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }
+                : null;
+
+            return JsonSerializer.Serialize(body, options);
         }
 
         public async Task<List<MediaStream>> GetSubtitleStreamsAsync(string itemId)

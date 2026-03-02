@@ -14,7 +14,9 @@ namespace JellyfinTizen.Screens
     public partial class VideoPlayerScreen
     {
         private const int StreamDebugOverlayMaxEntries = 4;
-        private const int StreamDebugOverlayMaxEvents = 18;
+        private const int StreamDebugOverlayMaxEvents = 220;
+        private const int StreamDebugOverlayVisibleLines = 14;
+        private const int StreamDebugOverlayScrollStepLines = 3;
 
         private View _streamDebugOverlay;
         private TextLabel _streamDebugOverlayLabel;
@@ -24,6 +26,7 @@ namespace JellyfinTizen.Screens
         private string _currentSanitizedStreamUrl = string.Empty;
         private string _currentJellyfinTranscodingUrl = "null";
         private bool _streamDebugOverlayVisible = DebugSwitches.EnablePlaybackDebugOverlay;
+        private int _streamDebugScrollLineOffset;
 
         private void CreateStreamDebugOverlay()
         {
@@ -75,35 +78,6 @@ namespace JellyfinTizen.Screens
             RefreshStreamDebugOverlay();
         }
 
-        private void ToggleStreamDebugOverlay()
-        {
-            if (!DebugSwitches.EnablePlaybackDebugOverlay)
-            {
-                HideStreamDebugOverlay();
-                return;
-            }
-
-            _streamDebugOverlayVisible = !_streamDebugOverlayVisible;
-
-            if (_streamDebugOverlay == null)
-            {
-                if (_streamDebugOverlayVisible)
-                    CreateStreamDebugOverlay();
-                return;
-            }
-
-            if (_streamDebugOverlayVisible)
-            {
-                _streamDebugOverlay.Show();
-                _streamDebugOverlay.RaiseToTop();
-                RefreshStreamDebugOverlay();
-            }
-            else
-            {
-                _streamDebugOverlay.Hide();
-            }
-        }
-
         private void CaptureStreamDebugEntry(string streamUrl, MediaSourceInfo mediaSource, bool forceTranscode, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
         {
             if (!DebugSwitches.EnablePlaybackDebugOverlay)
@@ -141,7 +115,7 @@ namespace JellyfinTizen.Screens
                 return;
 
             var sb = new StringBuilder();
-            sb.Append("TEMP STREAM DEBUG  (MediaPrevious toggles)");
+            sb.Append("TEMP STREAM DEBUG");
             sb.Append('\n');
             sb.Append("Method: ");
             sb.Append(string.IsNullOrWhiteSpace(_playMethod) ? "Unknown" : _playMethod);
@@ -157,6 +131,19 @@ namespace JellyfinTizen.Screens
             sb.Append('\n');
             sb.Append("MediaSource: ");
             sb.Append(_currentMediaSource?.Id ?? "-");
+            sb.Append('\n');
+            sb.Append("Subtitle: req=");
+            sb.Append(_initialSubtitleIndex.HasValue ? _initialSubtitleIndex.Value.ToString(CultureInfo.InvariantCulture) : "OFF");
+            sb.Append(", enabled=");
+            sb.Append(_subtitleEnabled ? "yes" : "no");
+            sb.Append(", activeExt=");
+            sb.Append(_activeSubtitleWasExternal ? "yes" : "no");
+            sb.Append(", parsed=");
+            sb.Append(_useParsedSubtitleRenderer ? "yes" : "no");
+            sb.Append(", sidecar=");
+            sb.Append(_playerSidecarSubtitleActive ? "yes" : "no");
+            sb.Append(", ");
+            sb.Append(GetNativeSubtitleState());
             sb.Append("\nCurrent URL:\n");
             sb.Append(string.IsNullOrWhiteSpace(_currentSanitizedStreamUrl) ? "-" : FormatDebugStreamUrl(_currentSanitizedStreamUrl));
             sb.Append("\n\nRecent stream URL logs:");
@@ -194,7 +181,21 @@ namespace JellyfinTizen.Screens
                 }
             }
 
-            _streamDebugOverlayLabel.Text = sb.ToString();
+            var fullText = sb.ToString();
+            var lines = fullText.Split('\n');
+            int maxOffset = Math.Max(0, lines.Length - StreamDebugOverlayVisibleLines);
+            _streamDebugScrollLineOffset = Math.Clamp(_streamDebugScrollLineOffset, 0, maxOffset);
+            string visibleText = _streamDebugScrollLineOffset > 0
+                ? string.Join("\n", lines.Skip(_streamDebugScrollLineOffset))
+                : fullText;
+
+            if (maxOffset > 0)
+            {
+                string scrollInfo = $"[Scroll {_streamDebugScrollLineOffset}/{maxOffset}]";
+                visibleText = $"{scrollInfo}\n{visibleText}";
+            }
+
+            _streamDebugOverlayLabel.Text = visibleText;
             _streamDebugOverlay.RaiseToTop();
         }
 
@@ -204,6 +205,7 @@ namespace JellyfinTizen.Screens
             _streamDebugOverlay?.Hide();
             _streamDebugEntries.Clear();
             _streamDebugEvents.Clear();
+            _streamDebugScrollLineOffset = 0;
         }
 
         private void CaptureStreamDebugEvent(string stage, string details)
@@ -214,8 +216,8 @@ namespace JellyfinTizen.Screens
             string timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             string safeStage = string.IsNullOrWhiteSpace(stage) ? "Event" : stage.Trim();
             string safeDetails = string.IsNullOrWhiteSpace(details) ? "(no details)" : details.Trim();
-            if (safeDetails.Length > 240)
-                safeDetails = safeDetails.Substring(0, 240) + "...";
+            if (safeDetails.Length > 420)
+                safeDetails = safeDetails.Substring(0, 420) + "...";
 
             string entry = $"{timestamp} | {safeStage}: {safeDetails}";
             _streamDebugEvents.Add(entry);
@@ -224,6 +226,17 @@ namespace JellyfinTizen.Screens
 
             try { Console.WriteLine($"[PlaybackDebug] {entry}"); } catch { }
             RefreshStreamDebugOverlay();
+        }
+
+        private bool TryScrollStreamDebugOverlay(int direction)
+        {
+            if (!DebugSwitches.EnablePlaybackDebugOverlay || !_streamDebugOverlayVisible || _streamDebugOverlayLabel == null)
+                return false;
+
+            int delta = direction > 0 ? StreamDebugOverlayScrollStepLines : -StreamDebugOverlayScrollStepLines;
+            _streamDebugScrollLineOffset = Math.Max(0, _streamDebugScrollLineOffset + delta);
+            RefreshStreamDebugOverlay();
+            return true;
         }
 
         private string BuildTranscodeReasonText(MediaSourceInfo mediaSource, bool forceTranscode, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)

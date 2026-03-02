@@ -8,12 +8,14 @@ namespace JellyfinTizen.Core
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
         private const string KeyUsername = "jf_username";
+        private const string KeyDeviceId = "jf_device_id";
         private const string KeyBurnInSubtitles = "jf_burn_in_subtitles";
 
         public static string ServerUrl { get; set; }
         public static string AccessToken { get; set; }
         public static string UserId { get; set; }
         public static string Username { get; set; }
+        public static string DeviceId { get; private set; }
 
         public static JellyfinService Jellyfin { get; private set; }
 
@@ -31,6 +33,8 @@ namespace JellyfinTizen.Core
         public static void Init()
         {
             Jellyfin = new JellyfinService();
+            DeviceId = GetOrCreateDeviceId();
+            Jellyfin.DeviceId = DeviceId;
         }
 
         public static bool TryRestoreFullSession()
@@ -160,6 +164,36 @@ namespace JellyfinTizen.Core
             {
                 // Ignore preference storage races/corruption while clearing session.
             }
+        }
+
+        private static string GetOrCreateDeviceId()
+        {
+            try
+            {
+                if (Tizen.Applications.Preference.Contains(KeyDeviceId))
+                {
+                    var existing = Tizen.Applications.Preference.Get<string>(KeyDeviceId);
+                    if (!string.IsNullOrWhiteSpace(existing))
+                        return existing;
+                }
+            }
+            catch
+            {
+                // Continue and generate a new id when preference read fails.
+            }
+
+            var generated = "tizen-" + Guid.NewGuid().ToString("N");
+
+            try
+            {
+                Tizen.Applications.Preference.Set(KeyDeviceId, generated);
+            }
+            catch
+            {
+                // Return generated id even if persistence fails.
+            }
+
+            return generated;
         }
 
         public static string GetUserAvatarUrl(int size = 96)

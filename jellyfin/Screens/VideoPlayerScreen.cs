@@ -46,6 +46,7 @@ namespace JellyfinTizen.Screens
         private int _subtitleIndex;
         private bool _subtitleOverlayVisible;
         private bool _subtitleEnabled;
+        private bool _activeSubtitleWasExternal;
         private TextLabel _subtitleText;
         private Timer _subtitleHideTimer;
         private DateTime _subtitleHideDeadlineUtc = DateTime.MinValue;
@@ -94,6 +95,9 @@ namespace JellyfinTizen.Screens
         private string _playMethod = "DirectPlay";
         private string _playSessionId;
         private int? _initialSubtitleIndex;
+        private int? _requestedEmbeddedSubtitleOrdinal;
+        private bool _forceNativeEmbeddedSelectionOnRestart;
+        private bool _playerSidecarSubtitleActive;
         private bool _burnIn;
         private string _preferredMediaSourceId;
         private string _externalSubtitlePath = null;
@@ -255,6 +259,7 @@ namespace JellyfinTizen.Screens
             _reportProgressTimer.Tick += OnReportProgressTick;
             _reportProgressTimer.Start();
             _smartActionTimer?.Stop();
+            CreateStreamDebugOverlay();
 
             StartPlayback();
         }
@@ -306,14 +311,24 @@ namespace JellyfinTizen.Screens
                 _completedForCurrentItem = false;
                 ResetSmartActionState();
                 bool hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
+                bool preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
+                _forceNativeEmbeddedSelectionOnRestart = false;
                 int? requestedSubtitleStreamIndex = hasSelectedSubtitle ? _initialSubtitleIndex : -1;
+                if (preferNativeEmbeddedOnStart)
+                    requestedSubtitleStreamIndex = null;
                 string requestedMediaSourceId = _preferredMediaSourceId;
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Request", $"sub={requestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={requestedMediaSourceId ?? "-"}");
 
                 _subtitleEnabled = hasSelectedSubtitle;
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
+                _activeSubtitleWasExternal = false;
+                _playerSidecarSubtitleActive = false;
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
+                    "StartPlayback",
+                    details: $"token={playbackToken},burnIn={_burnIn},requested={requestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},nativeRestart={preferNativeEmbeddedOnStart}");
                 _player = new Player();
 
                 _player.ErrorOccurred += OnPlayerErrorOccurred;
@@ -406,6 +421,8 @@ namespace JellyfinTizen.Screens
                 if (mediaSource == null)
                     return;
                 _currentMediaSource = mediaSource; 
+                AlignRequestedSubtitleIndexForCurrentMediaSource(mediaSource);
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("StartPlayback.Subtitles", mediaSource);
                 _playSessionId = playbackInfo.PlaySessionId;
                 _ = LoadMediaSegmentsAsync();
                 UpdateSmartActionTimerState();
@@ -481,7 +498,11 @@ namespace JellyfinTizen.Screens
 
                     if (hasSelectedSubtitle)
                     {
-                        streamUrl = UpsertQueryParam(streamUrl, "SubtitleStreamIndex", _initialSubtitleIndex.Value.ToString());
+                        bool shouldSendSubtitleIndexToServer =
+                            !preferNativeEmbeddedOnStart ||
+                            !string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
+                        if (shouldSendSubtitleIndexToServer)
+                            streamUrl = UpsertQueryParam(streamUrl, "SubtitleStreamIndex", _initialSubtitleIndex.Value.ToString());
                         if (burnInActive) streamUrl = UpsertQueryParam(streamUrl, "SubtitleMethod", "Encode");
                     }
 
@@ -530,6 +551,9 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEntry(streamUrl, mediaSource, forceTranscode, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"method={_playMethod},burnInActive={burnInActive}");
+
                 var source = new MediaUriSource(streamUrl);
                 SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, _playMethod);
                 _player.SetSource(source);
@@ -551,17 +575,26 @@ namespace JellyfinTizen.Screens
                             .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (selectedSubStream != null)
                         {
-                            bool useNativeEmbedded = _playMethod == "DirectPlay" && !selectedSubStream.IsExternal;
+                            _activeSubtitleWasExternal = selectedSubStream.IsExternal;
+                            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.ApplySubtitle", selectedSubStream, "phase=prepared");
+                            bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
+                            bool useNativeEmbedded = isDirectPlay && !selectedSubStream.IsExternal;
                             if (useNativeEmbedded)
                             {
                                 if (!TrySelectNativeEmbeddedSubtitle(_initialSubtitleIndex.Value))
                                 {
-                                    await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
+                                    await Task.Delay(120);
+                                    bool retryResult = TrySelectNativeEmbeddedSubtitle(_initialSubtitleIndex.Value);
+                                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.NativeRetry", selectedSubStream, $"result={retryResult}");
                                 }
                             }
                             else
                             {
-                                await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
+                                bool downloadedApplied = await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
+                                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
+                                    "StartPlayback.DownloadedApply",
+                                    selectedSubStream,
+                                    $"result={downloadedApplied},isExternal={selectedSubStream.IsExternal},playMethod={_playMethod}");
                             }
                         }
                     }
@@ -588,8 +621,9 @@ namespace JellyfinTizen.Screens
                 };
                 _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
             }
-            catch
+            catch (Exception ex)
             {
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Exception", ex.Message);
                 if (playbackToken == _playbackToken)
                     ClearReportingContext();
             }
@@ -599,7 +633,16 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                if (subtitleStream == null) return false;
+                bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
+                bool canDownloadSubtitle = subtitleStream != null && (subtitleStream.IsExternal || !isDirectPlay);
+                if (!canDownloadSubtitle)
+                {
+                    string reason = subtitleStream == null ? "nullStream" : $"unsupportedDirectPlayEmbedded(method={_playMethod})";
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadSkip", subtitleStream, $"reason={reason}");
+                    return false;
+                }
+
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadStart", subtitleStream, $"mediaSource={mediaSourceId}");
                 ApplySubtitleTextStyle();
 
                 int subtitleIndex = subtitleStream.Index;
@@ -623,30 +666,35 @@ namespace JellyfinTizen.Screens
                 }
                 _externalSubtitlePath = localPath;
 
-                bool preferParsedForTiming = !_burnIn && !string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
-                // Keep DirectPlay on native subtitle renderer for both embedded and external tracks.
-                bool allowParsedRenderer = preferParsedForTiming;
-                if (allowParsedRenderer && TryLoadSubtitleCues(localPath))
-                {
-                    _useParsedSubtitleRenderer = true;
-                    TryDisableNativeSubtitleTrack();
-                    StartSubtitleRenderTimer();
-                }
-                else
+                // Prefer app-rendered external subtitles to avoid sidecar/native switch glitches on Tizen.
+                bool allowParsedRenderer = !_burnIn;
+                if (!allowParsedRenderer || !TryLoadSubtitleCues(localPath))
                 {
                     _useParsedSubtitleRenderer = false;
+                    _playerSidecarSubtitleActive = false;
                     _subtitleText?.Hide();
-                    _player.SetSubtitle(localPath);
+                    StopSubtitleRenderTimer();
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadSkip", subtitleStream, "reason=parserRequired");
+                    return false;
                 }
 
+                _useParsedSubtitleRenderer = true;
+                _playerSidecarSubtitleActive = false;
+                TryDisableNativeSubtitleTrack();
+                StartSubtitleRenderTimer();
+
+                _activeSubtitleWasExternal = true;
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadApplied", subtitleStream, $"parsed={_useParsedSubtitleRenderer},path={System.IO.Path.GetFileName(localPath)}");
                 return true;
             }
             catch (Exception)
             {
                 _externalSubtitlePath = null;
                 _useParsedSubtitleRenderer = false;
+                _playerSidecarSubtitleActive = false;
                 _subtitleCues.Clear();
                 StopSubtitleRenderTimer();
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadFailed", subtitleStream);
                 return false;
             }
         }
@@ -855,27 +903,47 @@ namespace JellyfinTizen.Screens
         private bool TrySelectNativeEmbeddedSubtitle(int jellyfinStreamIndex)
         {
             if (_player == null || _currentMediaSource == null)
+            {
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=playerOrMediaSourceMissing");
                 return false;
+            }
 
             if (_playMethod != "DirectPlay")
+            {
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: $"reason=playMethod:{_playMethod}");
                 return false;
+            }
 
             try
             {
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("Subtitle.NativeSelectTopology", _currentMediaSource);
+                try { _player.ClearSubtitle(); } catch { }
+                _externalSubtitlePath = null;
+                _playerSidecarSubtitleActive = false;
+
                 int tizenSubtitleCount = _player.SubtitleTrackInfo.GetCount();
                 if (tizenSubtitleCount <= 0)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=noNativeTracks");
                     return false;
+                }
 
                 var embeddedSubs = _currentMediaSource.MediaStreams?
                     .Where(s => s.Type == "Subtitle" && !s.IsExternal)
                     .OrderBy(s => s.Index)
                     .ToList();
                 if (embeddedSubs == null || embeddedSubs.Count == 0)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=noEmbeddedStreamsInMetadata");
                     return false;
+                }
 
                 int tizenIndex = embeddedSubs.FindIndex(s => s.Index == jellyfinStreamIndex);
+                MediaStream targetStream = tizenIndex >= 0 && tizenIndex < embeddedSubs.Count ? embeddedSubs[tizenIndex] : null;
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectAttempt", targetStream, $"targetJellyfin={jellyfinStreamIndex},targetTizen={tizenIndex},nativeCount={tizenSubtitleCount}");
                 if (tizenIndex < 0 || tizenIndex >= tizenSubtitleCount)
                 {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", targetStream, $"reason=indexMismatch,targetTizen={tizenIndex},nativeCount={tizenSubtitleCount}");
                     return false;
                 }
 
@@ -884,14 +952,26 @@ namespace JellyfinTizen.Screens
                 _activeSubtitleCueIndex = -1;
                 StopSubtitleRenderTimer();
                 _subtitleText?.Hide();
+                try { _player.SubtitleTrackInfo.Selected = -1; } catch { }
                 _player.SubtitleTrackInfo.Selected = tizenIndex;
+                int selectedAfterSet = -2;
+                try { selectedAfterSet = _player.SubtitleTrackInfo.Selected; } catch { }
+                if (selectedAfterSet != tizenIndex)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", targetStream, $"reason=selectedMismatch,expected={tizenIndex},actual={selectedAfterSet}");
+                    return false;
+                }
                 _subtitleEnabled = true;
-                _subtitleIndex = tizenIndex + 1;
+                _activeSubtitleWasExternal = false;
+                _initialSubtitleIndex = jellyfinStreamIndex;
+                SyncSubtitleSelectionFromCurrentState();
                 ApplySubtitleTextStyle();
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectSuccess", targetStream, $"selectedTizen={selectedAfterSet}");
                 return true;
             }
             catch
             {
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=exception");
                 return false;
             }
         }
@@ -3296,32 +3376,16 @@ namespace JellyfinTizen.Screens
                 _subtitleListContainer = new View { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FitToChildren, Layout = new LinearLayout { LinearOrientation = LinearLayout.Orientation.Vertical, CellPadding = new Size2D(0, 5) } };
                 _subtitleScrollView.Add(_subtitleListContainer);
                 _subtitleOverlay.Add(_subtitleScrollView);
-                
-                if (!_burnIn)
-                {
-                    // OFF option is only meaningful when subtitles are sidecar/native, not burn-in.
-                    var offRow = CreateSubtitleRow("OFF", "OFF_INDEX");
-                    _subtitleListContainer.Add(offRow);
-                }
-
-                // --- POPULATE TRACKS ---
-                if (subtitleStreams != null)
-                {
-                    foreach (var stream in subtitleStreams)
-                    {
-                        var lang = !string.IsNullOrEmpty(stream.Language) ? stream.Language.ToUpper() : "UNKNOWN";
-                        var title = !string.IsNullOrEmpty(stream.DisplayTitle) ? stream.DisplayTitle : $"Sub {stream.Index}";
-                        var labelText = $"{lang} | {title}";
-                        if (stream.IsExternal) labelText += " (Ext)";
-                        
-                        var row = CreateSubtitleRow(labelText, stream.Index.ToString());
-                        _subtitleListContainer.Add(row);
-                    }
-                }
             }
 
+            RebuildSubtitleRows(subtitleStreams);
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("Subtitle.OverlayTopology", _currentMediaSource);
+
+            SyncSubtitleSelectionFromCurrentState();
             UpdateSubtitleVisuals();
             ScrollSubtitleSelectionIntoView();
+            int subtitleRowCount = _subtitleListContainer != null ? (int)_subtitleListContainer.ChildCount : 0;
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("Subtitle.OverlayShow", $"rows={subtitleRowCount},focus={_subtitleIndex}");
             _subtitleOverlay.Show();
             _subtitleOverlayVisible = true;
 
@@ -3370,6 +3434,123 @@ namespace JellyfinTizen.Screens
             return row;
         }
 
+        private string DescribeSubtitleStream(MediaStream stream)
+        {
+            if (stream == null)
+                return "none";
+
+            string kind = stream.IsExternal ? "ext" : "emb";
+            string lang = string.IsNullOrWhiteSpace(stream.Language) ? "-" : stream.Language.ToUpperInvariant();
+            return $"{stream.Index}:{kind}:{lang}";
+        }
+
+        private string GetNativeSubtitleState()
+        {
+            int count = -1;
+            int selected = -2;
+            int? expected = null;
+            try
+            {
+                if (_player != null)
+                    count = _player.SubtitleTrackInfo.GetCount();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (_player != null)
+                    selected = _player.SubtitleTrackInfo.Selected;
+            }
+            catch
+            {
+            }
+
+            expected = GetExpectedNativeSubtitleSlot();
+            string expectedLabel = expected.HasValue ? expected.Value.ToString(CultureInfo.InvariantCulture) : "-";
+            return $"native={selected}/{count},expected={expectedLabel}";
+        }
+
+        private int? GetExpectedNativeSubtitleSlot()
+        {
+            if (_currentMediaSource == null || !_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0)
+                return null;
+
+            var embedded = _currentMediaSource.MediaStreams?
+                .Where(s => s.Type == "Subtitle" && !s.IsExternal)
+                .OrderBy(s => s.Index)
+                .ToList();
+            if (embedded == null || embedded.Count == 0)
+                return null;
+
+            int index = embedded.FindIndex(s => s.Index == _initialSubtitleIndex.Value);
+            return index >= 0 ? index : null;
+        }
+
+        private void CaptureSubtitleDebugEvent(string stage, MediaStream stream = null, string details = null)
+        {
+            if (!DebugSwitches.EnablePlaybackDebugOverlay)
+                return;
+
+            string requested = _initialSubtitleIndex.HasValue
+                ? _initialSubtitleIndex.Value.ToString(CultureInfo.InvariantCulture)
+                : "OFF";
+            string state = $"req={requested},enabled={_subtitleEnabled},activeExt={_activeSubtitleWasExternal},parsed={_useParsedSubtitleRenderer},sidecar={(_playerSidecarSubtitleActive ? "yes" : "no")},{GetNativeSubtitleState()}";
+            if (!string.IsNullOrWhiteSpace(details))
+                state = $"{details} | {state}";
+
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent(stage, $"stream={DescribeSubtitleStream(stream)} | {state}");
+        }
+
+        private void SyncSubtitleSelectionFromCurrentState()
+        {
+            if (_subtitleListContainer == null || _subtitleListContainer.ChildCount == 0)
+            {
+                _subtitleIndex = 0;
+                return;
+            }
+
+            string selectedRowName = (!_subtitleEnabled || !_initialSubtitleIndex.HasValue)
+                ? "OFF_INDEX"
+                : _initialSubtitleIndex.Value.ToString(CultureInfo.InvariantCulture);
+
+            int selectedRow = -1;
+            int count = (int)_subtitleListContainer.ChildCount;
+            for (int i = 0; i < count; i++)
+            {
+                var row = _subtitleListContainer.GetChildAt((uint)i);
+                if (string.Equals(row?.Name, selectedRowName, StringComparison.Ordinal))
+                {
+                    selectedRow = i;
+                    break;
+                }
+            }
+
+            if (selectedRow < 0)
+            {
+                if (string.Equals(selectedRowName, "OFF_INDEX", StringComparison.Ordinal))
+                {
+                    selectedRow = 0;
+                }
+                else
+                {
+                    selectedRow = 0;
+                    for (int i = 0; i < count; i++)
+                    {
+                        var row = _subtitleListContainer.GetChildAt((uint)i);
+                        if (!string.Equals(row?.Name, "OFF_INDEX", StringComparison.Ordinal))
+                        {
+                            selectedRow = i;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            _subtitleIndex = Math.Clamp(selectedRow, 0, count - 1);
+        }
+
         private void UpdateSubtitleVisuals(bool setFocus = true)
         {
             if (_subtitleListContainer == null) return;
@@ -3389,7 +3570,10 @@ namespace JellyfinTizen.Screens
             if (!_subtitleOverlayVisible || _subtitleListContainer == null) return;
             int count = (int)_subtitleListContainer.ChildCount;
             if (count == 0) return;
+            int before = _subtitleIndex;
             _subtitleIndex = Math.Clamp(_subtitleIndex + delta, 0, count - 1);
+            if (_subtitleIndex != before)
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("Subtitle.Move", $"from={before},to={_subtitleIndex},delta={delta}");
             UpdateSubtitleVisuals(setFocus: false);
             ScrollSubtitleSelectionIntoView();
         }
@@ -3422,12 +3606,144 @@ namespace JellyfinTizen.Screens
             _subtitleListContainer.PositionY = -nextTop;
         }
 
+        private void RebuildSubtitleRows(List<MediaStream> subtitleStreams)
+        {
+            if (_subtitleListContainer == null)
+                return;
+
+            while (_subtitleListContainer.ChildCount > 0)
+            {
+                var child = _subtitleListContainer.GetChildAt(0);
+                if (child == null)
+                    break;
+
+                _subtitleListContainer.Remove(child);
+            }
+
+            if (!_burnIn)
+            {
+                // OFF option is only meaningful when subtitles are sidecar/native, not burn-in.
+                _subtitleListContainer.Add(CreateSubtitleRow("OFF", "OFF_INDEX"));
+            }
+
+            if (subtitleStreams == null)
+                return;
+
+            foreach (var stream in subtitleStreams)
+            {
+                var lang = !string.IsNullOrEmpty(stream.Language) ? stream.Language.ToUpper() : "UNKNOWN";
+                var title = !string.IsNullOrEmpty(stream.DisplayTitle) ? stream.DisplayTitle : $"Sub {stream.Index}";
+                var labelText = $"{lang} | {title}";
+                if (stream.IsExternal) labelText += " (Ext)";
+
+                _subtitleListContainer.Add(CreateSubtitleRow(labelText, stream.Index.ToString()));
+            }
+        }
+
+        private static int? GetEmbeddedSubtitleOrdinal(MediaSourceInfo mediaSource, int jellyfinStreamIndex)
+        {
+            var embedded = mediaSource?.MediaStreams?
+                .Where(s => s.Type == "Subtitle" && !s.IsExternal)
+                .OrderBy(s => s.Index)
+                .ToList();
+
+            if (embedded == null || embedded.Count == 0)
+                return null;
+
+            int ordinal = embedded.FindIndex(s => s.Index == jellyfinStreamIndex);
+            return ordinal >= 0 ? ordinal : null;
+        }
+
+        private void AlignRequestedSubtitleIndexForCurrentMediaSource(MediaSourceInfo mediaSource)
+        {
+            if (!_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0 || mediaSource == null)
+                return;
+
+            var subtitles = mediaSource.MediaStreams?
+                .Where(s => s.Type == "Subtitle")
+                .ToList();
+            if (subtitles == null || subtitles.Count == 0)
+                return;
+
+            bool indexExists = subtitles.Any(s => s.Index == _initialSubtitleIndex.Value);
+            if (indexExists)
+                return;
+
+            if (!_requestedEmbeddedSubtitleOrdinal.HasValue)
+                return;
+
+            var embedded = subtitles
+                .Where(s => !s.IsExternal)
+                .OrderBy(s => s.Index)
+                .ToList();
+            int requestedOrdinal = _requestedEmbeddedSubtitleOrdinal.Value;
+            if (requestedOrdinal < 0 || requestedOrdinal >= embedded.Count)
+                return;
+
+            int previousIndex = _initialSubtitleIndex.Value;
+            var resolvedStream = embedded[requestedOrdinal];
+            _initialSubtitleIndex = resolvedStream.Index;
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
+                "Subtitle.IndexRemap",
+                resolvedStream,
+                $"from={previousIndex},to={resolvedStream.Index},ord={requestedOrdinal},embeddedCount={embedded.Count}");
+        }
+
+        private void CaptureSubtitleTopology(string stage, MediaSourceInfo mediaSource)
+        {
+            if (!DebugSwitches.EnablePlaybackDebugOverlay)
+                return;
+
+            var subtitleStreams = mediaSource?.MediaStreams?
+                .Where(s => s.Type == "Subtitle")
+                .OrderBy(s => s.Index)
+                .ToList() ?? new List<MediaStream>();
+
+            string jellyfinList = subtitleStreams.Count == 0
+                ? "-"
+                : string.Join(
+                    ",",
+                    subtitleStreams.Select(s =>
+                    {
+                        string ext = s.IsExternal ? "ext" : "emb";
+                        string lang = string.IsNullOrWhiteSpace(s.Language) ? "-" : s.Language.ToUpperInvariant();
+                        return $"{s.Index}:{ext}:{lang}";
+                    }));
+
+            int nativeCount = -1;
+            int nativeSelected = -2;
+            var nativeLangs = new List<string>();
+            try
+            {
+                if (_player != null)
+                {
+                    nativeCount = _player.SubtitleTrackInfo.GetCount();
+                    nativeSelected = _player.SubtitleTrackInfo.Selected;
+                    for (int i = 0; i < nativeCount; i++)
+                    {
+                        nativeLangs.Add(i.ToString(CultureInfo.InvariantCulture));
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            string nativeList = nativeLangs.Count == 0 ? "-" : string.Join(",", nativeLangs);
+            string reqIndex = _initialSubtitleIndex.HasValue ? _initialSubtitleIndex.Value.ToString(CultureInfo.InvariantCulture) : "OFF";
+            string reqOrd = _requestedEmbeddedSubtitleOrdinal.HasValue ? _requestedEmbeddedSubtitleOrdinal.Value.ToString(CultureInfo.InvariantCulture) : "-";
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent(
+                stage,
+                $"jf=[{jellyfinList}],reqIdx={reqIndex},reqEmbOrd={reqOrd},native={nativeSelected}/{nativeCount},langs=[{nativeList}]");
+        }
+
         private async void SelectSubtitle()
         {
             if (_subtitleListContainer == null) return;
             if (_subtitleIndex < 0 || _subtitleIndex >= _subtitleListContainer.ChildCount) return;
             var selectedRow = _subtitleListContainer.GetChildAt((uint)_subtitleIndex);
             string selectedName = selectedRow.Name;
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("Subtitle.UISelect", $"row={_subtitleIndex},name={selectedName}");
             
             HideSubtitleOverlay();
 
@@ -3435,12 +3751,20 @@ namespace JellyfinTizen.Screens
             {
                 _subtitleEnabled = false;
                 _initialSubtitleIndex = null;
+                _requestedEmbeddedSubtitleOrdinal = null;
+                _forceNativeEmbeddedSelectionOnRestart = false;
+                _playerSidecarSubtitleActive = false;
+                _externalSubtitlePath = null;
+                _activeSubtitleWasExternal = false;
                 _useParsedSubtitleRenderer = false;
                 _subtitleCues.Clear();
                 _activeSubtitleCueIndex = -1;
                 StopSubtitleRenderTimer();
                 _subtitleHideTimer?.Stop();
                 try { _player?.ClearSubtitle(); } catch { }
+                TryDisableNativeSubtitleTrack();
+                SyncSubtitleSelectionFromCurrentState();
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.Off");
                 RunOnUiThread(() =>
                 {
                     _subtitleText?.Hide();
@@ -3463,8 +3787,18 @@ namespace JellyfinTizen.Screens
             var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             if (subStream == null) return;
 
+            _requestedEmbeddedSubtitleOrdinal = subStream.IsExternal
+                ? null
+                : GetEmbeddedSubtitleOrdinal(_currentMediaSource, jellyfinStreamIndex);
+            if (subStream.IsExternal)
+                _forceNativeEmbeddedSelectionOnRestart = false;
+
+            bool switchingFromExternalRenderer = _activeSubtitleWasExternal || _playerSidecarSubtitleActive;
+            int? previousSubtitleIndex = _initialSubtitleIndex;
             _initialSubtitleIndex = jellyfinStreamIndex;
-            bool sidecarSet = false;
+            SyncSubtitleSelectionFromCurrentState();
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.Select", subStream, $"prev={previousSubtitleIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},switchFromExt={switchingFromExternalRenderer}");
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("Subtitle.SelectTopology", _currentMediaSource);
             if (_burnIn)
             {
                 long currentPos = GetPlayPositionMs();
@@ -3477,26 +3811,67 @@ namespace JellyfinTizen.Screens
 
             if (!_burnIn)
             {
-                bool useNativeEmbedded = _playMethod == "DirectPlay" && !subStream.IsExternal;
-                if (useNativeEmbedded)
+                bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
+                if (!subStream.IsExternal)
                 {
-                    if (TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
+                    if (isDirectPlay)
                     {
+                        if (switchingFromExternalRenderer)
+                        {
+                            // Best effort reset: clear any sidecar/parsed renderer state before native selection.
+                            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ExternalToEmbeddedReset", subStream, "action=nativeSwitch");
+                            _externalSubtitlePath = null;
+                            _playerSidecarSubtitleActive = false;
+                            _useParsedSubtitleRenderer = false;
+                            _subtitleCues.Clear();
+                            _activeSubtitleCueIndex = -1;
+                            StopSubtitleRenderTimer();
+                            _subtitleHideTimer?.Stop();
+                            try { _player?.ClearSubtitle(); } catch { }
+                            RunOnUiThread(() =>
+                            {
+                                _subtitleText?.Hide();
+                            });
+                        }
+
+                        if (!TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
+                        {
+                            await Task.Delay(120);
+                            if (!TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
+                            {
+                                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSwitchFailRestart", subStream);
+                                _forceNativeEmbeddedSelectionOnRestart = true;
+                                long currentPos = GetPlayPositionMs();
+                                _suppressStopReportOnce = true;
+                                StopPlayback();
+                                _startPositionMs = (int)currentPos;
+                                StartPlayback();
+                                return;
+                            }
+                        }
                         ApplySubtitleOffset();
                         return;
                     }
-                    sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream);
-                }
-                else
-                {
-                    sidecarSet = await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream);
-                }
 
-                if (sidecarSet)
-                {
-                    ApplySubtitleOffset();
+                    // For HLS/transcode, treat embedded track as downloadable subtitle and apply without restart.
+                    if (await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream))
+                    {
+                        ApplySubtitleOffset();
+                        if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.TranscodeEmbeddedSwitchSuccess", subStream);
+                        return;
+                    }
+
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.TranscodeEmbeddedSwitchFail", subStream);
                     return;
                 }
+
+                if (await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream))
+                {
+                    ApplySubtitleOffset();
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ExternalSwitchSuccess", subStream);
+                    return;
+                }
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ExternalSwitchFail", subStream);
             }
         }
 
@@ -4102,6 +4477,11 @@ namespace JellyfinTizen.Screens
             ClearReportingContext();
             _currentMediaSource = null;
             _playSessionId = null;
+            _externalSubtitlePath = null;
+            _activeSubtitleWasExternal = false;
+            _forceNativeEmbeddedSelectionOnRestart = false;
+            _playerSidecarSubtitleActive = false;
+            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StopPlayback");
             
             try
             {
@@ -4160,8 +4540,6 @@ namespace JellyfinTizen.Screens
                     break;
                 case AppKey.MediaStop: NavigationService.NavigateBack(); break;
                 case AppKey.MediaNext: PlayNextEpisode(); break;
-                case AppKey.MediaPrevious:
-                    break;
                 case AppKey.MediaRewind:
                     if (_osdVisible) Scrub(-30);
                     else HandleHiddenDirectionalSeek(-1);
@@ -4226,6 +4604,8 @@ namespace JellyfinTizen.Screens
                     else HandleHiddenDirectionalSeek(1);
                     break;
                 case AppKey.Up:
+                    if (!_osdVisible && TryScrollStreamDebugOverlay(-1))
+                        break;
                     if (_audioOverlayVisible)
                     {
                         MoveAudioSelection(-1);
@@ -4247,6 +4627,8 @@ namespace JellyfinTizen.Screens
                     else ShowOSD();
                     break;
                 case AppKey.Down:
+                    if (!_osdVisible && TryScrollStreamDebugOverlay(1))
+                        break;
                     if (_audioOverlayVisible)
                     {
                         MoveAudioSelection(1);
