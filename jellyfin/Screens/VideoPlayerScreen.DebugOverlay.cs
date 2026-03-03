@@ -244,7 +244,9 @@ namespace JellyfinTizen.Screens
             var reasons = new List<string>();
 
             if (_overrideAudioIndex.HasValue)
-                reasons.Add($"Audio stream override requested ({_overrideAudioIndex.Value})");
+                reasons.Add(_audioSelectionUserOverride
+                    ? $"Audio stream selected by user ({_overrideAudioIndex.Value})"
+                    : $"Startup/default audio stream selected ({_overrideAudioIndex.Value})");
 
             if (_burnIn && _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0)
                 reasons.Add("Subtitle burn-in requested");

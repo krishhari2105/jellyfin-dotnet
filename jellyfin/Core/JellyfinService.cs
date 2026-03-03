@@ -15,7 +15,7 @@ namespace JellyfinTizen.Core
     {
         private const string DefaultDeviceId = "tizen-tv";
         private const string ClientName = "Jellyfin for Tizen";
-        private const string ClientVersion = "1.0";
+        private const string ClientVersion = "2.0";
         private const string DeviceName = "Samsung TV";
         private const string AuthenticateByNamePath = "/Users/authenticatebyname";
         private const string AuthenticateAcceptHeader =

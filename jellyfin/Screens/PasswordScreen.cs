@@ -32,6 +32,8 @@ namespace JellyfinTizen.Screens
             hiddenInput.Add(HiddenInputProperty.ShowLastCharacterDuration, new PropertyValue(500));
             hiddenInput.Add(HiddenInputProperty.SubstituteCharacter, new PropertyValue(0x2A));
             _passwordInput.HiddenInputSettings = hiddenInput;
+            ConfigurePasswordImeLayout();
+            _passwordInput.FocusGained += (_, _) => ConfigurePasswordImeContext();
 
             _loginButton = MonochromeAuthFactory.CreateButton("Login", out _loginText, primary: true);
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
@@ -47,8 +49,44 @@ namespace JellyfinTizen.Screens
         {
             _passwordInput.Text = string.Empty;
             FocusManager.Instance.SetCurrentFocusView(_passwordInput);
+            ConfigurePasswordImeContext();
             _loginFocused = false;
             MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
+        }
+
+        private void ConfigurePasswordImeLayout()
+        {
+            try
+            {
+                var inputMethod = new InputMethod
+                {
+                    PanelLayout = InputMethod.PanelLayoutType.Password,
+                    PasswordVariation = InputMethod.PasswordLayoutType.WithNumberOnly,
+                    ActionButton = InputMethod.ActionButtonTitleType.Login,
+                    AutoCapital = InputMethod.AutoCapitalType.None
+                };
+                _passwordInput.InputMethodSettings = inputMethod.OutputMap;
+            }
+            catch
+            {
+            }
+        }
+
+        private void ConfigurePasswordImeContext()
+        {
+            try
+            {
+                var ime = _passwordInput.GetInputMethodContext();
+                if (ime == null)
+                    return;
+
+                ime.SetInputPanelLanguage(InputMethodContext.InputPanelLanguage.Automatic);
+                ime.TextPrediction = false;
+                ime.SetReturnKeyState(true);
+            }
+            catch
+            {
+            }
         }
 
         public void HandleKey(AppKey key)
