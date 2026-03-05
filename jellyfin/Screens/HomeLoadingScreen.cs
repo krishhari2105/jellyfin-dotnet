@@ -81,7 +81,7 @@ namespace JellyfinTizen.Screens
                 NavigateOnUiThread(() =>
                 {
                     NavigationService.Navigate(
-                        new ServerSetupScreen(),
+                        CreateServerEntryScreen(),
                         addToStack: false
                     );
                 });
@@ -124,7 +124,7 @@ namespace JellyfinTizen.Screens
                     NavigateOnUiThread(() =>
                     {
                         NavigationService.Navigate(
-                            new ServerSetupScreen(),
+                            CreateServerEntryScreen(),
                             addToStack: false
                         );
                     });
@@ -159,7 +159,7 @@ namespace JellyfinTizen.Screens
                     NavigateOnUiThread(() =>
                     {
                         NavigationService.Navigate(
-                            new ServerSetupScreen(),
+                            CreateServerEntryScreen(),
                             addToStack: false
                         );
                     });
@@ -404,6 +404,13 @@ namespace JellyfinTizen.Screens
             return await task;
         }
 
+        private static ScreenBase CreateServerEntryScreen()
+        {
+            return AppState.HasStoredServers()
+                ? new ServerPickerScreen()
+                : new ServerSetupScreen();
+        }
+
         private static bool IsSessionExpired(Exception ex)
         {
             if (ex is HttpRequestException httpEx)
@@ -452,7 +459,7 @@ namespace JellyfinTizen.Screens
             NavigateOnUiThread(() =>
             {
                 NavigationService.Navigate(
-                    new ServerSetupScreen(),
+                    CreateServerEntryScreen(),
                     addToStack: false
                 );
             });

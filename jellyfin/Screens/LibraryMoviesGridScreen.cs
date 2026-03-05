@@ -794,10 +794,9 @@ namespace JellyfinTizen.Screens
         private void SwitchServer()
         {
             HideSettingsPanel();
-            AppState.ClearSession(clearServer: true);
             NavigationService.NavigateWithLoading(
-                () => new ServerSetupScreen(),
-                "Loading server setup...",
+                () => new ServerPickerScreen(),
+                "Loading servers...",
                 addToStack: false
             );
         }

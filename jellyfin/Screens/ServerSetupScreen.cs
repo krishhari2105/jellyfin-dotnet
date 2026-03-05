@@ -4,11 +4,18 @@ using JellyfinTizen.Core;
 using JellyfinTizen.UI;
 using System.Threading.Tasks;
 using System;
+using System.Text.Json;
 
 namespace JellyfinTizen.Screens
 {
     public class ServerSetupScreen : ScreenBase, IKeyHandler
     {
+        private sealed class ServerProbeResult
+        {
+            public string Url { get; set; }
+            public string Name { get; set; }
+        }
+
         private TextField _serverInput;
         private View _continueButton;
         private TextLabel _continueText;
@@ -96,17 +103,25 @@ namespace JellyfinTizen.Screens
                 return;
 
             // Auto prepend http or https if not already present
-            string validatedUrl = await ValidateAndPrependProtocol(url);
-            if (string.IsNullOrEmpty(validatedUrl))
+            var probeResult = await ValidateAndPrependProtocol(url);
+            if (probeResult == null || string.IsNullOrWhiteSpace(probeResult.Url))
             {
                 ShowErrorMessage("Server not found. Please try again.");
                 return;
             }
 
-            // Reset stale runtime/session auth before starting a new server login flow.
-            AppState.ClearSession(clearServer: false);
-            AppState.SaveServer(validatedUrl);
-            AppState.Jellyfin.Connect(validatedUrl);
+            if (!AppState.CanStoreServer(probeResult.Url))
+            {
+                ShowErrorMessage($"You can save up to {AppState.MaxStoredServers} servers.");
+                return;
+            }
+
+            if (!AppState.TrySaveServer(probeResult.Url, probeResult.Name))
+            {
+                ShowErrorMessage("Unable to save server. Please try again.");
+                return;
+            }
+
             RunOnUiThread(() =>
             {
                 NavigationService.Navigate(new LoadingScreen("Fetching users..."));
@@ -133,7 +148,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async Task<string> ValidateAndPrependProtocol(string url)
+        private async Task<ServerProbeResult> ValidateAndPrependProtocol(string url)
         {
             // If already has http or https, use as is
             if (url.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase) ||
@@ -145,7 +160,7 @@ namespace JellyfinTizen.Screens
             // Prefer https first so we do not persist an http endpoint that only works via redirect.
             string httpsUrl = "https://" + url;
             var resolvedHttps = await ResolveServerBaseUrl(httpsUrl);
-            if (!string.IsNullOrEmpty(resolvedHttps))
+            if (resolvedHttps != null && !string.IsNullOrWhiteSpace(resolvedHttps.Url))
             {
                 return resolvedHttps;
             }
@@ -153,7 +168,7 @@ namespace JellyfinTizen.Screens
             // Fallback to http only when https is unavailable.
             string httpUrl = "http://" + url;
             var resolvedHttp = await ResolveServerBaseUrl(httpUrl);
-            if (!string.IsNullOrEmpty(resolvedHttp))
+            if (resolvedHttp != null && !string.IsNullOrWhiteSpace(resolvedHttp.Url))
             {
                 return resolvedHttp;
             }
@@ -161,7 +176,7 @@ namespace JellyfinTizen.Screens
             return null;
         }
 
-        private async Task<string> ResolveServerBaseUrl(string url)
+        private async Task<ServerProbeResult> ResolveServerBaseUrl(string url)
         {
             try
             {
@@ -172,17 +187,42 @@ namespace JellyfinTizen.Screens
                 if (!response.IsSuccessStatusCode)
                     return null;
 
+                var payload = await response.Content.ReadAsStringAsync();
+                string serverName = null;
+                if (!string.IsNullOrWhiteSpace(payload))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(payload);
+                        if (doc.RootElement.TryGetProperty("ServerName", out var nameProp))
+                            serverName = nameProp.GetString();
+                    }
+                    catch
+                    {
+                    }
+                }
+
                 // Capture the final URL after redirects (http->https, reverse proxy path rewrites, etc).
                 var finalUri = response.RequestMessage?.RequestUri;
                 if (finalUri == null)
-                    return normalizedInput;
+                {
+                    return new ServerProbeResult
+                    {
+                        Url = normalizedInput,
+                        Name = serverName
+                    };
+                }
 
                 var absolute = finalUri.GetLeftPart(System.UriPartial.Authority) + finalUri.AbsolutePath;
                 const string infoPublicSuffix = "/System/Info/Public";
                 if (absolute.EndsWith(infoPublicSuffix, System.StringComparison.OrdinalIgnoreCase))
                     absolute = absolute.Substring(0, absolute.Length - infoPublicSuffix.Length);
 
-                return absolute.TrimEnd('/');
+                return new ServerProbeResult
+                {
+                    Url = absolute.TrimEnd('/'),
+                    Name = serverName
+                };
             }
             catch
             {

@@ -66,7 +66,7 @@ namespace JellyfinTizen.Screens
                     Tizen.Applications.CoreApplication.Post(() =>
                     {
                         NavigationService.Navigate(
-                            new ServerSetupScreen(),
+                            CreateServerEntryScreen(),
                             addToStack: false
                         );
                     });
@@ -74,7 +74,7 @@ namespace JellyfinTizen.Screens
                 catch
                 {
                     NavigationService.Navigate(
-                        new ServerSetupScreen(),
+                        CreateServerEntryScreen(),
                         addToStack: false
                     );
                 }
@@ -127,7 +127,7 @@ namespace JellyfinTizen.Screens
                         _navigated = true;
                         _fallbackTimer?.Dispose();
                         NavigationService.Navigate(
-                            new ServerSetupScreen(),
+                            CreateServerEntryScreen(),
                             addToStack: false
                         );
                     }
@@ -140,7 +140,7 @@ namespace JellyfinTizen.Screens
                 _navigated = true;
                 _fallbackTimer?.Dispose();
                 NavigationService.Navigate(
-                    new ServerSetupScreen(),
+                    CreateServerEntryScreen(),
                     addToStack: false
                 );
             }
@@ -155,55 +155,46 @@ namespace JellyfinTizen.Screens
             return await task;
         }
 
-        private static string GetPreference(string key)
+        private static ScreenBase CreateServerEntryScreen()
         {
-            try
-            {
-                if (!Tizen.Applications.Preference.Contains(key))
-                    return null;
-                return Tizen.Applications.Preference.Get<string>(key);
-            }
-            catch
-            {
-                return null;
-            }
+            return AppState.HasStoredServers()
+                ? new ServerPickerScreen()
+                : new ServerSetupScreen();
         }
 
         private async Task<bool> TryResumeSavedTokenSessionAsync()
         {
-            var serverUrl = GetPreference("jf_server_url");
-            var accessToken = GetPreference("jf_access_token");
-
-            if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(accessToken))
-                return false;
-
             try
             {
-                AppState.Jellyfin.Connect(serverUrl);
-                AppState.Jellyfin.SetAuthToken(accessToken);
-
-                var userId = GetPreference("jf_user_id");
-                var username = GetPreference("jf_username");
-
-                if (string.IsNullOrWhiteSpace(userId))
-                {
-                    var me = await WithTimeout(AppState.Jellyfin.GetCurrentUserAsync(), 10000);
-                    userId = me.userId;
-                    if (string.IsNullOrWhiteSpace(username))
-                        username = me.username;
-                }
-
-                if (string.IsNullOrWhiteSpace(userId))
+                if (!AppState.TryRestoreFullSession())
                     return false;
 
-                AppState.SaveSession(serverUrl, accessToken, userId, username ?? string.Empty);
-                AppState.Jellyfin.SetUserId(userId);
+                if (string.IsNullOrWhiteSpace(AppState.UserId) ||
+                    string.IsNullOrWhiteSpace(AppState.Username))
+                {
+                    var me = await WithTimeout(AppState.Jellyfin.GetCurrentUserAsync(), 10000);
+                    var userId = string.IsNullOrWhiteSpace(AppState.UserId)
+                        ? me.userId
+                        : AppState.UserId;
+                    var username = AppState.Username;
+                    if (string.IsNullOrWhiteSpace(username))
+                        username = me.username;
+
+                    if (string.IsNullOrWhiteSpace(userId))
+                        return false;
+
+                    AppState.SaveSession(
+                        AppState.ServerUrl,
+                        AppState.AccessToken,
+                        userId,
+                        username ?? string.Empty
+                    );
+                    AppState.Jellyfin.SetUserId(userId);
+                }
                 return true;
             }
             catch (Exception ex)
             {
-                AppState.AccessToken = null;
-                AppState.Jellyfin.ClearAuthToken();
                 if (IsUnauthorized(ex))
                     AppState.ClearSession(clearServer: false);
 

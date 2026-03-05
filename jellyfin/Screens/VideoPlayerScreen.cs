@@ -98,6 +98,11 @@ namespace JellyfinTizen.Screens
         private string _playSessionId;
         private int? _initialSubtitleIndex;
         private int? _requestedEmbeddedSubtitleOrdinal;
+        private int? _requestedSubtitleOrdinalAll;
+        private string _requestedSubtitleLanguage;
+        private string _requestedSubtitleDisplayTitle;
+        private string _requestedSubtitleCodec;
+        private bool? _requestedSubtitleWasExternal;
         private bool _forceNativeEmbeddedSelectionOnRestart;
         private bool _playerSidecarSubtitleActive;
         private bool _burnIn;
@@ -325,6 +330,15 @@ namespace JellyfinTizen.Screens
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Request", $"sub={requestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={requestedMediaSourceId ?? "-"}");
 
                 _subtitleEnabled = hasSelectedSubtitle;
+                if (!hasSelectedSubtitle)
+                {
+                    _requestedEmbeddedSubtitleOrdinal = null;
+                    _requestedSubtitleOrdinalAll = null;
+                    _requestedSubtitleLanguage = null;
+                    _requestedSubtitleDisplayTitle = null;
+                    _requestedSubtitleCodec = null;
+                    _requestedSubtitleWasExternal = null;
+                }
                 _subtitleOffsetBurnInWarningShown = false;
                 _useParsedSubtitleRenderer = false;
                 ClearParsedSubtitleCues();
@@ -346,6 +360,8 @@ namespace JellyfinTizen.Screens
                 _isAnamorphicVideo = false;
                 SetAspectToggleVisibility(visible: false);
                 bool burnInActive = _burnIn && hasSelectedSubtitle;
+                int? pendingStartupNativeEmbeddedSubtitleIndex = null;
+                MediaStream pendingStartupNativeEmbeddedSubtitleStream = null;
 
                 var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
                     playbackMovie.Id,
@@ -441,7 +457,19 @@ namespace JellyfinTizen.Screens
                 bool supportsTranscoding = mediaSource.SupportsTranscoding;
                 bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
                 bool audioOverrideNeedsProfileTranscode = RequiresProfileBasedTranscodeForAudioOverride(mediaSource);
-                bool forceTranscode = burnInActive || audioOverrideNeedsProfileTranscode;
+                var startupSelectedSubtitleStream =
+                    hasSelectedSubtitle && _initialSubtitleIndex.HasValue
+                        ? mediaSource.MediaStreams?.FirstOrDefault(s =>
+                            string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                            s.Index == _initialSubtitleIndex.Value)
+                        : null;
+                bool startupSelectedSubtitleRequiresServerTranscode =
+                    startupSelectedSubtitleStream != null &&
+                    RequiresServerTranscodeSubtitleSwitch(startupSelectedSubtitleStream);
+                bool forceTranscode =
+                    burnInActive ||
+                    audioOverrideNeedsProfileTranscode ||
+                    startupSelectedSubtitleRequiresServerTranscode;
 
                 if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
                 {
@@ -581,18 +609,34 @@ namespace JellyfinTizen.Screens
                             .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (selectedSubStream != null)
                         {
+                            _requestedSubtitleCodec = selectedSubStream.Codec;
+                            _requestedSubtitleLanguage = selectedSubStream.Language;
+                            _requestedSubtitleDisplayTitle = selectedSubStream.DisplayTitle;
+                            _requestedSubtitleWasExternal = selectedSubStream.IsExternal;
+                            _requestedEmbeddedSubtitleOrdinal = selectedSubStream.IsExternal
+                                ? null
+                                : GetEmbeddedSubtitleOrdinal(mediaSource, selectedSubStream.Index);
+                            var orderedSubtitleStreams = mediaSource.MediaStreams?
+                                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                                .OrderBy(s => s.Index)
+                                .ToList();
+                            _requestedSubtitleOrdinalAll = orderedSubtitleStreams?.FindIndex(s => s.Index == selectedSubStream.Index);
+                            if (_requestedSubtitleOrdinalAll.HasValue && _requestedSubtitleOrdinalAll.Value < 0)
+                                _requestedSubtitleOrdinalAll = null;
+
                             _activeSubtitleWasExternal = selectedSubStream.IsExternal;
                             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.ApplySubtitle", selectedSubStream, "phase=prepared");
                             bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
-                            bool useNativeEmbedded = isDirectPlay && !selectedSubStream.IsExternal;
+                            bool useNativeEmbedded =
+                                isDirectPlay &&
+                                !selectedSubStream.IsExternal &&
+                                !RequiresServerTranscodeSubtitleSwitch(selectedSubStream);
                             if (useNativeEmbedded)
                             {
-                                if (!TrySelectNativeEmbeddedSubtitle(_initialSubtitleIndex.Value))
-                                {
-                                    await Task.Delay(120);
-                                    bool retryResult = TrySelectNativeEmbeddedSubtitle(_initialSubtitleIndex.Value);
-                                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.NativeRetry", selectedSubStream, $"result={retryResult}");
-                                }
+                                pendingStartupNativeEmbeddedSubtitleIndex = _initialSubtitleIndex.Value;
+                                pendingStartupNativeEmbeddedSubtitleStream = selectedSubStream;
+                                if (DebugSwitches.EnablePlaybackDebugOverlay)
+                                    CaptureSubtitleDebugEvent("StartPlayback.NativeDeferred", selectedSubStream, "phase=prepared");
                             }
                             else
                             {
@@ -617,6 +661,37 @@ namespace JellyfinTizen.Screens
 
                 ApplyDisplayModeForCurrentVideo();
                 ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
+                if (pendingStartupNativeEmbeddedSubtitleIndex.HasValue)
+                {
+                    var switchableEmbedded = GetNativeSwitchableEmbeddedSubtitleStreams(mediaSource);
+                    int targetSwitchableOrdinal = switchableEmbedded.FindIndex(s => s.Index == pendingStartupNativeEmbeddedSubtitleIndex.Value);
+                    bool hasUnsupportedEmbedded = HasUnsupportedEmbeddedSubtitleStreams(mediaSource);
+                    bool primeEnabled = hasUnsupportedEmbedded && targetSwitchableOrdinal > 0 && switchableEmbedded.Count > 0;
+                    var pendingStream = mediaSource.MediaStreams?
+                        .FirstOrDefault(s =>
+                            string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                            s.Index == pendingStartupNativeEmbeddedSubtitleIndex.Value);
+
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                    {
+                        CaptureStreamDebugEvent(
+                            "StartPlayback.NativePrimeGate",
+                            $"target={pendingStartupNativeEmbeddedSubtitleIndex.Value},targetOrd={targetSwitchableOrdinal},unsupportedEmbedded={(hasUnsupportedEmbedded ? "yes" : "no")},prime={(primeEnabled ? "yes" : "no")},phase=postStartCallsite");
+                        CaptureSubtitleDebugEvent(
+                            "StartPlayback.NativePrimeGate",
+                            pendingStream,
+                            $"target={pendingStartupNativeEmbeddedSubtitleIndex.Value},targetOrd={targetSwitchableOrdinal},unsupportedEmbedded={(hasUnsupportedEmbedded ? "yes" : "no")},prime={(primeEnabled ? "yes" : "no")},phase=postStartCallsite");
+                    }
+
+                    bool startupNativeResult = await TryApplyStartupNativeEmbeddedSubtitleAsync(
+                        pendingStartupNativeEmbeddedSubtitleIndex.Value,
+                        playbackToken);
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent(
+                            "StartPlayback.NativePostStart",
+                            pendingStartupNativeEmbeddedSubtitleStream,
+                            $"result={startupNativeResult},attempts=postStart,prime={(primeEnabled ? "yes" : "no")},unsupportedEmbedded={(hasUnsupportedEmbedded ? "yes" : "no")},targetOrd={targetSwitchableOrdinal}");
+                }
                 ApplySubtitleOffset();
                 _ = RefreshAnamorphicStateAsync(playbackMovie.Id, playbackToken);
 
@@ -1104,7 +1179,7 @@ namespace JellyfinTizen.Screens
 
         private static bool RequiresServerTranscodeSubtitleSwitch(MediaStream stream)
         {
-            if (stream == null || stream.IsExternal)
+            if (stream == null)
                 return false;
 
             // If subtitle codec is not advertised as runtime-switchable by our device profile,
@@ -1140,13 +1215,10 @@ namespace JellyfinTizen.Screens
                     return false;
                 }
 
-                var embeddedSubs = _currentMediaSource.MediaStreams?
-                    .Where(s => s.Type == "Subtitle" && !s.IsExternal)
-                    .OrderBy(s => s.Index)
-                    .ToList();
+                var embeddedSubs = GetNativeSwitchableEmbeddedSubtitleStreams(_currentMediaSource);
                 if (embeddedSubs == null || embeddedSubs.Count == 0)
                 {
-                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=noEmbeddedStreamsInMetadata");
+                    if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=noNativeSwitchableEmbeddedStreamsInMetadata");
                     return false;
                 }
 
@@ -1185,6 +1257,54 @@ namespace JellyfinTizen.Screens
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSelectFail", details: "reason=exception");
                 return false;
             }
+        }
+
+        private async Task<bool> TryApplyStartupNativeEmbeddedSubtitleAsync(int jellyfinStreamIndex, int playbackToken)
+        {
+            var switchableEmbedded = GetNativeSwitchableEmbeddedSubtitleStreams(_currentMediaSource);
+            int targetSwitchableOrdinal = switchableEmbedded.FindIndex(s => s.Index == jellyfinStreamIndex);
+            bool hasUnsupportedEmbeddedSubtitles = HasUnsupportedEmbeddedSubtitleStreams(_currentMediaSource);
+            int? primeFirstEmbeddedIndex =
+                hasUnsupportedEmbeddedSubtitles && targetSwitchableOrdinal > 0 && switchableEmbedded.Count > 0
+                    ? switchableEmbedded[0].Index
+                    : null;
+
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+            {
+                CaptureStreamDebugEvent(
+                    "StartPlayback.NativePrimeGate",
+                    $"target={jellyfinStreamIndex},targetOrd={targetSwitchableOrdinal},unsupportedEmbedded={(hasUnsupportedEmbeddedSubtitles ? "yes" : "no")},prime={(primeFirstEmbeddedIndex.HasValue ? "yes" : "no")}");
+            }
+
+            const int maxAttempts = 9;
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (playbackToken != _playbackToken || _player == null)
+                    return false;
+
+                if (attempt > 0)
+                    await Task.Delay(130 + (attempt * 45));
+
+                if (playbackToken != _playbackToken || _player == null)
+                    return false;
+
+                if (primeFirstEmbeddedIndex.HasValue)
+                {
+                    TrySelectNativeEmbeddedSubtitle(primeFirstEmbeddedIndex.Value);
+                    await Task.Delay(95);
+
+                    if (playbackToken != _playbackToken || _player == null)
+                        return false;
+                }
+
+                if (TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
+                    return true;
+
+                if (DebugSwitches.EnablePlaybackDebugOverlay)
+                    CaptureStreamDebugEvent("StartPlayback.NativePostStartRetry", $"attempt={attempt + 1},target={jellyfinStreamIndex},prime={(primeFirstEmbeddedIndex.HasValue ? "yes" : "no")}");
+            }
+
+            return false;
         }
 
         private bool TryLoadAssSubtitleCues(string path)
@@ -3975,10 +4095,7 @@ namespace JellyfinTizen.Screens
             if (_currentMediaSource == null || !_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0)
                 return null;
 
-            var embedded = _currentMediaSource.MediaStreams?
-                .Where(s => s.Type == "Subtitle" && !s.IsExternal)
-                .OrderBy(s => s.Index)
-                .ToList();
+            var embedded = GetNativeSwitchableEmbeddedSubtitleStreams(_currentMediaSource);
             if (embedded == null || embedded.Count == 0)
                 return null;
 
@@ -4152,6 +4269,89 @@ namespace JellyfinTizen.Screens
             return ordinal >= 0 ? ordinal : null;
         }
 
+        private static List<MediaStream> GetNativeSwitchableEmbeddedSubtitleStreams(MediaSourceInfo mediaSource)
+        {
+            return mediaSource?.MediaStreams?
+                .Where(s =>
+                    string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                    !s.IsExternal &&
+                    IsSubtitleCodecRuntimeSwitchSupported(s.Codec))
+                .OrderBy(s => s.Index)
+                .ToList() ?? new List<MediaStream>();
+        }
+
+        private static bool HasUnsupportedEmbeddedSubtitleStreams(MediaSourceInfo mediaSource)
+        {
+            var embeddedSubtitles = mediaSource?.MediaStreams?
+                .Where(s =>
+                    string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                    !s.IsExternal)
+                .ToList();
+
+            if (embeddedSubtitles == null || embeddedSubtitles.Count == 0)
+                return false;
+
+            return embeddedSubtitles.Any(s => !IsSubtitleCodecRuntimeSwitchSupported(s.Codec));
+        }
+
+        private static string NormalizeSubtitleMatchToken(string value)
+        {
+            return string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : value.Trim().ToLowerInvariant();
+        }
+
+        private bool TryResolveRequestedSubtitleByMetadata(List<MediaStream> subtitles, out MediaStream resolvedStream)
+        {
+            resolvedStream = null;
+            if (subtitles == null || subtitles.Count == 0)
+                return false;
+
+            string requestedCodec = NormalizeSubtitleMatchToken(_requestedSubtitleCodec);
+            string requestedLanguage = NormalizeSubtitleMatchToken(_requestedSubtitleLanguage);
+            string requestedTitle = NormalizeSubtitleMatchToken(_requestedSubtitleDisplayTitle);
+            bool hasMetadataHint =
+                !string.IsNullOrWhiteSpace(requestedCodec) ||
+                !string.IsNullOrWhiteSpace(requestedLanguage) ||
+                !string.IsNullOrWhiteSpace(requestedTitle) ||
+                _requestedSubtitleWasExternal.HasValue;
+            if (!hasMetadataHint)
+                return false;
+
+            int bestScore = int.MinValue;
+            MediaStream bestStream = null;
+            foreach (var stream in subtitles)
+            {
+                if (stream == null)
+                    continue;
+
+                int score = 0;
+                if (_requestedSubtitleWasExternal.HasValue && stream.IsExternal == _requestedSubtitleWasExternal.Value)
+                    score += 10;
+                if (!string.IsNullOrWhiteSpace(requestedCodec) &&
+                    string.Equals(NormalizeSubtitleMatchToken(stream.Codec), requestedCodec, StringComparison.Ordinal))
+                    score += 8;
+                if (!string.IsNullOrWhiteSpace(requestedLanguage) &&
+                    string.Equals(NormalizeSubtitleMatchToken(stream.Language), requestedLanguage, StringComparison.Ordinal))
+                    score += 6;
+                if (!string.IsNullOrWhiteSpace(requestedTitle) &&
+                    string.Equals(NormalizeSubtitleMatchToken(stream.DisplayTitle), requestedTitle, StringComparison.Ordinal))
+                    score += 12;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestStream = stream;
+                }
+            }
+
+            if (bestStream == null || bestScore <= 0)
+                return false;
+
+            resolvedStream = bestStream;
+            return true;
+        }
+
         private void AlignRequestedSubtitleIndexForCurrentMediaSource(MediaSourceInfo mediaSource)
         {
             if (!_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0 || mediaSource == null)
@@ -4159,6 +4359,7 @@ namespace JellyfinTizen.Screens
 
             var subtitles = mediaSource.MediaStreams?
                 .Where(s => s.Type == "Subtitle")
+                .OrderBy(s => s.Index)
                 .ToList();
             if (subtitles == null || subtitles.Count == 0)
                 return;
@@ -4167,24 +4368,57 @@ namespace JellyfinTizen.Screens
             if (indexExists)
                 return;
 
-            if (!_requestedEmbeddedSubtitleOrdinal.HasValue)
-                return;
-
-            var embedded = subtitles
-                .Where(s => !s.IsExternal)
-                .OrderBy(s => s.Index)
-                .ToList();
-            int requestedOrdinal = _requestedEmbeddedSubtitleOrdinal.Value;
-            if (requestedOrdinal < 0 || requestedOrdinal >= embedded.Count)
-                return;
-
             int previousIndex = _initialSubtitleIndex.Value;
-            var resolvedStream = embedded[requestedOrdinal];
+            MediaStream resolvedStream = null;
+            string remapReason = null;
+
+            if (TryResolveRequestedSubtitleByMetadata(subtitles, out var metadataMatched))
+            {
+                resolvedStream = metadataMatched;
+                remapReason = "metadata";
+            }
+            if (resolvedStream == null && _requestedEmbeddedSubtitleOrdinal.HasValue)
+            {
+                var embedded = subtitles
+                    .Where(s => !s.IsExternal)
+                    .OrderBy(s => s.Index)
+                    .ToList();
+                int requestedEmbeddedOrdinal = _requestedEmbeddedSubtitleOrdinal.Value;
+                if (requestedEmbeddedOrdinal >= 0 && requestedEmbeddedOrdinal < embedded.Count)
+                {
+                    resolvedStream = embedded[requestedEmbeddedOrdinal];
+                    remapReason = $"embeddedOrd={requestedEmbeddedOrdinal}";
+                }
+            }
+            if (resolvedStream == null && _requestedSubtitleOrdinalAll.HasValue)
+            {
+                int requestedAllOrdinal = _requestedSubtitleOrdinalAll.Value;
+                if (requestedAllOrdinal >= 0 && requestedAllOrdinal < subtitles.Count)
+                {
+                    resolvedStream = subtitles[requestedAllOrdinal];
+                    remapReason = $"allOrd={requestedAllOrdinal}";
+                }
+            }
+
+            if (resolvedStream == null)
+                return;
+
             _initialSubtitleIndex = resolvedStream.Index;
+            _requestedSubtitleCodec = resolvedStream.Codec;
+            _requestedSubtitleLanguage = resolvedStream.Language;
+            _requestedSubtitleDisplayTitle = resolvedStream.DisplayTitle;
+            _requestedSubtitleWasExternal = resolvedStream.IsExternal;
+            _requestedEmbeddedSubtitleOrdinal = resolvedStream.IsExternal
+                ? null
+                : GetEmbeddedSubtitleOrdinal(mediaSource, resolvedStream.Index);
+            _requestedSubtitleOrdinalAll = subtitles.FindIndex(s => s.Index == resolvedStream.Index);
+            if (_requestedSubtitleOrdinalAll.HasValue && _requestedSubtitleOrdinalAll.Value < 0)
+                _requestedSubtitleOrdinalAll = null;
+
             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
                 "Subtitle.IndexRemap",
                 resolvedStream,
-                $"from={previousIndex},to={resolvedStream.Index},ord={requestedOrdinal},embeddedCount={embedded.Count}");
+                $"from={previousIndex},to={resolvedStream.Index},reason={remapReason ?? "-"},subCount={subtitles.Count}");
         }
 
         private void CaptureSubtitleTopology(string stage, MediaSourceInfo mediaSource)
@@ -4258,6 +4492,11 @@ namespace JellyfinTizen.Screens
                 _subtitleEnabled = false;
                 _initialSubtitleIndex = null;
                 _requestedEmbeddedSubtitleOrdinal = null;
+                _requestedSubtitleOrdinalAll = null;
+                _requestedSubtitleLanguage = null;
+                _requestedSubtitleDisplayTitle = null;
+                _requestedSubtitleCodec = null;
+                _requestedSubtitleWasExternal = null;
                 _forceNativeEmbeddedSelectionOnRestart = false;
                 _playerSidecarSubtitleActive = false;
                 _externalSubtitlePath = null;
@@ -4294,13 +4533,25 @@ namespace JellyfinTizen.Screens
             var subStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
             if (subStream == null) return;
 
+            var orderedSubtitleStreams = _currentMediaSource?.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Index)
+                .ToList();
             _requestedEmbeddedSubtitleOrdinal = subStream.IsExternal
                 ? null
                 : GetEmbeddedSubtitleOrdinal(_currentMediaSource, jellyfinStreamIndex);
+            _requestedSubtitleOrdinalAll = orderedSubtitleStreams?.FindIndex(s => s.Index == jellyfinStreamIndex);
+            if (_requestedSubtitleOrdinalAll.HasValue && _requestedSubtitleOrdinalAll.Value < 0)
+                _requestedSubtitleOrdinalAll = null;
+            _requestedSubtitleLanguage = subStream.Language;
+            _requestedSubtitleDisplayTitle = subStream.DisplayTitle;
+            _requestedSubtitleCodec = subStream.Codec;
+            _requestedSubtitleWasExternal = subStream.IsExternal;
             if (subStream.IsExternal)
                 _forceNativeEmbeddedSelectionOnRestart = false;
 
             bool switchingFromExternalRenderer = _activeSubtitleWasExternal || _playerSidecarSubtitleActive;
+            bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
             int? previousSubtitleIndex = _initialSubtitleIndex;
             var previousSubStream = (previousSubtitleIndex.HasValue && _currentMediaSource != null)
                 ? _currentMediaSource.MediaStreams?.FirstOrDefault(s => s.Index == previousSubtitleIndex.Value)
@@ -4309,6 +4560,15 @@ namespace JellyfinTizen.Screens
                 previousSubtitleIndex.HasValue &&
                 previousSubtitleIndex.Value == jellyfinStreamIndex &&
                 _subtitleEnabled;
+            if (subtitleSelectionUnchanged && isDirectPlay && !subStream.IsExternal)
+            {
+                int selectedNativeSlot = -2;
+                try { selectedNativeSlot = _player?.SubtitleTrackInfo.Selected ?? -2; } catch { }
+                int expectedNativeSlot = GetNativeSwitchableEmbeddedSubtitleStreams(_currentMediaSource)
+                    .FindIndex(s => s.Index == jellyfinStreamIndex);
+                bool nativeSelectionMatches = expectedNativeSlot >= 0 && selectedNativeSlot == expectedNativeSlot;
+                subtitleSelectionUnchanged = nativeSelectionMatches;
+            }
             if (subtitleSelectionUnchanged)
             {
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.SelectSkip", subStream, "reason=unchanged");
@@ -4330,6 +4590,22 @@ namespace JellyfinTizen.Screens
 
             if (!_burnIn)
             {
+                bool requiresRestartForUnsupportedSubtitleOnDirectPlay =
+                    string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase) &&
+                    RequiresServerTranscodeSubtitleSwitch(subStream);
+                if (requiresRestartForUnsupportedSubtitleOnDirectPlay)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent("Subtitle.DirectPlayToBurnInRestart", subStream, $"reason=unsupportedByProfile,newCodec={subStream?.Codec ?? "-"}");
+                    _forceNativeEmbeddedSelectionOnRestart = false;
+                    long currentPos = GetPlayPositionMs();
+                    _suppressStopReportOnce = true;
+                    StopPlayback();
+                    _startPositionMs = (int)currentPos;
+                    StartPlayback();
+                    return;
+                }
+
                 bool requiresRestartForUnsupportedSubtitleSwitch =
                     string.Equals(_playMethod, "Transcode", StringComparison.OrdinalIgnoreCase) &&
                     (RequiresServerTranscodeSubtitleSwitch(subStream) || RequiresServerTranscodeSubtitleSwitch(previousSubStream));
@@ -4346,7 +4622,6 @@ namespace JellyfinTizen.Screens
                     return;
                 }
 
-                bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
                 if (!subStream.IsExternal && isDirectPlay)
                 {
                     if (switchingFromExternalRenderer)
