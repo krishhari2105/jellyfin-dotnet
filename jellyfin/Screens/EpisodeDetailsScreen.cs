@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -15,6 +16,13 @@ namespace JellyfinTizen.Screens
 {
     public class EpisodeDetailsScreen : ScreenBase, IKeyHandler
     {
+        private enum DetailsPanelMode
+        {
+            None,
+            Subtitle,
+            Audio
+        }
+
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
         private const float ButtonFocusScale = 1.08f;
@@ -23,11 +31,17 @@ namespace JellyfinTizen.Screens
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
         private const int ActionButtonHeight = 70;
+        private const int ActionButtonRowGap = 42;
+        private const int DetailsHorizontalPadding = 90;
+        private const int DetailsColumnGap = 60;
+        private const int EpisodeThumbWidth = 640;
+        private const int EpisodeThumbHeight = 360;
         private const float SeriesTitlePointSize = 28f;
         private readonly JellyfinMovie _episode;
         private readonly bool _resumeAvailable;
         private View _playButton;
         private View _resumeButton;
+        private View _audioButton;
         private View _subtitleButton;
         private View _versionButton;
         private readonly List<View> _buttons = new();
@@ -41,8 +55,13 @@ namespace JellyfinTizen.Screens
         private List<MediaSourceInfo> _mediaSources = new();
         private int _selectedMediaSourceIndex = 0;
         private int? _selectedSubtitleIndex = null;
+        private int? _selectedAudioIndex = null;
+        private bool _subtitleStreamsLoaded;
+        private bool _mediaSourcesLoaded;
         private readonly Dictionary<View, Animation> _focusAnimations = new();
         private readonly Dictionary<string, string> _darkButtonIconPathCache = new(StringComparer.OrdinalIgnoreCase);
+        private DetailsSelectionPanel _selectionPanel;
+        private DetailsPanelMode _selectionPanelMode;
         private View _metadataContainer;
         private View _metadataSummaryRow;
         private TextLabel _metadataSummaryLabel;
@@ -71,6 +90,8 @@ namespace JellyfinTizen.Screens
                 _mediaSources = prefetchedMediaSources;
             _hasPrefetchedSubtitleStreams = prefetchedSubtitleStreams != null;
             _hasPrefetchedMediaSources = prefetchedMediaSources != null;
+            _subtitleStreamsLoaded = _hasPrefetchedSubtitleStreams;
+            _mediaSourcesLoaded = _hasPrefetchedMediaSources;
             var root = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -108,9 +129,6 @@ namespace JellyfinTizen.Screens
             };
             
             // Episode images are usually rectangular thumbnails, not posters
-            const int EpisodeThumbWidth = 640;
-            const int EpisodeThumbHeight = 360;
-            
             var thumbUrl = _episode.HasThumb
                 ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
                 : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
@@ -245,12 +263,13 @@ namespace JellyfinTizen.Screens
                 _resumeButton = CreateActionButton(resumeText, isPrimary: false, iconFile: "resume.svg", width: null, iconSize: 46);
             }
 
+            _audioButton = CreateActionButton("Audio: Default", isPrimary: false);
             _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
 
             _versionButton = CreateActionButton("Default", isPrimary: false);
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
             UpdateVersionButtonText();
-            UpdateSubtitleButtonText();
+            NormalizeSelectionStateForCurrentMediaSource();
             UpdateMetadataView();
 
             _infoColumn.Add(_buttonGroup);
@@ -260,6 +279,7 @@ namespace JellyfinTizen.Screens
             root.Add(dimOverlay);
             root.Add(content);
             Add(root);
+            _selectionPanel = new DetailsSelectionPanel(this);
         }
 
         private static float GetAdaptiveTitlePointSize(string titleText)
@@ -311,9 +331,9 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
-            if (!_hasPrefetchedSubtitleStreams)
+            if (!_subtitleStreamsLoaded)
                 _ = LoadSubtitleStreamsAsync();
-            if (!_hasPrefetchedMediaSources)
+            if (!_mediaSourcesLoaded)
                 _ = LoadMediaSourcesAsync();
             FocusButton(0);
             RunOnUiThread(RefreshOverviewScrollBounds);
@@ -322,23 +342,32 @@ namespace JellyfinTizen.Screens
         public override void OnHide()
         {
             UiAnimator.StopAndDisposeAll(_focusAnimations);
+            HideSelectionPanel();
         }
 
         private async Task LoadSubtitleStreamsAsync()
         {
+            if (_subtitleStreamsLoaded)
+                return;
+
             try
             {
                 _subtitleStreams = await AppState.Jellyfin.GetSubtitleStreamsAsync(_episode.Id);
-                UpdateSubtitleButtonText();
             }
             catch
             {
                 // Ignore
             }
+
+            _subtitleStreamsLoaded = true;
+            NormalizeSelectionStateForCurrentMediaSource();
         }
 
         private async Task LoadMediaSourcesAsync()
         {
+            if (_mediaSourcesLoaded)
+                return;
+
             try
             {
                 var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
@@ -358,7 +387,9 @@ namespace JellyfinTizen.Screens
                 });
             }
 
+            _mediaSourcesLoaded = true;
             _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
+            NormalizeSelectionStateForCurrentMediaSource();
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
             UpdateVersionButtonText();
             UpdateMetadataView();
@@ -369,6 +400,9 @@ namespace JellyfinTizen.Screens
 
         public void HandleKey(AppKey key)
         {
+            if (HandleSelectionPanelKey(key))
+                return;
+
             switch (key)
             {
                 case AppKey.Up:
@@ -605,8 +639,12 @@ namespace JellyfinTizen.Screens
             ClearRowChildren(_buttonRowTop);
             ClearRowChildren(_buttonRowBottom);
             _buttons.Clear();
+            int topRowAvailableWidth = ResolveTopActionRowAvailableWidth();
+            int topRowUsedWidth = 0;
+            bool wrappedToSecondRow = false;
 
             AddActionButton(_playButton);
+            AddActionButton(_audioButton);
             if (_resumeButton != null)
                 AddActionButton(_resumeButton);
             AddActionButton(_subtitleButton);
@@ -620,14 +658,115 @@ namespace JellyfinTizen.Screens
                 if (button == null)
                     return;
 
-                var count = _buttons.Count;
                 _buttons.Add(button);
-
-                if (count < 3)
-                    _buttonRowTop.Add(button);
-                else
+                if (wrappedToSecondRow)
+                {
                     _buttonRowBottom.Add(button);
+                    return;
+                }
+
+                int buttonWidth = EstimateActionButtonWidth(button);
+                int gapBefore = _buttonRowTop.ChildCount > 0 ? ActionButtonRowGap : 0;
+                bool fitsTopRow = _buttonRowTop.ChildCount == 0 || (topRowUsedWidth + gapBefore + buttonWidth) <= topRowAvailableWidth;
+                if (fitsTopRow)
+                {
+                    _buttonRowTop.Add(button);
+                    topRowUsedWidth += gapBefore + buttonWidth;
+                    return;
+                }
+
+                wrappedToSecondRow = true;
+                _buttonRowBottom.Add(button);
             }
+        }
+
+        private int ResolveTopActionRowAvailableWidth()
+        {
+            int rowWidth = (int)Math.Round(_buttonRowTop?.SizeWidth ?? 0);
+            if (rowWidth > 0)
+                return rowWidth;
+
+            int groupWidth = (int)Math.Round(_buttonGroup?.SizeWidth ?? 0);
+            if (groupWidth > 0)
+                return groupWidth;
+
+            int infoWidth = (int)Math.Round(_infoColumn?.SizeWidth ?? 0);
+            if (infoWidth > 0)
+                return infoWidth;
+
+            return Math.Max(320, Window.Default.Size.Width - (DetailsHorizontalPadding * 2) - EpisodeThumbWidth - DetailsColumnGap);
+        }
+
+        private static int EstimateActionButtonWidth(View button)
+        {
+            if (button == null)
+                return 0;
+
+            int actualWidth = (int)Math.Round(button.SizeWidth);
+            if (actualWidth > 0)
+                return actualWidth;
+
+            int specifiedWidth = (int)Math.Round((double)(float)button.WidthSpecification);
+            if (specifiedWidth > 0)
+                return specifiedWidth;
+
+            string buttonText = FindActionButtonText(button);
+            bool hasIcon = ContainsActionButtonIcon(button);
+            int iconWidth = hasIcon ? 46 : 0;
+            int textWidth = EstimateActionButtonTextWidth(buttonText);
+            int contentGap = hasIcon && !string.IsNullOrWhiteSpace(buttonText) ? 14 : 0;
+            int paddingWidth = 68;
+            int estimatedWidth = paddingWidth + iconWidth + contentGap + textWidth;
+            return Math.Clamp(estimatedWidth, 180, 620);
+        }
+
+        private static int EstimateActionButtonTextWidth(string text)
+        {
+            int length = string.IsNullOrWhiteSpace(text) ? 0 : text.Trim().Length;
+            if (length <= 0)
+                return 0;
+
+            return Math.Clamp(40 + (length * 15), 80, 360);
+        }
+
+        private static string FindActionButtonText(View view)
+        {
+            if (view == null)
+                return null;
+
+            if (view is TextLabel label && !string.IsNullOrWhiteSpace(label.Text))
+                return label.Text;
+
+            uint childCount = view.ChildCount;
+            for (uint i = 0; i < childCount; i++)
+            {
+                if (view.GetChildAt(i) is View child)
+                {
+                    string childText = FindActionButtonText(child);
+                    if (!string.IsNullOrWhiteSpace(childText))
+                        return childText;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool ContainsActionButtonIcon(View view)
+        {
+            if (view == null)
+                return false;
+
+            if (view is ImageView)
+                return true;
+
+            uint childCount = view.ChildCount;
+            for (uint i = 0; i < childCount; i++)
+            {
+                if (view.GetChildAt(i) is View child && ContainsActionButtonIcon(child))
+                    return true;
+            }
+
+            return false;
         }
 
         private void RefreshOverviewScrollBounds()
@@ -758,49 +897,141 @@ namespace JellyfinTizen.Screens
         }
         private void ActivateFocusedButton()
         {
-            if (_buttonIndex == 0)
+            if (_buttonIndex < 0 || _buttonIndex >= _buttons.Count)
+                return;
+
+            var focusedButton = _buttons[_buttonIndex];
+            if (focusedButton == _playButton)
             {
                 PlayMedia(_episode, 0);
                 return;
             }
-            if (_resumeAvailable && _buttonIndex == 1)
+            if (_resumeButton != null && focusedButton == _resumeButton)
             {
                 PlayMedia(_episode, TicksToMs(_episode.PlaybackPositionTicks));
                 return;
             }
-            if (_buttons[_buttonIndex] == _subtitleButton)
+            if (focusedButton == _audioButton)
             {
-                CycleSubtitle();
+                ShowAudioPanel();
                 return;
             }
-            if (_buttons[_buttonIndex] == _versionButton)
+            if (focusedButton == _subtitleButton)
+            {
+                ShowSubtitlePanel();
+                return;
+            }
+            if (focusedButton == _versionButton)
             {
                 CycleMediaSource();
                 return;
             }
         }
 
-        private void CycleSubtitle()
+        private bool HandleSelectionPanelKey(AppKey key)
         {
-            if (_subtitleStreams == null || _subtitleStreams.Count == 0) return;
+            if (_selectionPanel == null || !_selectionPanel.IsVisible)
+                return false;
 
-            if (_selectedSubtitleIndex == null)
+            switch (key)
             {
-                _selectedSubtitleIndex = _subtitleStreams[0].Index;
+                case AppKey.Up:
+                    _selectionPanel.MoveSelection(-1);
+                    break;
+                case AppKey.Down:
+                    _selectionPanel.MoveSelection(1);
+                    break;
+                case AppKey.Enter:
+                    ApplyPanelSelection();
+                    break;
+                case AppKey.Back:
+                    HideSelectionPanel();
+                    break;
             }
-            else
+
+            return true;
+        }
+
+        private void ShowSubtitlePanel()
+        {
+            if (_selectionPanel == null)
+                return;
+
+            var subtitleStreams = GetAvailableSubtitleStreams();
+            var options = new List<DetailsSelectionOption>
             {
-                int currentListIndex = _subtitleStreams.FindIndex(s => s.Index == _selectedSubtitleIndex);
-                if (currentListIndex == -1 || currentListIndex == _subtitleStreams.Count - 1)
-                {
-                    _selectedSubtitleIndex = null;
-                }
-                else
-                {
-                    _selectedSubtitleIndex = _subtitleStreams[currentListIndex + 1].Index;
-                }
+                new DetailsSelectionOption("OFF_INDEX", "OFF")
+            };
+
+            int selectedIndex = 0;
+            foreach (var stream in subtitleStreams)
+            {
+                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), FormatSubtitleStreamOption(stream)));
+                if (_selectedSubtitleIndex.HasValue && stream.Index == _selectedSubtitleIndex.Value)
+                    selectedIndex = options.Count - 1;
             }
-            UpdateSubtitleButtonText();
+
+            _selectionPanelMode = DetailsPanelMode.Subtitle;
+            _selectionPanel.Show("Subtitles", options, selectedIndex, UiTheme.PlayerOverlayItem);
+        }
+
+        private void ShowAudioPanel()
+        {
+            if (_selectionPanel == null)
+                return;
+
+            var audioStreams = GetAvailableAudioStreams();
+            if (audioStreams.Count == 0)
+                return;
+
+            int? selectedAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
+            int selectedIndex = 0;
+            var options = new List<DetailsSelectionOption>(audioStreams.Count);
+            foreach (var stream in audioStreams)
+            {
+                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), FormatAudioStreamOption(stream)));
+                if (selectedAudioIndex.HasValue && stream.Index == selectedAudioIndex.Value)
+                    selectedIndex = options.Count - 1;
+            }
+
+            _selectionPanelMode = DetailsPanelMode.Audio;
+            _selectionPanel.Show("Audio Tracks", options, selectedIndex, UiTheme.PlayerAudioItem);
+        }
+
+        private void ApplyPanelSelection()
+        {
+            if (_selectionPanel == null || !_selectionPanel.TryGetSelectedOption(out var selectedOption))
+            {
+                HideSelectionPanel();
+                return;
+            }
+
+            switch (_selectionPanelMode)
+            {
+                case DetailsPanelMode.Subtitle:
+                    _selectedSubtitleIndex = string.Equals(selectedOption.Id, "OFF_INDEX", StringComparison.Ordinal)
+                        ? null
+                        : int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var subtitleIndex)
+                            ? subtitleIndex
+                            : null;
+                    UpdateSubtitleButtonText();
+                    break;
+                case DetailsPanelMode.Audio:
+                    if (int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var audioIndex))
+                    {
+                        _selectedAudioIndex = audioIndex;
+                        UpdateAudioButtonText();
+                    }
+                    break;
+            }
+
+            HideSelectionPanel();
+        }
+
+        private void HideSelectionPanel()
+        {
+            _selectionPanelMode = DetailsPanelMode.None;
+            _selectionPanel?.Hide();
         }
 
         private void CycleMediaSource()
@@ -812,8 +1043,8 @@ namespace JellyfinTizen.Screens
             }
 
             _selectedMediaSourceIndex = (_selectedMediaSourceIndex + 1) % _mediaSources.Count;
-            _selectedSubtitleIndex = null;
-            UpdateSubtitleButtonText();
+            NormalizeSelectionStateForCurrentMediaSource(resetSubtitleSelection: true, resetAudioSelection: true);
+            HideSelectionPanel();
             UpdateVersionButtonText();
             UpdateMetadataView();
         }
@@ -824,18 +1055,39 @@ namespace JellyfinTizen.Screens
             var label = _subtitleButton.Children[0] as TextLabel;
             if (label == null) return;
 
-            if (_selectedSubtitleIndex == null)
+            if (!_selectedSubtitleIndex.HasValue)
             {
                 label.Text = "Subtitles: Off";
             }
             else
             {
-                var stream = _subtitleStreams?.Find(s => s.Index == _selectedSubtitleIndex);
-                string lang = stream?.Language ?? "Unknown";
-                if (!string.IsNullOrEmpty(lang) && lang.Length > 1) 
-                    lang = char.ToUpper(lang[0]) + lang.Substring(1);
-                label.Text = $"Subtitles: {lang}";
+                var stream = GetAvailableSubtitleStreams().Find(s => s.Index == _selectedSubtitleIndex.Value);
+                label.Text = stream == null
+                    ? "Subtitles: Off"
+                    : $"Subtitles: {NormalizeLanguageLabel(stream.Language)}";
             }
+        }
+
+        private void UpdateAudioButtonText()
+        {
+            if (_audioButton == null)
+                return;
+
+            if (!(_audioButton.Children[0] is TextLabel label))
+                return;
+
+            var audioStreams = GetAvailableAudioStreams();
+            int? effectiveAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
+            if (!effectiveAudioIndex.HasValue)
+            {
+                label.Text = "Audio: Default";
+                return;
+            }
+
+            var stream = audioStreams.Find(s => s.Index == effectiveAudioIndex.Value);
+            label.Text = stream == null
+                ? "Audio: Default"
+                : $"Audio: {FormatAudioButtonLabel(stream)}";
         }
 
         private void UpdateVersionButtonText()
@@ -885,6 +1137,113 @@ namespace JellyfinTizen.Screens
                 return _mediaSources[_selectedMediaSourceIndex];
 
             return _mediaSources[0];
+        }
+
+        private List<MediaStream> GetAvailableSubtitleStreams()
+        {
+            var selectedSourceSubtitleStreams = GetSelectedMediaSource()?.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Index)
+                .ToList();
+
+            if (selectedSourceSubtitleStreams != null && selectedSourceSubtitleStreams.Count > 0)
+                return selectedSourceSubtitleStreams;
+
+            return _subtitleStreams?
+                .OrderBy(s => s.Index)
+                .ToList() ?? new List<MediaStream>();
+        }
+
+        private List<MediaStream> GetAvailableAudioStreams()
+        {
+            return GetSelectedMediaSource()?.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Index)
+                .ToList() ?? new List<MediaStream>();
+        }
+
+        private void NormalizeSelectionStateForCurrentMediaSource(bool resetSubtitleSelection = false, bool resetAudioSelection = false)
+        {
+            var subtitleStreams = GetAvailableSubtitleStreams();
+            if (resetSubtitleSelection || (_selectedSubtitleIndex.HasValue && !subtitleStreams.Any(s => s.Index == _selectedSubtitleIndex.Value)))
+                _selectedSubtitleIndex = null;
+
+            var audioStreams = GetAvailableAudioStreams();
+            int? effectiveAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
+            _selectedAudioIndex = resetAudioSelection
+                ? ResolveDefaultAudioStreamIndex(audioStreams)
+                : effectiveAudioIndex;
+
+            UpdateSubtitleButtonText();
+            UpdateAudioButtonText();
+        }
+
+        private int? GetEffectiveSelectedAudioIndex(List<MediaStream> audioStreams = null)
+        {
+            audioStreams ??= GetAvailableAudioStreams();
+            if (audioStreams == null || audioStreams.Count == 0)
+                return null;
+
+            if (_selectedAudioIndex.HasValue && audioStreams.Any(s => s.Index == _selectedAudioIndex.Value))
+                return _selectedAudioIndex.Value;
+
+            return ResolveDefaultAudioStreamIndex(audioStreams);
+        }
+
+        private static int? ResolveDefaultAudioStreamIndex(List<MediaStream> audioStreams)
+        {
+            if (audioStreams == null || audioStreams.Count == 0)
+                return null;
+
+            var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
+            return (defaultStream ?? audioStreams[0]).Index;
+        }
+
+        private static string FormatSubtitleStreamOption(MediaStream stream)
+        {
+            if (stream == null)
+                return "Unknown";
+
+            string lang = string.IsNullOrWhiteSpace(stream.Language) ? "UNKNOWN" : stream.Language.ToUpperInvariant();
+            string title = string.IsNullOrWhiteSpace(stream.DisplayTitle) ? $"Sub {stream.Index}" : stream.DisplayTitle;
+            string label = $"{lang} | {title}";
+            if (stream.IsExternal)
+                label += " (Ext)";
+            return label;
+        }
+
+        private static string FormatAudioStreamOption(MediaStream stream)
+        {
+            if (stream == null)
+                return "UNKNOWN | AUDIO";
+
+            string lang = string.IsNullOrWhiteSpace(stream.Language) ? "UNKNOWN" : stream.Language.ToUpperInvariant();
+            string codec = string.IsNullOrWhiteSpace(stream.Codec) ? "AUDIO" : stream.Codec.ToUpperInvariant();
+            return $"{lang} | {codec}";
+        }
+
+        private static string FormatAudioButtonLabel(MediaStream stream)
+        {
+            if (stream == null)
+                return "Default";
+
+            string codec = string.IsNullOrWhiteSpace(stream.Codec) ? "Audio" : stream.Codec.ToUpperInvariant();
+            string lang = NormalizeLanguageLabel(stream.Language);
+            return string.Equals(lang, "Unknown", StringComparison.Ordinal)
+                ? codec
+                : $"{lang} | {codec}";
+        }
+
+        private static string NormalizeLanguageLabel(string language)
+        {
+            if (string.IsNullOrWhiteSpace(language))
+                return "Unknown";
+
+            string trimmed = language.Trim();
+            if (trimmed.Length == 1)
+                return trimmed.ToUpperInvariant();
+
+            return char.ToUpper(trimmed[0], CultureInfo.InvariantCulture) + trimmed.Substring(1);
         }
 
         private View CreateMetadataView()
@@ -1386,7 +1745,8 @@ namespace JellyfinTizen.Screens
                     startPositionMs,
                     _selectedSubtitleIndex,
                     AppState.BurnInSubtitles,
-                    GetSelectedMediaSourceId()
+                    GetSelectedMediaSourceId(),
+                    GetEffectiveSelectedAudioIndex()
                 )
             );
         }

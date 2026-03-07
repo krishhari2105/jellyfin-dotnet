@@ -95,6 +95,7 @@ namespace JellyfinTizen.Screens
         private View _audioListContainer;
         private ScrollableBase _audioScrollView;
         private string _playMethod = "DirectPlay";
+        private string _reportedPlayMethod = "DirectPlay";
         private string _playSessionId;
         private int? _initialSubtitleIndex;
         private int? _requestedEmbeddedSubtitleOrdinal;
@@ -231,7 +232,8 @@ namespace JellyfinTizen.Screens
             int startPositionMs = 0,
             int? subtitleStreamIndex = null,
             bool burnIn = false,
-            string preferredMediaSourceId = null
+            string preferredMediaSourceId = null,
+            int? audioStreamIndex = null
         )
         {
             _movie = movie;
@@ -239,6 +241,8 @@ namespace JellyfinTizen.Screens
             _initialSubtitleIndex = subtitleStreamIndex;
             _burnIn = burnIn;
             _preferredMediaSourceId = preferredMediaSourceId;
+            _overrideAudioIndex = audioStreamIndex;
+            _audioSelectionUserOverride = audioStreamIndex.HasValue;
             _trickplayCacheDir = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, "trickplay-cache");
         }
 
@@ -444,6 +448,43 @@ namespace JellyfinTizen.Screens
                     return;
                 _currentMediaSource = mediaSource; 
                 AlignRequestedSubtitleIndexForCurrentMediaSource(mediaSource);
+                bool startupSubtitleSelectionUnavailable =
+                    hasSelectedSubtitle &&
+                    HasUnavailableRequestedSubtitleForCurrentMediaSource(mediaSource);
+                if (startupSubtitleSelectionUnavailable)
+                {
+                    ClearRequestedSubtitleSelectionState();
+                    burnInActive = false;
+
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent("StartPlayback.ClearUnavailableSubtitle", details: $"mediaSource={mediaSource.Id}");
+
+                    var subtitleOffPlaybackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
+                        playbackMovie.Id,
+                        -1,
+                        forceBurnIn: false,
+                        audioStreamIndex: _overrideAudioIndex,
+                        subtitleHandlingDisabled: true,
+                        mediaSourceId: mediaSource.Id);
+                    if (playbackToken != _playbackToken)
+                        return;
+
+                    var subtitleOffSource = subtitleOffPlaybackInfo?.MediaSources?
+                        .FirstOrDefault(s => string.Equals(s.Id, mediaSource.Id, StringComparison.OrdinalIgnoreCase));
+                    if (subtitleOffSource == null)
+                        subtitleOffSource = ResolvePreferredMediaSource(subtitleOffPlaybackInfo);
+
+                    if (subtitleOffPlaybackInfo?.MediaSources != null &&
+                        subtitleOffPlaybackInfo.MediaSources.Count > 0 &&
+                        subtitleOffSource != null)
+                    {
+                        playbackInfo = subtitleOffPlaybackInfo;
+                        mediaSource = subtitleOffSource;
+                        _currentMediaSource = mediaSource;
+                    }
+                }
+
+                bool effectiveHasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("StartPlayback.Subtitles", mediaSource);
                 _playSessionId = playbackInfo.PlaySessionId;
                 _ = LoadMediaSegmentsAsync();
@@ -457,29 +498,16 @@ namespace JellyfinTizen.Screens
                 bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
                 bool supportsTranscoding = mediaSource.SupportsTranscoding;
                 bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
-                bool audioOverrideNeedsProfileTranscode = RequiresProfileBasedTranscodeForAudioOverride(mediaSource);
-                var startupSelectedSubtitleStream =
-                    hasSelectedSubtitle && _initialSubtitleIndex.HasValue
-                        ? mediaSource.MediaStreams?.FirstOrDefault(s =>
-                            string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
-                            s.Index == _initialSubtitleIndex.Value)
-                        : null;
-                bool startupSelectedSubtitleRequiresServerTranscode =
-                    startupSelectedSubtitleStream != null &&
-                    RequiresServerTranscodeSubtitleSwitch(startupSelectedSubtitleStream);
-                bool forceTranscode =
-                    burnInActive ||
-                    audioOverrideNeedsProfileTranscode ||
-                    startupSelectedSubtitleRequiresServerTranscode;
+                bool requiresServerManagedStream = burnInActive;
 
-                if (supportsDirectPlay && (!forceTranscode || !supportsTranscoding))
+                if (supportsDirectPlay && !requiresServerManagedStream)
                 {
                     _playMethod = "DirectPlay";
                     streamUrl = $"{serverUrl}/Videos/{playbackMovie.Id}/stream?static=true&MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
                     if (_overrideAudioIndex.HasValue)
                         streamUrl = UpsertQueryParam(streamUrl, "AudioStreamIndex", _overrideAudioIndex.Value.ToString());
                 }
-                else if (supportsTranscoding || forceTranscode)
+                else if (supportsTranscoding || requiresServerManagedStream)
                 {
                     _playMethod = "Transcode";
 
@@ -512,12 +540,6 @@ namespace JellyfinTizen.Screens
                     else
                     {
                         streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
-                        if (_overrideAudioIndex.HasValue)
-                        {
-                            streamUrl = UpsertQueryParam(streamUrl, "SegmentContainer", container);
-                            streamUrl = UpsertQueryParam(streamUrl, "AudioCodec", requestedAudioCodecs);
-                        }
-
                     }
 
                     string AppendParam(string url, string param) 
@@ -531,7 +553,7 @@ namespace JellyfinTizen.Screens
                     if (_overrideAudioIndex.HasValue)
                         streamUrl = UpsertQueryParam(streamUrl, "AudioStreamIndex", _overrideAudioIndex.Value.ToString());
 
-                    if (hasSelectedSubtitle)
+                    if (effectiveHasSelectedSubtitle)
                     {
                         bool shouldSendSubtitleIndexToServer =
                             !preferNativeEmbeddedOnStart ||
@@ -545,6 +567,9 @@ namespace JellyfinTizen.Screens
                 }
                 else
                     return;
+
+                string reportedPlayMethod = ResolveReportedPlayMethod(_playMethod, mediaSource, requiresServerManagedStream);
+                _reportedPlayMethod = reportedPlayMethod;
 
                 if (!burnInActive)
                 {
@@ -573,7 +598,7 @@ namespace JellyfinTizen.Screens
                         }
                     }
 
-                    if (hasSelectedSubtitle)
+                    if (effectiveHasSelectedSubtitle)
                     {
                         var subStream = mediaSource.MediaStreams?.FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (subStream != null)
@@ -586,11 +611,11 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEntry(streamUrl, mediaSource, forceTranscode, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"method={_playMethod},burnInActive={burnInActive}");
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEntry(streamUrl, mediaSource, requiresServerManagedStream, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
+                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"route={_playMethod},reported={reportedPlayMethod},burnInActive={burnInActive}");
 
                 var source = new MediaUriSource(streamUrl);
-                SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, _playMethod);
+                SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod);
                 _player.SetSource(source);
 
                 await _player.PrepareAsync();
@@ -604,7 +629,7 @@ namespace JellyfinTizen.Screens
                 try { _ = _player.AudioTrackInfo.GetCount(); } catch { }
                 try 
                 {
-                    if (!burnInActive && hasSelectedSubtitle)
+                    if (!burnInActive && effectiveHasSelectedSubtitle)
                     {
                         var selectedSubStream = mediaSource.MediaStreams?
                             .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
@@ -712,7 +737,7 @@ namespace JellyfinTizen.Screens
                 var info = new PlaybackProgressInfo
                 {
                     ItemId = playbackMovie.Id, PlaySessionId = _playSessionId, MediaSourceId = mediaSource.Id,
-                    PositionTicks = _startPositionMs * 10000, IsPaused = false, PlayMethod = _playMethod, EventName = "TimeUpdate"
+                    PositionTicks = _startPositionMs * 10000, IsPaused = false, PlayMethod = reportedPlayMethod, EventName = "TimeUpdate"
                 };
                 _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
             }
@@ -2398,6 +2423,132 @@ namespace JellyfinTizen.Screens
             return mediaSource;
         }
 
+        private static string ResolveReportedPlayMethod(string routingPlayMethod, MediaSourceInfo mediaSource, bool requiresServerManagedStream)
+        {
+            if (string.Equals(routingPlayMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
+                return "DirectPlay";
+
+            if (mediaSource?.SupportsDirectStream == true)
+                return "DirectStream";
+
+            if (string.Equals(routingPlayMethod, "Transcode", StringComparison.OrdinalIgnoreCase) &&
+                !requiresServerManagedStream &&
+                LooksLikeDirectStream(mediaSource))
+            {
+                return "DirectStream";
+            }
+
+            return string.IsNullOrWhiteSpace(routingPlayMethod) ? "DirectPlay" : routingPlayMethod;
+        }
+
+        private static bool LooksLikeDirectStream(MediaSourceInfo mediaSource)
+        {
+            if (mediaSource == null || string.IsNullOrWhiteSpace(mediaSource.TranscodingUrl))
+                return false;
+
+            if (HasHardTranscodeIndicators(mediaSource))
+                return false;
+
+            string originalVideoCodec = NormalizeVideoCodec(
+                mediaSource.MediaStreams?.FirstOrDefault(s => string.Equals(s.Type, "Video", StringComparison.OrdinalIgnoreCase))?.Codec);
+            if (string.IsNullOrWhiteSpace(originalVideoCodec))
+                return false;
+
+            string requestedVideoCodecs = GetQueryParamValue(mediaSource.TranscodingUrl, "VideoCodec");
+            if (string.IsNullOrWhiteSpace(requestedVideoCodecs))
+                return false;
+
+            var codecs = requestedVideoCodecs.Split(',');
+            for (int i = 0; i < codecs.Length; i++)
+            {
+                if (string.Equals(NormalizeVideoCodec(codecs[i]), originalVideoCodec, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool HasHardTranscodeIndicators(MediaSourceInfo mediaSource)
+        {
+            if (mediaSource == null)
+                return false;
+
+            string subtitleMethod = GetQueryParamValue(mediaSource.TranscodingUrl, "SubtitleMethod");
+            if (string.Equals(subtitleMethod, "Encode", StringComparison.OrdinalIgnoreCase))
+            {
+                string subtitleStreamIndex = GetQueryParamValue(mediaSource.TranscodingUrl, "SubtitleStreamIndex");
+                if (!string.IsNullOrWhiteSpace(subtitleStreamIndex))
+                    return true;
+            }
+
+            var reasons = mediaSource.TranscodingReasons;
+            if (reasons == null || reasons.Count == 0)
+                return false;
+
+            foreach (var reason in reasons)
+            {
+                if (string.IsNullOrWhiteSpace(reason))
+                    continue;
+
+                string normalized = reason.Trim().ToLowerInvariant();
+                if (normalized.Contains("video") ||
+                    normalized.Contains("subtitle") ||
+                    normalized.Contains("anamorphic") ||
+                    normalized.Contains("interlace") ||
+                    normalized.Contains("bitdepth") ||
+                    normalized.Contains("framerate") ||
+                    normalized.Contains("level"))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string NormalizeVideoCodec(string codec)
+        {
+            if (string.IsNullOrWhiteSpace(codec))
+                return string.Empty;
+
+            string normalized = codec.Trim().ToLowerInvariant();
+            return normalized switch
+            {
+                "h265" => "hevc",
+                "x265" => "hevc",
+                "x264" => "h264",
+                _ => normalized
+            };
+        }
+
+        private static string GetQueryParamValue(string url, string key)
+        {
+            if (string.IsNullOrWhiteSpace(url) || string.IsNullOrWhiteSpace(key))
+                return string.Empty;
+
+            int queryStart = url.IndexOf('?');
+            if (queryStart < 0 || queryStart >= url.Length - 1)
+                return string.Empty;
+
+            string query = url.Substring(queryStart + 1);
+            var parts = query.Split(new[] { '&' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var part in parts)
+            {
+                int equalsIndex = part.IndexOf('=');
+                if (equalsIndex <= 0)
+                    continue;
+
+                string candidateKey = part.Substring(0, equalsIndex);
+                if (!string.Equals(candidateKey, key, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string rawValue = part.Substring(equalsIndex + 1);
+                return Uri.UnescapeDataString(rawValue);
+            }
+
+            return string.Empty;
+        }
+
         private static int? ResolveStartupDefaultAudioIndex(MediaSourceInfo mediaSource)
         {
             var audioStreams = mediaSource?.MediaStreams?
@@ -2409,21 +2560,6 @@ namespace JellyfinTizen.Screens
 
             var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
             return defaultStream?.Index ?? audioStreams[0].Index;
-        }
-
-        private bool RequiresProfileBasedTranscodeForAudioOverride(MediaSourceInfo mediaSource)
-        {
-            if (!_overrideAudioIndex.HasValue || mediaSource == null)
-                return false;
-
-            var selectedAudioStream = mediaSource.MediaStreams?
-                .FirstOrDefault(s =>
-                    string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase) &&
-                    s.Index == _overrideAudioIndex.Value);
-            if (selectedAudioStream == null)
-                return false;
-
-            return !IsAudioCodecDirectPlayableByProfile(selectedAudioStream.Codec);
         }
 
         private static bool IsAudioCodecDirectPlayableByProfile(string codec)
@@ -4783,6 +4919,39 @@ namespace JellyfinTizen.Screens
                 $"from={previousIndex},to={resolvedStream.Index},reason={remapReason ?? "-"},subCount={subtitles.Count}");
         }
 
+        private bool HasUnavailableRequestedSubtitleForCurrentMediaSource(MediaSourceInfo mediaSource)
+        {
+            if (!_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0 || mediaSource == null)
+                return false;
+
+            var subtitles = mediaSource.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (subtitles == null || subtitles.Count == 0)
+                return true;
+
+            return !subtitles.Any(s => s.Index == _initialSubtitleIndex.Value);
+        }
+
+        private void ClearRequestedSubtitleSelectionState()
+        {
+            _subtitleEnabled = false;
+            _initialSubtitleIndex = null;
+            _requestedEmbeddedSubtitleOrdinal = null;
+            _requestedSubtitleOrdinalAll = null;
+            _requestedSubtitleLanguage = null;
+            _requestedSubtitleDisplayTitle = null;
+            _requestedSubtitleCodec = null;
+            _requestedSubtitleWasExternal = null;
+            _externalSubtitleIndex = null;
+            _externalSubtitleMediaSourceId = null;
+            _externalSubtitleCodec = null;
+            _externalSubtitleLanguage = null;
+            _activeSubtitleWasExternal = false;
+            _playerSidecarSubtitleActive = false;
+            _forceNativeEmbeddedSelectionOnRestart = false;
+        }
+
         private void CaptureSubtitleTopology(string stage, MediaSourceInfo mediaSource)
         {
             if (!DebugSwitches.EnablePlaybackDebugOverlay)
@@ -5521,6 +5690,7 @@ namespace JellyfinTizen.Screens
             _activeReportPlaySessionId = null;
             _activeReportMediaSourceId = null;
             _activeReportPlayMethod = "DirectPlay";
+            _reportedPlayMethod = "DirectPlay";
             _lastKnownPositionTicks = 0;
         }
 

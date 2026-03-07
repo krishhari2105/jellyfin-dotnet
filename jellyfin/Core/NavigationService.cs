@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Tizen.Applications;
 using Tizen.NUI;
+using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Screens;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
@@ -41,12 +43,21 @@ namespace JellyfinTizen.Core
 
         private static readonly Vector3 UnitScale = new(1f, 1f, 1f);
         private const int BlackScreenTransitionDurationMs = 180;
+        private const int ExitPopupWidth = 660;
+        private const int ExitPopupButtonHeight = 64;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
         private static Animation _screenTransitionAnimation;
         private static bool _isTransitioning;
+        private static View _exitConfirmationOverlay;
+        private static View _exitConfirmationPanel;
+        private static View _exitStayButton;
+        private static View _exitConfirmButton;
+        private static readonly List<View> _exitConfirmationButtons = new();
+        private static int _exitConfirmationFocusIndex;
+        private static bool _exitConfirmationVisible;
 
         public static void Init(Window window)
         {
@@ -64,9 +75,6 @@ namespace JellyfinTizen.Core
                 return;
 
             if (_isTransitioning)
-                return;
-
-            if (!(_currentScreen is IKeyHandler handler))
                 return;
 
             // 2. Map the Key
@@ -107,6 +115,12 @@ namespace JellyfinTizen.Core
 
                 _ => AppKey.Unknown
             };
+
+            if (HandleExitConfirmationKey(key))
+                return;
+
+            if (!(_currentScreen is IKeyHandler handler))
+                return;
 
             // 3. Execute Logic
             handler.HandleKey(key);
@@ -224,7 +238,7 @@ namespace JellyfinTizen.Core
         {
             if (_stack.Count == 0)
             {
-                Application.Current?.Exit();
+                ShowExitConfirmation();
                 return;
             }
 
@@ -248,7 +262,7 @@ namespace JellyfinTizen.Core
 
             if (incoming == null)
             {
-                Application.Current?.Exit();
+                ShowExitConfirmation();
                 return;
             }
 
@@ -338,7 +352,7 @@ namespace JellyfinTizen.Core
         {
             if (_stack.Count == 0)
             {
-                Application.Current?.Exit();
+                ShowExitConfirmation();
                 return;
             }
 
@@ -350,6 +364,194 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
+        }
+
+        private static void EnsureExitConfirmationPopupCreated()
+        {
+            if (_window == null || _exitConfirmationOverlay != null)
+                return;
+
+            _exitConfirmationOverlay = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                BackgroundColor = Color.Transparent
+            };
+
+            _exitConfirmationPanel = MonochromeAuthFactory.CreatePanel(width: ExitPopupWidth, yOffset: 0);
+            _exitConfirmationPanel.Padding = new Extents(42, 42, 34, 34);
+            _exitConfirmationPanel.BackgroundColor = new Color(7f / 255f, 13f / 255f, 28f / 255f, 1.0f);
+            _exitConfirmationPanel.BorderlineColor = new Color(1f, 1f, 1f, 0.28f);
+            if (_exitConfirmationPanel.Layout is LinearLayout panelLayout)
+                panelLayout.CellPadding = new Size2D(0, 14);
+
+            var title = MonochromeAuthFactory.CreateTitle("Exit Jellyfin?");
+            title.PointSize = 36f;
+            var subtitle = MonochromeAuthFactory.CreateSubtitle("Do you want to close the app?");
+            subtitle.PointSize = 21f;
+            subtitle.TextColor = new Color(1f, 1f, 1f, 0.72f);
+
+            var buttonRow = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    CellPadding = new Size2D(14, 0)
+                }
+            };
+
+            _exitStayButton = CreateExitConfirmationButton("Stay", primary: false);
+            _exitConfirmButton = CreateExitConfirmationButton("Exit", primary: true);
+            _exitConfirmationButtons.Clear();
+            _exitConfirmationButtons.Add(_exitStayButton);
+            _exitConfirmationButtons.Add(_exitConfirmButton);
+
+            buttonRow.Add(_exitStayButton);
+            buttonRow.Add(_exitConfirmButton);
+            _exitConfirmationPanel.Add(title);
+            _exitConfirmationPanel.Add(subtitle);
+            _exitConfirmationPanel.Add(buttonRow);
+            _exitConfirmationOverlay.Add(_exitConfirmationPanel);
+            _exitConfirmationOverlay.Hide();
+            _window.Add(_exitConfirmationOverlay);
+        }
+
+        private static View CreateExitConfirmationButton(string text, bool primary)
+        {
+            var button = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FitToChildren,
+                HeightSpecification = ExitPopupButtonHeight,
+                Padding = new Extents(30, 30, 8, 8),
+                Focusable = true,
+                CornerRadius = ExitPopupButtonHeight / 2.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 2.0f,
+                ClippingMode = ClippingModeType.ClipChildren,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+
+            var label = new TextLabel(text)
+            {
+                WidthResizePolicy = ResizePolicyType.FitToChildren,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 25f,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+
+            button.Add(label);
+            MonochromeAuthFactory.SetButtonFocusState(button, primary, focused: false);
+            return button;
+        }
+
+        private static void ShowExitConfirmation()
+        {
+            if (_window == null)
+            {
+                Application.Current?.Exit();
+                return;
+            }
+
+            EnsureExitConfirmationPopupCreated();
+            if (_exitConfirmationOverlay == null)
+            {
+                Application.Current?.Exit();
+                return;
+            }
+
+            _exitConfirmationVisible = true;
+            try { _window.Remove(_exitConfirmationOverlay); } catch { }
+            try { _window.Add(_exitConfirmationOverlay); } catch { }
+            SetExitConfirmationFocus(0);
+            _exitConfirmationOverlay.Show();
+            _exitConfirmationOverlay.RaiseToTop();
+            _exitConfirmationPanel?.RaiseToTop();
+        }
+
+        private static void HideExitConfirmation()
+        {
+            _exitConfirmationVisible = false;
+            _exitConfirmationOverlay?.Hide();
+        }
+
+        private static bool HandleExitConfirmationKey(AppKey key)
+        {
+            if (!_exitConfirmationVisible)
+                return false;
+
+            switch (key)
+            {
+                case AppKey.Left:
+                case AppKey.Up:
+                    MoveExitConfirmationFocus(-1);
+                    break;
+                case AppKey.Right:
+                case AppKey.Down:
+                    MoveExitConfirmationFocus(1);
+                    break;
+                case AppKey.Enter:
+                    ActivateExitConfirmationSelection();
+                    break;
+                case AppKey.Back:
+                    HideExitConfirmation();
+                    break;
+            }
+
+            return true;
+        }
+
+        private static void MoveExitConfirmationFocus(int delta)
+        {
+            if (_exitConfirmationButtons.Count == 0)
+                return;
+
+            SetExitConfirmationFocus(Math.Clamp(_exitConfirmationFocusIndex + delta, 0, _exitConfirmationButtons.Count - 1));
+        }
+
+        private static void SetExitConfirmationFocus(int index)
+        {
+            if (_exitConfirmationButtons.Count == 0)
+                return;
+
+            _exitConfirmationFocusIndex = Math.Clamp(index, 0, _exitConfirmationButtons.Count - 1);
+            for (int i = 0; i < _exitConfirmationButtons.Count; i++)
+            {
+                bool focused = i == _exitConfirmationFocusIndex;
+                bool primary = ReferenceEquals(_exitConfirmationButtons[i], _exitConfirmButton);
+                MonochromeAuthFactory.SetButtonFocusState(_exitConfirmationButtons[i], primary, focused);
+                _exitConfirmationButtons[i].Scale = Vector3.One;
+            }
+
+            FocusManager.Instance.SetCurrentFocusView(_exitConfirmationButtons[_exitConfirmationFocusIndex]);
+        }
+
+        private static void ActivateExitConfirmationSelection()
+        {
+            if (ReferenceEquals(_exitConfirmationButtons[_exitConfirmationFocusIndex], _exitConfirmButton))
+            {
+                try
+                {
+                    _currentScreen?.OnHide();
+                }
+                catch
+                {
+                }
+
+                Application.Current?.Exit();
+                return;
+            }
+
+            HideExitConfirmation();
         }
 
         private static void CleanupOutgoingAfterNavigate(ScreenBase outgoing, bool addToStack)

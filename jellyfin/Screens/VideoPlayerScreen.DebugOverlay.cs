@@ -78,7 +78,7 @@ namespace JellyfinTizen.Screens
             RefreshStreamDebugOverlay();
         }
 
-        private void CaptureStreamDebugEntry(string streamUrl, MediaSourceInfo mediaSource, bool forceTranscode, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
+        private void CaptureStreamDebugEntry(string streamUrl, MediaSourceInfo mediaSource, bool requiresServerManagedStream, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
         {
             if (!DebugSwitches.EnablePlaybackDebugOverlay)
             {
@@ -91,12 +91,16 @@ namespace JellyfinTizen.Screens
                 _currentJellyfinTranscodingUrl = "null";
 
             _currentSanitizedStreamUrl = SanitizeDebugStreamUrl(streamUrl);
-            _currentTranscodeReason = BuildTranscodeReasonText(mediaSource, forceTranscode, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
+            _currentTranscodeReason = BuildTranscodeReasonText(mediaSource, requiresServerManagedStream, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
 
             string timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             string formattedUrl = FormatDebugStreamUrl(_currentSanitizedStreamUrl);
-            string sourceType = hasTranscodeUrl ? "JellyfinTranscodingUrl" : "ManualMasterM3u8Fallback";
-            _streamDebugEntries.Add($"{timestamp} | {_playMethod} | Source={sourceType}\nJellyfin TranscodingUrl: {_currentJellyfinTranscodingUrl}\nFinal Stream URL:\n{formattedUrl}");
+            string sourceType = ResolveStreamSourceType(hasTranscodeUrl);
+            string routeLabel = ResolveDebugRouteLabel();
+            string methodLabel = string.Equals(routeLabel, _reportedPlayMethod, StringComparison.OrdinalIgnoreCase)
+                ? routeLabel
+                : $"Route={routeLabel},Reported={_reportedPlayMethod}";
+            _streamDebugEntries.Add($"{timestamp} | {methodLabel} | Source={sourceType}\nJellyfin TranscodingUrl: {_currentJellyfinTranscodingUrl}\nFinal Stream URL:\n{formattedUrl}");
             while (_streamDebugEntries.Count > StreamDebugOverlayMaxEntries)
                 _streamDebugEntries.RemoveAt(0);
 
@@ -117,8 +121,11 @@ namespace JellyfinTizen.Screens
             var sb = new StringBuilder();
             sb.Append("TEMP STREAM DEBUG");
             sb.Append('\n');
-            sb.Append("Method: ");
-            sb.Append(string.IsNullOrWhiteSpace(_playMethod) ? "Unknown" : _playMethod);
+            sb.Append("Route: ");
+            sb.Append(ResolveDebugRouteLabel());
+            sb.Append('\n');
+            sb.Append("Reported: ");
+            sb.Append(string.IsNullOrWhiteSpace(_reportedPlayMethod) ? "Unknown" : _reportedPlayMethod);
             sb.Append('\n');
             sb.Append("Reason: ");
             sb.Append(string.IsNullOrWhiteSpace(_currentTranscodeReason) ? "Unknown" : _currentTranscodeReason);
@@ -239,7 +246,7 @@ namespace JellyfinTizen.Screens
             return true;
         }
 
-        private string BuildTranscodeReasonText(MediaSourceInfo mediaSource, bool forceTranscode, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
+        private string BuildTranscodeReasonText(MediaSourceInfo mediaSource, bool requiresServerManagedStream, bool supportsDirectPlay, bool supportsTranscoding, bool hasTranscodeUrl)
         {
             var reasons = new List<string>();
 
@@ -260,7 +267,7 @@ namespace JellyfinTizen.Screens
                 }
             }
 
-            if (string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(_reportedPlayMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
             {
                 if (reasons.Count == 0)
                     return "DirectPlay selected";
@@ -269,10 +276,19 @@ namespace JellyfinTizen.Screens
                 return $"DirectPlay selected (hints: {directPlayHints})";
             }
 
+            if (string.Equals(_reportedPlayMethod, "DirectStream", StringComparison.OrdinalIgnoreCase))
+            {
+                if (reasons.Count == 0)
+                    return "DirectStream selected";
+
+                var directStreamHints = string.Join(", ", reasons.Distinct(StringComparer.OrdinalIgnoreCase));
+                return $"DirectStream selected (hints: {directStreamHints})";
+            }
+
             if (!supportsDirectPlay)
                 reasons.Add("DirectPlay not supported");
-            if (!supportsTranscoding && forceTranscode)
-                reasons.Add("Client forced transcode");
+            if (!supportsTranscoding && requiresServerManagedStream)
+                reasons.Add("Client required server-managed stream");
             if (hasTranscodeUrl)
                 reasons.Add("Server provided TranscodingUrl");
             else
@@ -281,6 +297,28 @@ namespace JellyfinTizen.Screens
                 reasons.Add("Server selected transcoding");
 
             return string.Join(", ", reasons.Distinct(StringComparer.OrdinalIgnoreCase));
+        }
+
+        private string ResolveStreamSourceType(bool hasTranscodeUrl)
+        {
+            if (string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase))
+                return "ManualDirectPlayUrl";
+
+            if (hasTranscodeUrl)
+                return "JellyfinServerStreamUrl";
+
+            return "ManualMasterM3u8Fallback";
+        }
+
+        private string ResolveDebugRouteLabel()
+        {
+            if (string.Equals(_playMethod, "Transcode", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(_reportedPlayMethod, "DirectStream", StringComparison.OrdinalIgnoreCase))
+            {
+                return "ServerManagedStream";
+            }
+
+            return string.IsNullOrWhiteSpace(_playMethod) ? "Unknown" : _playMethod;
         }
 
         private static string HumanizeTranscodeReason(string value)
