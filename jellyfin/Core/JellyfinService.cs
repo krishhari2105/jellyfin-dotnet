@@ -16,7 +16,7 @@ namespace JellyfinTizen.Core
         private const string DefaultDeviceId = "tizen-tv";
         private const string ClientName = "Jellyfin for Tizen";
         private const string ClientVersion = "2.0";
-        private const string DeviceName = "Samsung TV";
+        private const string DeviceName = "Samsung Smart TV";
         private const string AuthenticateByNamePath = "/Users/authenticatebyname";
         private const string AuthenticateAcceptHeader =
             "application/json,application/json; profile=CamelCase,application/json; profile=PascalCase,text/html";
@@ -812,6 +812,7 @@ namespace JellyfinTizen.Core
                         Id = TryGetString(src, "Id") ?? itemId,
                         Name = TryGetString(src, "Name"),
                         SupportsDirectPlay = TryGetBool(src, "SupportsDirectPlay", out var supportsDirectPlay) && supportsDirectPlay,
+                        SupportsDirectStream = TryGetBool(src, "SupportsDirectStream", out var supportsDirectStream) && supportsDirectStream,
                         SupportsTranscoding = TryGetBool(src, "SupportsTranscoding", out var supportsTranscoding) && supportsTranscoding,
                         // TranscodingUrl is only present if transcoding is needed/possible
                         TranscodingUrl = TryGetString(src, "TranscodingUrl"),

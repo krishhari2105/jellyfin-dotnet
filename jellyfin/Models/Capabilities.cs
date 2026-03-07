@@ -14,6 +14,7 @@ namespace JellyfinTizen.Models
         public string Id { get; set; }
         public string Name { get; set; }
         public bool SupportsDirectPlay { get; set; }
+        public bool SupportsDirectStream { get; set; }
         public bool SupportsTranscoding { get; set; }
         public string TranscodingUrl { get; set; }
         public List<string> TranscodingReasons { get; set; }

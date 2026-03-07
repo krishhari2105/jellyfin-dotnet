@@ -9,7 +9,7 @@ namespace JellyfinTizen.Core
         {
             var profile = new DeviceProfile
             {
-                Name = "Samsung TV",
+                Name = "Samsung Smart TV",
                 
                 MaxStreamingBitrate = 120000000, // 120 Mbps limit
                
@@ -74,7 +74,7 @@ namespace JellyfinTizen.Core
                         Container = "mp4",
                         Type = "Video",
                         AudioCodec = "ac3,eac3,aac",
-                        VideoCodec = "hevc,h264",
+                        VideoCodec = "hevc,h264,av1",
                         Context = "Streaming",
                         Protocol = "hls"
                     },
@@ -83,7 +83,7 @@ namespace JellyfinTizen.Core
                         Container = "ts",
                         Type = "Video",
                         AudioCodec = "ac3,eac3,aac",
-                        VideoCodec = "h264,hevc",
+                        VideoCodec = "h264,hevc,av1",
                         Context = "Streaming",
                         Protocol = "hls"
                     },
@@ -93,7 +93,7 @@ namespace JellyfinTizen.Core
                         Container = "mkv",
                         Type = "Video",
                         AudioCodec = "ac3,aac,eac3",
-                        VideoCodec = "h264,hevc",
+                        VideoCodec = "h264,hevc,av1",
                         Context = "Streaming",
                         Protocol = "http"
                     }
