@@ -12,7 +12,6 @@ namespace JellyfinTizen.Core
         private const string KeyUserId = "jf_user_id";
         private const string KeyUsername = "jf_username";
         private const string KeyDeviceId = "jf_device_id";
-        private const string KeyBurnInSubtitles = "jf_burn_in_subtitles";
         private const string KeyServersRegistry = "jf_servers_registry_v1";
         private const string KeyActiveServerUrl = "jf_active_server_url";
         private const int MaxStoredServersCount = 4;
@@ -27,6 +26,8 @@ namespace JellyfinTizen.Core
         public static string UserId { get; set; }
         public static string Username { get; set; }
         public static string DeviceId { get; private set; }
+        public static bool BurnInSubtitles { get; set; }
+        public static bool ForceTsTranscoding { get; set; }
 
         public static JellyfinService Jellyfin { get; private set; }
         public static int MaxStoredServers => MaxStoredServersCount;
@@ -52,22 +53,13 @@ namespace JellyfinTizen.Core
             public bool IsActive { get; set; }
         }
 
-        public static bool BurnInSubtitles
-        {
-            get
-            {
-                if (Tizen.Applications.Preference.Contains(KeyBurnInSubtitles))
-                    return Tizen.Applications.Preference.Get<bool>(KeyBurnInSubtitles);
-                return false;
-            }
-            set => Tizen.Applications.Preference.Set(KeyBurnInSubtitles, value);
-        }
-
         public static void Init()
         {
             Jellyfin = new JellyfinService();
             DeviceId = GetOrCreateDeviceId();
             Jellyfin.DeviceId = DeviceId;
+            BurnInSubtitles = false;
+            ForceTsTranscoding = false;
             EnsureServersLoaded();
         }
 

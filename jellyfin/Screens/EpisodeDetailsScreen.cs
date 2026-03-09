@@ -1154,6 +1154,16 @@ namespace JellyfinTizen.Screens
                 .ToList() ?? new List<MediaStream>();
         }
 
+        private string GetSelectedSubtitleCodec()
+        {
+            if (!_selectedSubtitleIndex.HasValue)
+                return null;
+
+            return GetAvailableSubtitleStreams()
+                .FirstOrDefault(s => s.Index == _selectedSubtitleIndex.Value)
+                ?.Codec;
+        }
+
         private List<MediaStream> GetAvailableAudioStreams()
         {
             return GetSelectedMediaSource()?.MediaStreams?
@@ -1746,7 +1756,8 @@ namespace JellyfinTizen.Screens
                     _selectedSubtitleIndex,
                     AppState.BurnInSubtitles,
                     GetSelectedMediaSourceId(),
-                    GetEffectiveSelectedAudioIndex()
+                    GetEffectiveSelectedAudioIndex(),
+                    GetSelectedSubtitleCodec()
                 )
             );
         }

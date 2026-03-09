@@ -713,7 +713,7 @@ namespace JellyfinTizen.Core
         public async Task PostCapabilitiesAsync()
         {
             // Use the Builder to get the clean profile
-            var profile = ProfileBuilder.BuildTizenProfile();
+            var profile = ProfileBuilder.BuildTizenProfile(preferTsHlsFirst: AppState.ForceTsTranscoding);
 
             // The server expects a root "Capabilities" property
             var caps = new
@@ -756,16 +756,24 @@ namespace JellyfinTizen.Core
             int? audioStreamIndex = null,
             bool disableDirectPlay = false,
             bool subtitleHandlingDisabled = false,
-            string mediaSourceId = null)
+            string mediaSourceId = null,
+            bool preferTsOnlyHls = false,
+            bool preferTsHlsFirst = false)
         {
             bool hasExplicitSubtitleSelection = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value >= 0;
             bool subtitleIndexExplicitlyOff = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value < 0;
             bool effectiveSubtitlesDisabled = !hasExplicitSubtitleSelection && (subtitleHandlingDisabled || subtitleIndexExplicitlyOff);
             bool effectiveForceBurnIn = forceBurnIn && hasExplicitSubtitleSelection;
             bool forceServerTranscode = disableDirectPlay || effectiveForceBurnIn;
+            bool effectivePreferTsHlsFirst =
+                !effectiveForceBurnIn &&
+                !preferTsOnlyHls &&
+                (preferTsHlsFirst || AppState.ForceTsTranscoding);
             var deviceProfile = ProfileBuilder.BuildTizenProfile(
                 forceBurnIn: effectiveForceBurnIn,
-                disableSubtitles: effectiveSubtitlesDisabled && !effectiveForceBurnIn);
+                disableSubtitles: effectiveSubtitlesDisabled && !effectiveForceBurnIn,
+                preferTsOnlyHls: preferTsOnlyHls && !effectiveForceBurnIn,
+                preferTsHlsFirst: effectivePreferTsHlsFirst);
 
             // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
             var body = new Dictionary<string, object>

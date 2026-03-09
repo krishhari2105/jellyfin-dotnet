@@ -1,11 +1,16 @@
 using System.Collections.Generic;
+using System.Linq;
 using JellyfinTizen.Models;
 
 namespace JellyfinTizen.Core
 {
     public static class ProfileBuilder
     {
-        public static DeviceProfile BuildTizenProfile(bool forceBurnIn = false, bool disableSubtitles = false)
+        public static DeviceProfile BuildTizenProfile(
+            bool forceBurnIn = false,
+            bool disableSubtitles = false,
+            bool preferTsOnlyHls = false,
+            bool preferTsHlsFirst = false)
         {
             var profile = new DeviceProfile
             {
@@ -83,7 +88,7 @@ namespace JellyfinTizen.Core
                         Container = "ts",
                         Type = "Video",
                         AudioCodec = "ac3,eac3,aac",
-                        VideoCodec = "h264,hevc,av1",
+                        VideoCodec = "hevc,h264,av1",
                         Context = "Streaming",
                         Protocol = "hls"
                     },
@@ -147,8 +152,33 @@ namespace JellyfinTizen.Core
                 foreach (var tp in profile.TranscodingProfiles)
                 {
                     tp.VideoCodec = "h264"; // Ensure only h264 for burn-in
-                    tp.Container = "mp4"; // TS container is most compatible with hls + burn-in
+                    tp.Container = "ts"; // TS container is most compatible with hls + burn-in
                     tp.Protocol = "hls";
+                }
+            }
+            else if (preferTsOnlyHls)
+            {
+                profile.TranscodingProfiles = profile.TranscodingProfiles.FindAll(p =>
+                    !string.Equals(p.Type, "Video", System.StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(p.Protocol, "hls", System.StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(p.Container, "ts", System.StringComparison.OrdinalIgnoreCase));
+            }
+            else if (preferTsHlsFirst)
+            {
+                var preferredTsProfiles = profile.TranscodingProfiles
+                    .Where(p =>
+                        string.Equals(p.Type, "Video", System.StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(p.Protocol, "hls", System.StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(p.Container, "ts", System.StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (preferredTsProfiles.Count > 0)
+                {
+                    var remainingProfiles = profile.TranscodingProfiles
+                        .Where(p => !preferredTsProfiles.Contains(p))
+                        .ToList();
+                    preferredTsProfiles.AddRange(remainingProfiles);
+                    profile.TranscodingProfiles = preferredTsProfiles;
                 }
             }
 

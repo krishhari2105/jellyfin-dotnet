@@ -103,6 +103,7 @@ namespace JellyfinTizen.Screens
         private string _requestedSubtitleLanguage;
         private string _requestedSubtitleDisplayTitle;
         private string _requestedSubtitleCodec;
+        private string _initialSubtitleCodecHint;
         private bool? _requestedSubtitleWasExternal;
         private bool _forceNativeEmbeddedSelectionOnRestart;
         private bool _playerSidecarSubtitleActive;
@@ -233,12 +234,14 @@ namespace JellyfinTizen.Screens
             int? subtitleStreamIndex = null,
             bool burnIn = false,
             string preferredMediaSourceId = null,
-            int? audioStreamIndex = null
+            int? audioStreamIndex = null,
+            string initialSubtitleCodec = null
         )
         {
             _movie = movie;
             _startPositionMs = startPositionMs;
             _initialSubtitleIndex = subtitleStreamIndex;
+            _initialSubtitleCodecHint = initialSubtitleCodec;
             _burnIn = burnIn;
             _preferredMediaSourceId = preferredMediaSourceId;
             _overrideAudioIndex = audioStreamIndex;
@@ -328,6 +331,7 @@ namespace JellyfinTizen.Screens
                 bool preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
                 _forceNativeEmbeddedSelectionOnRestart = false;
                 int? requestedSubtitleStreamIndex = hasSelectedSubtitle ? _initialSubtitleIndex : -1;
+                bool preferTsOnlyHlsForRequestedSubtitle = RequiresTsOnlyHlsProfile(GetRequestedSubtitleCodecHint());
                 if (preferNativeEmbeddedOnStart)
                     requestedSubtitleStreamIndex = null;
                 string requestedMediaSourceId = _preferredMediaSourceId;
@@ -341,6 +345,7 @@ namespace JellyfinTizen.Screens
                     _requestedSubtitleLanguage = null;
                     _requestedSubtitleDisplayTitle = null;
                     _requestedSubtitleCodec = null;
+                    _initialSubtitleCodecHint = null;
                     _requestedSubtitleWasExternal = null;
                 }
                 _subtitleOffsetBurnInWarningShown = false;
@@ -374,7 +379,8 @@ namespace JellyfinTizen.Screens
                     burnInActive,
                     _overrideAudioIndex,
                     subtitleHandlingDisabled: !hasSelectedSubtitle,
-                    mediaSourceId: requestedMediaSourceId);
+                    mediaSourceId: requestedMediaSourceId,
+                    preferTsOnlyHls: preferTsOnlyHlsForRequestedSubtitle);
                 if (playbackToken != _playbackToken)
                     return;
 
@@ -390,7 +396,8 @@ namespace JellyfinTizen.Screens
                         burnInActive,
                         _overrideAudioIndex,
                         subtitleHandlingDisabled: !hasSelectedSubtitle,
-                        mediaSourceId: null);
+                        mediaSourceId: null,
+                        preferTsOnlyHls: preferTsOnlyHlsForRequestedSubtitle);
                     if (playbackToken != _playbackToken)
                         return;
 
@@ -433,7 +440,8 @@ namespace JellyfinTizen.Screens
                             burnInActive,
                             _overrideAudioIndex,
                             subtitleHandlingDisabled: !hasSelectedSubtitle,
-                            mediaSourceId: requestedMediaSourceId);
+                            mediaSourceId: requestedMediaSourceId,
+                            preferTsOnlyHls: preferTsOnlyHlsForRequestedSubtitle);
 
                         if (playbackToken != _playbackToken)
                             return;
@@ -510,37 +518,14 @@ namespace JellyfinTizen.Screens
                 else if (supportsTranscoding || requiresServerManagedStream)
                 {
                     _playMethod = "Transcode";
-
-                    var videoStream = mediaSource.MediaStreams.FirstOrDefault(s => s.Type == "Video");
-                    string vidCodec = videoStream?.Codec?.ToLower() ?? "unknown";
-                    bool isVideoNative = vidCodec.Contains("h264") || vidCodec.Contains("hevc") || 
-                                         vidCodec.Contains("vp9") || vidCodec.Contains("av1");
-                    string container = isVideoNative ? "mp4" : "ts";
-                    string audioPriority = "ac3,eac3,aac,mp3";
-                    string requestedVideoCodecs = burnInActive ? "h264" : "h264,hevc,vp9,av1";
-                    string requestedAudioCodecs = burnInActive ? "ac3,eac3,aac" : audioPriority;
-                    const int fallbackMaxStreamingBitrate = 120000000;
-                    const int fallbackAudioBitrate = 1411200;
-                    int fallbackVideoBitrate = Math.Max(1000000, fallbackMaxStreamingBitrate - fallbackAudioBitrate);
-
                     if (!hasTranscodeUrl)
                     {
-                        streamUrl = $"{serverUrl}/Videos/{playbackMovie.Id}/master.m3u8?MediaSourceId={mediaSource.Id}&PlaySessionId={_playSessionId}&api_key={apiKey}";
-                        streamUrl += $"&VideoCodec={requestedVideoCodecs}";
-                        streamUrl += $"&AudioCodec={requestedAudioCodecs}";
-                        streamUrl += $"&SegmentContainer={container}"; 
-                        streamUrl += "&TranscodingMaxAudioChannels=6";
-                        streamUrl += $"&MaxStreamingBitrate={fallbackMaxStreamingBitrate}";
-                        streamUrl += $"&VideoBitrate={fallbackVideoBitrate}";
-                        streamUrl += $"&AudioBitrate={fallbackAudioBitrate}";
-                        streamUrl += "&MinSegments=1";
-                        streamUrl += "&BreakOnNonKeyFrames=True";
+                        if (DebugSwitches.EnablePlaybackDebugOverlay)
+                            CaptureStreamDebugEvent("StartPlayback.MissingTranscodingUrl", $"mediaSource={mediaSource.Id},burnIn={burnInActive},supportsTranscoding={supportsTranscoding}");
+                        return;
+                    }
 
-                    }
-                    else
-                    {
-                        streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
-                    }
+                    streamUrl = $"{serverUrl}{mediaSource.TranscodingUrl}";
 
                     string AppendParam(string url, string param) 
                     {
@@ -635,6 +620,7 @@ namespace JellyfinTizen.Screens
                             .FirstOrDefault(s => s.Type == "Subtitle" && s.Index == _initialSubtitleIndex.Value);
                         if (selectedSubStream != null)
                         {
+                            _initialSubtitleCodecHint = selectedSubStream.Codec;
                             _requestedSubtitleCodec = selectedSubStream.Codec;
                             _requestedSubtitleLanguage = selectedSubStream.Language;
                             _requestedSubtitleDisplayTitle = selectedSubStream.DisplayTitle;
@@ -1224,6 +1210,40 @@ namespace JellyfinTizen.Screens
             // If subtitle codec is not advertised as runtime-switchable by our device profile,
             // we must renegotiate playback so server can render it in the transcoded stream.
             return !IsSubtitleCodecRuntimeSwitchSupported(stream.Codec);
+        }
+
+        private static bool RequiresTsOnlyHlsProfile(string codec)
+        {
+            if (string.IsNullOrWhiteSpace(codec))
+                return false;
+
+            string normalizedCodec = codec.Trim().ToLowerInvariant();
+            return string.Equals(normalizedCodec, "dvdsub", StringComparison.Ordinal) ||
+                   string.Equals(normalizedCodec, "vobsub", StringComparison.Ordinal);
+        }
+
+        private static MediaStream GetSelectedSubtitleStream(MediaSourceInfo mediaSource, int? subtitleStreamIndex)
+        {
+            if (mediaSource?.MediaStreams == null || !subtitleStreamIndex.HasValue || subtitleStreamIndex.Value < 0)
+                return null;
+
+            return mediaSource.MediaStreams.FirstOrDefault(s =>
+                string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                s.Index == subtitleStreamIndex.Value);
+        }
+
+        private string GetRequestedSubtitleCodecHint()
+        {
+            if (!_initialSubtitleIndex.HasValue || _initialSubtitleIndex.Value < 0)
+                return null;
+
+            if (!string.IsNullOrWhiteSpace(_requestedSubtitleCodec))
+                return _requestedSubtitleCodec;
+
+            if (!string.IsNullOrWhiteSpace(_initialSubtitleCodecHint))
+                return _initialSubtitleCodecHint;
+
+            return GetSelectedSubtitleStream(_currentMediaSource, _initialSubtitleIndex)?.Codec;
         }
 
         private static string NormalizeSubtitleLanguageKey(string rawLanguage)
@@ -4912,6 +4932,7 @@ namespace JellyfinTizen.Screens
             _requestedSubtitleOrdinalAll = subtitles.FindIndex(s => s.Index == resolvedStream.Index);
             if (_requestedSubtitleOrdinalAll.HasValue && _requestedSubtitleOrdinalAll.Value < 0)
                 _requestedSubtitleOrdinalAll = null;
+            _initialSubtitleCodecHint = resolvedStream.Codec;
 
             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
                 "Subtitle.IndexRemap",
@@ -4942,6 +4963,7 @@ namespace JellyfinTizen.Screens
             _requestedSubtitleLanguage = null;
             _requestedSubtitleDisplayTitle = null;
             _requestedSubtitleCodec = null;
+            _initialSubtitleCodecHint = null;
             _requestedSubtitleWasExternal = null;
             _externalSubtitleIndex = null;
             _externalSubtitleMediaSourceId = null;
@@ -5080,6 +5102,7 @@ namespace JellyfinTizen.Screens
             _requestedSubtitleLanguage = subStream.Language;
             _requestedSubtitleDisplayTitle = subStream.DisplayTitle;
             _requestedSubtitleCodec = subStream.Codec;
+            _initialSubtitleCodecHint = subStream.Codec;
             _requestedSubtitleWasExternal = subStream.IsExternal;
             if (subStream.IsExternal)
                 _forceNativeEmbeddedSelectionOnRestart = false;
@@ -6188,6 +6211,7 @@ namespace JellyfinTizen.Screens
             _overrideAudioIndex = null;
             _audioSelectionUserOverride = false;
             _preferredMediaSourceId = null;
+            _currentMediaSource = null;
             _useParsedSubtitleRenderer = false;
             ClearParsedSubtitleCues();
             StopSubtitleRenderTimer();
