@@ -1,3 +1,5 @@
+using System;
+
 namespace JellyfinTizen.Models
 {
     public class JellyfinMovie
@@ -19,5 +21,24 @@ namespace JellyfinTizen.Models
         public bool HasThumb { get; set; }
         public bool HasBackdrop { get; set; }
         public bool HasLogo { get; set; }
+
+        public bool IsSeries =>
+            string.Equals(ItemType, "Series", StringComparison.OrdinalIgnoreCase);
+
+        public bool IsEpisode =>
+            string.Equals(ItemType, "Episode", StringComparison.OrdinalIgnoreCase);
+
+        public bool IsSeason =>
+            string.Equals(ItemType, "Season", StringComparison.OrdinalIgnoreCase);
+
+        public bool IsMusicVideo =>
+            string.Equals(ItemType, "MusicVideo", StringComparison.OrdinalIgnoreCase);
+
+        public bool IsVideo =>
+            string.Equals(ItemType, "Video", StringComparison.OrdinalIgnoreCase);
+
+        public bool UsesThumbDetailsLayout => IsEpisode || IsMusicVideo || IsVideo;
+
+        public bool IsPlayableVideo => !IsSeries && !IsSeason;
     }
 }

@@ -12,7 +12,7 @@ namespace JellyfinTizen.Screens
         private bool _started;
 
         public EpisodeDetailsLoadingScreen(JellyfinMovie episode)
-            : base("Loading episode...")
+            : base(BuildLoadingMessage(episode))
         {
             _episode = episode;
         }
@@ -72,6 +72,13 @@ namespace JellyfinTizen.Screens
                 addToStack: false,
                 animated: false
             );
+        }
+
+        private static string BuildLoadingMessage(JellyfinMovie item)
+        {
+            return item != null && item.IsEpisode
+                ? "Loading episode..."
+                : "Loading details...";
         }
 
         private static JellyfinMovie MergeEpisode(JellyfinMovie baseline, JellyfinMovie detailed)

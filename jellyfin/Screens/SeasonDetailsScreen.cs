@@ -16,7 +16,7 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const int EpisodeCardWidth = 420;
         private const int EpisodeCardHeight = 236;
-        private const int EpisodeCardTextHeight = 104;
+        private const int PreferredEpisodeCardTextHeight = 104;
         private const int EpisodeCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
         private const int FocusPad = UiTheme.HomeFocusPad;
@@ -39,6 +39,7 @@ namespace JellyfinTizen.Screens
         private int _totalEpisodeCount;
         private TextLabel _episodeLoadingText;
         private Animation _episodeScrollAnimation;
+        private int _episodeCardTextHeight = PreferredEpisodeCardTextHeight;
 
         public SeasonDetailsScreen(JellyfinMovie season)
         {
@@ -52,10 +53,12 @@ namespace JellyfinTizen.Screens
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
-            // Use season backdrop if available, otherwise try to use series backdrop
-            var backdropUrl = _season.HasBackdrop
-                ? $"{serverUrl}/Items/{_season.Id}/Images/Backdrop/0?maxWidth=1920&quality=90&api_key={apiKey}"
-                : $"{serverUrl}/Items/{_season.SeriesId}/Images/Backdrop/0?maxWidth=1920&quality=90&api_key={apiKey}";
+            var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
+                _season,
+                serverUrl,
+                apiKey,
+                maxWidth: 1920,
+                fallbackBackdropItemId: _season.SeriesId);
 
             var backdrop = new ImageView
             {
@@ -212,6 +215,7 @@ namespace JellyfinTizen.Screens
 
                 var firstPage = items ?? new List<JellyfinMovie>();
                 _episodes = new List<JellyfinMovie>();
+                _episodeCardTextHeight = CalculateEpisodeCardTextHeight(firstPage);
                 _totalEpisodeCount = Math.Max(totalRecordCount, firstPage.Count);
                 _nextEpisodeStartIndex = firstPage.Count;
                 _hasMoreEpisodes = firstPage.Count > 0 || _totalEpisodeCount > 0;
@@ -261,7 +265,7 @@ namespace JellyfinTizen.Screens
                 Ellipsis = false
             };
 
-            var cardHeight = EpisodeCardHeight + EpisodeCardTextHeight;
+            var cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
 
             _episodeViewport = new View
             {
@@ -411,7 +415,7 @@ namespace JellyfinTizen.Screens
             return MediaCardFactory.CreateImageCard(
                 EpisodeCardWidth,
                 EpisodeCardHeight,
-                EpisodeCardTextHeight,
+                _episodeCardTextHeight,
                 $"{episodeNumber}{episode.Name}",
                 subtitle: null,
                 imageUrl: imageUrl,
@@ -443,6 +447,32 @@ namespace JellyfinTizen.Screens
                     NavigationService.NavigateBack();
                     break;
             }
+        }
+
+        private int CalculateEpisodeCardTextHeight(List<JellyfinMovie> episodes)
+        {
+            if (episodes == null || episodes.Count == 0)
+                return PreferredEpisodeCardTextHeight;
+
+            int maxTextHeight = PreferredEpisodeCardTextHeight;
+            foreach (var episode in episodes)
+            {
+                if (episode == null)
+                    continue;
+
+                var episodeNumber = episode.IndexNumber > 0 ? $"E{episode.IndexNumber} - " : string.Empty;
+                maxTextHeight = Math.Max(
+                    maxTextHeight,
+                    MediaCardFactory.GetRecommendedTextHeight(
+                        EpisodeCardWidth,
+                        PreferredEpisodeCardTextHeight,
+                        $"{episodeNumber}{episode.Name}",
+                        null,
+                        (int)UiTheme.MediaCardTitle,
+                        (int)UiTheme.MediaCardSubtitle));
+            }
+
+            return maxTextHeight;
         }
 
         private void HandleEpisodeKey(AppKey key)

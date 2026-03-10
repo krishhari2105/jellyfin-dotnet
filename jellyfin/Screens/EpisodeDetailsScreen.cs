@@ -31,7 +31,14 @@ namespace JellyfinTizen.Screens
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
         private const int ActionButtonHeight = 70;
-        private const int ActionButtonRowGap = 42;
+        private const int ActionButtonRowGap = 28;
+        private const int SecondaryActionButtonWidth = 240;
+        private const int PlayActionButtonWidth = 176;
+        private const int IconActionButtonWidth = 122;
+        private const int ActionButtonIconLabelGap = 6;
+        private const int PlayActionButtonIconSize = 46;
+        private const int AudioActionButtonIconSize = 36;
+        private const int SubtitleActionButtonIconSize = 34;
         private const int DetailsHorizontalPadding = 90;
         private const int DetailsColumnGap = 60;
         private const int EpisodeThumbWidth = 640;
@@ -72,6 +79,7 @@ namespace JellyfinTizen.Screens
         private TextLabel _overviewLabel;
         private int _overviewScrollOffset;
         private int _overviewMaxScroll;
+        private bool _actionButtonReflowScheduled;
         private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
         private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
         private readonly bool _hasPrefetchedSubtitleStreams;
@@ -99,10 +107,16 @@ namespace JellyfinTizen.Screens
             };
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
-            var backdropUrl =
-                $"{serverUrl}/Items/{_episode.SeriesId}/Images/Backdrop/0" +
-                "?maxWidth=1920&quality=90" +
-                $"&api_key={apiKey}";
+            var backdropItemId =
+                _episode.IsEpisode && !string.IsNullOrWhiteSpace(_episode.SeriesId)
+                    ? _episode.SeriesId
+                    : _episode.Id;
+            var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
+                _episode,
+                serverUrl,
+                apiKey,
+                maxWidth: 1920,
+                fallbackBackdropItemId: backdropItemId != _episode.Id ? backdropItemId : null);
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -128,10 +142,12 @@ namespace JellyfinTizen.Screens
                 }
             };
             
-            // Episode images are usually rectangular thumbnails, not posters
-            var thumbUrl = _episode.HasThumb
-                ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
-                : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
+            var thumbUrl =
+                _episode.HasThumb
+                    ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
+                    : _episode.HasBackdrop
+                        ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=90&api_key={apiKey}"
+                        : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
             
             var thumbFrame = new View
             {
@@ -255,16 +271,15 @@ namespace JellyfinTizen.Screens
             _buttonGroup.Add(_buttonRowTop);
             _buttonGroup.Add(_buttonRowBottom);
 
-            _playButton = CreateActionButton(string.Empty, isPrimary: true, iconFile: "play.svg", width: 122, iconSize: 46);
+            _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: PlayActionButtonWidth, iconSize: PlayActionButtonIconSize);
 
             if (_resumeAvailable)
             {
-                var resumeText = FormatResumeTime(_episode.PlaybackPositionTicks);
-                _resumeButton = CreateActionButton(resumeText, isPrimary: false, iconFile: "resume.svg", width: null, iconSize: 46);
+                _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: PlayActionButtonIconSize);
             }
 
-            _audioButton = CreateActionButton("Audio: Default", isPrimary: false);
-            _subtitleButton = CreateActionButton("Subtitles: Off", isPrimary: false);
+            _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: IconActionButtonWidth, iconSize: AudioActionButtonIconSize);
+            _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: IconActionButtonWidth, iconSize: SubtitleActionButtonIconSize);
 
             _versionButton = CreateActionButton("Default", isPrimary: false);
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
@@ -293,6 +308,8 @@ namespace JellyfinTizen.Screens
         private static string BuildSeriesTitle(JellyfinMovie episode)
         {
             if (episode == null)
+                return string.Empty;
+            if (!episode.IsEpisode)
                 return string.Empty;
 
             return string.IsNullOrWhiteSpace(episode.SeriesName)
@@ -337,6 +354,7 @@ namespace JellyfinTizen.Screens
                 _ = LoadMediaSourcesAsync();
             FocusButton(0);
             RunOnUiThread(RefreshOverviewScrollBounds);
+            ScheduleActionButtonReflow();
         }
 
         public override void OnHide()
@@ -393,9 +411,31 @@ namespace JellyfinTizen.Screens
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
             UpdateVersionButtonText();
             UpdateMetadataView();
+            ScheduleActionButtonReflow();
 
             if (_buttons.Count > 0)
                 FocusButton(_buttonIndex);
+        }
+
+        private void ScheduleActionButtonReflow()
+        {
+            if (_actionButtonReflowScheduled || _buttonGroup == null)
+                return;
+
+            _actionButtonReflowScheduled = true;
+            RunOnUiThread(() =>
+            {
+                RunOnUiThread(() =>
+                {
+                    _actionButtonReflowScheduled = false;
+                    if (_buttonGroup == null)
+                        return;
+
+                    RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
+                    if (_buttons.Count > 0)
+                        FocusButton(_buttonIndex);
+                });
+            });
         }
 
         public void HandleKey(AppKey key)
@@ -425,7 +465,7 @@ namespace JellyfinTizen.Screens
                     break;
             }
         }
-        private View CreateActionButton(string text, bool isPrimary, string iconFile = null, int? width = 260, int iconSize = 30)
+        private View CreateActionButton(string text, bool isPrimary, string iconFile = null, int? width = SecondaryActionButtonWidth, int iconSize = 30)
         {
             var button = new View
             {
@@ -479,7 +519,7 @@ namespace JellyfinTizen.Screens
                         Layout = new LinearLayout
                         {
                             LinearOrientation = LinearLayout.Orientation.Horizontal,
-                            CellPadding = new Size2D(14, 0)
+                            CellPadding = new Size2D(ActionButtonIconLabelGap, 0)
                         }
                     };
                     if (!autoWidth)
@@ -529,7 +569,8 @@ namespace JellyfinTizen.Screens
                     VerticalAlignment = VerticalAlignment.Center,
                     PointSize = 26,
                     TextColor = Color.White,
-                    Ellipsis = true
+                    Ellipsis = true,
+                    Padding = new Extents(24, 24, 0, 0)
                 };
                 button.Add(label);
             }
@@ -644,9 +685,9 @@ namespace JellyfinTizen.Screens
             bool wrappedToSecondRow = false;
 
             AddActionButton(_playButton);
-            AddActionButton(_audioButton);
             if (_resumeButton != null)
                 AddActionButton(_resumeButton);
+            AddActionButton(_audioButton);
             AddActionButton(_subtitleButton);
             if (includeVersionButton)
                 AddActionButton(_versionButton);
@@ -682,19 +723,10 @@ namespace JellyfinTizen.Screens
 
         private int ResolveTopActionRowAvailableWidth()
         {
-            int rowWidth = (int)Math.Round(_buttonRowTop?.SizeWidth ?? 0);
-            if (rowWidth > 0)
-                return rowWidth;
-
             int groupWidth = (int)Math.Round(_buttonGroup?.SizeWidth ?? 0);
-            if (groupWidth > 0)
-                return groupWidth;
-
             int infoWidth = (int)Math.Round(_infoColumn?.SizeWidth ?? 0);
-            if (infoWidth > 0)
-                return infoWidth;
-
-            return Math.Max(320, Window.Default.Size.Width - (DetailsHorizontalPadding * 2) - EpisodeThumbWidth - DetailsColumnGap);
+            int fallbackWidth = Math.Max(320, Window.Default.Size.Width - (DetailsHorizontalPadding * 2) - EpisodeThumbWidth - DetailsColumnGap);
+            return Math.Max(fallbackWidth, Math.Max(infoWidth, groupWidth));
         }
 
         private static int EstimateActionButtonWidth(View button)
@@ -1767,16 +1799,6 @@ namespace JellyfinTizen.Screens
                 return 0;
             var ms = ticks / 10000;
             return (int)Math.Clamp(ms, 0, int.MaxValue);
-        }
-        private static string FormatResumeTime(long ticks)
-        {
-            var ms = TicksToMs(ticks);
-            if (ms <= 0)
-                return "00:00";
-            var t = TimeSpan.FromMilliseconds(ms);
-            return t.Hours > 0
-                ? $"{t.Hours:D2}:{t.Minutes:D2}:{t.Seconds:D2}"
-                : $"{t.Minutes:D2}:{t.Seconds:D2}";
         }
     }
 }

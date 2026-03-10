@@ -16,11 +16,11 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const int SeasonCardWidth = 260;
         private const int SeasonCardHeight = 390;
-        private const int SeasonCardTextHeight = 96;
+        private const int PreferredSeasonCardTextHeight = 96;
         private const int SeasonCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
         private const int FocusPad = UiTheme.HomeFocusPad;
-        private const int SeasonRowTopInset = 16;
+        private const int SeasonRowTopInset = FocusPad;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int TitleLogoMaxWidth = 420;
         private const int TitleLogoQuality = 76;
@@ -37,6 +37,7 @@ namespace JellyfinTizen.Screens
         private int _seasonIndex = -1;
         private bool _isSeasonViewFocused;
         private Animation _seasonScrollAnimation;
+        private int _seasonCardTextHeight = PreferredSeasonCardTextHeight;
 
         public SeriesDetailsScreen(JellyfinMovie series)
         {
@@ -50,10 +51,11 @@ namespace JellyfinTizen.Screens
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
-            var backdropUrl =
-                $"{serverUrl}/Items/{_series.Id}/Images/Backdrop/0" +
-                "?maxWidth=1920&quality=90" +
-                $"&api_key={apiKey}";
+            var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
+                _series,
+                serverUrl,
+                apiKey,
+                maxWidth: 1920);
 
             var backdrop = new ImageView
             {
@@ -228,6 +230,7 @@ namespace JellyfinTizen.Screens
             _infoColumn.Add(loading);
 
             _seasons = await AppState.Jellyfin.GetSeasonsAsync(_series.Id);
+            _seasonCardTextHeight = CalculateSeasonCardTextHeight(_seasons);
             _infoColumn.Remove(loading);
 
             var seasonsTitle = new TextLabel("Seasons")
@@ -241,7 +244,7 @@ namespace JellyfinTizen.Screens
                 Ellipsis = false
             };
 
-            var cardHeight = SeasonCardHeight + SeasonCardTextHeight;
+            var cardHeight = SeasonCardHeight + _seasonCardTextHeight;
 
             _seasonViewport = new View
             {
@@ -305,7 +308,7 @@ namespace JellyfinTizen.Screens
             return MediaCardFactory.CreateImageCard(
                 SeasonCardWidth,
                 SeasonCardHeight,
-                SeasonCardTextHeight,
+                _seasonCardTextHeight,
                 season.Name,
                 subtitle: null,
                 imageUrl: posterUrl,
@@ -314,6 +317,31 @@ namespace JellyfinTizen.Screens
                 titlePoint: (int)UiTheme.MediaCardTitle,
                 subtitlePoint: (int)UiTheme.MediaCardSubtitle
             );
+        }
+
+        private int CalculateSeasonCardTextHeight(List<JellyfinMovie> seasons)
+        {
+            if (seasons == null || seasons.Count == 0)
+                return PreferredSeasonCardTextHeight;
+
+            int maxTextHeight = PreferredSeasonCardTextHeight;
+            foreach (var season in seasons)
+            {
+                if (season == null)
+                    continue;
+
+                maxTextHeight = Math.Max(
+                    maxTextHeight,
+                    MediaCardFactory.GetRecommendedTextHeight(
+                        SeasonCardWidth,
+                        PreferredSeasonCardTextHeight,
+                        season.Name,
+                        null,
+                        (int)UiTheme.MediaCardTitle,
+                        (int)UiTheme.MediaCardSubtitle));
+            }
+
+            return maxTextHeight;
         }
 
         public void HandleKey(AppKey key)

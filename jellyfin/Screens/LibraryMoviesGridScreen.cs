@@ -15,8 +15,10 @@ namespace JellyfinTizen.Screens
         private const int ContentStartY = TopBarHeight + UiTheme.HomeRowsTopGap;
         private const int TopBarZ = 10;
         private const int TopBarLeftPadding = UiTheme.HomeSidePadding;
-        private const int PosterWidth = 260;
-        private const int PosterHeight = 390;
+        private const int PortraitCardWidth = 260;
+        private const int PortraitCardHeight = 390;
+        private const int LandscapeCardWidth = 420;
+        private const int LandscapeCardHeight = 236;
         private const int Spacing = UiTheme.LibraryCardSpacing;
         private const int SidePadding = UiTheme.LibrarySidePadding;
         private const int TopBarRightPadding = UiTheme.HomeSidePadding;
@@ -28,7 +30,8 @@ namespace JellyfinTizen.Screens
         private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private static readonly bool UseLightweightFocusMode = true;
-        private const int CardTextHeight = 96;
+        private const int PreferredPortraitCardTextHeight = 96;
+        private const int PreferredLandscapeCardTextHeight = 80;
         private const int RowBuildBatchSize = 2;
         private const int PosterVisibleRowBuffer = 1;
         private const int PosterKeepLowRowBuffer = 3;
@@ -41,6 +44,11 @@ namespace JellyfinTizen.Screens
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
 
         private readonly List<JellyfinMovie> _movies;
+        private readonly int _cardWidth;
+        private readonly int _cardHeight;
+        private readonly int _preferredCardTextHeight;
+        private readonly bool _useLandscapeCards;
+        private readonly int _sidePadding;
 
         private readonly List<List<View>> _grid = new();
         private readonly List<View> _rowContainers = new();
@@ -50,6 +58,7 @@ namespace JellyfinTizen.Screens
 
         private View _contentViewport;
         private View _verticalContainer;
+        private readonly int _cardTextHeight;
 
         private int _rowIndex;
         private int _colIndex;
@@ -95,15 +104,21 @@ namespace JellyfinTizen.Screens
             High = 2
         }
 
-        public LibraryMoviesGridScreen(string libraryName, List<JellyfinMovie> movies)
+        public LibraryMoviesGridScreen(JellyfinLibrary library, List<JellyfinMovie> movies)
         {
             _movies = movies;
+            _useLandscapeCards = library?.UsesLandscapeGridCards == true;
+            _sidePadding = _useLandscapeCards ? UiTheme.HomeSidePadding : SidePadding;
+            _cardWidth = _useLandscapeCards ? LandscapeCardWidth : PortraitCardWidth;
+            _cardHeight = _useLandscapeCards ? LandscapeCardHeight : PortraitCardHeight;
+            _preferredCardTextHeight = _useLandscapeCards ? PreferredLandscapeCardTextHeight : PreferredPortraitCardTextHeight;
+            _cardTextHeight = CalculateCardTextHeight();
             _moviesPerRow = CalculateColumns();
 
             var root = UiFactory.CreateAtmosphericBackground();
 
             var topBar = MediaBrowserChrome.CreateTopBar(
-                libraryName,
+                library?.Name ?? string.Empty,
                 TopBarHeight,
                 TopBarLeftPadding,
                 TopBarRightPadding,
@@ -146,7 +161,7 @@ namespace JellyfinTizen.Screens
             }
 
             var timer = PerfTrace.Start();
-            var cardHeight = PosterHeight + CardTextHeight;
+            var cardHeight = _cardHeight + _cardTextHeight;
             var rowHeight = cardHeight + (FocusPad * 2) + RowSpacing;
             int builtRows = 0;
 
@@ -160,12 +175,12 @@ namespace JellyfinTizen.Screens
                     HeightSpecification = cardHeight + (FocusPad * 2),
                     PositionY = _nextRowY,
                     ClippingMode = ClippingModeType.ClipChildren,
-                    Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
+                    Padding = new Extents((ushort)_sidePadding, (ushort)_sidePadding, viewportTopPadding, viewportBottomPadding)
                 };
 
                 var rowContainer = new View
                 {
-                    PositionX = SidePadding,
+                    PositionX = _sidePadding,
                     PositionY = 0,
                     Layout = new LinearLayout
                     {
@@ -277,8 +292,33 @@ namespace JellyfinTizen.Screens
         private int CalculateColumns()
         {
             var screenWidth = Window.Default.Size.Width;
-            var usable = screenWidth - (SidePadding * 2);
-            return Math.Max(1, usable / (PosterWidth + Spacing));
+            var usable = screenWidth - (_sidePadding * 2);
+            return Math.Max(1, usable / (_cardWidth + Spacing));
+        }
+
+        private int CalculateCardTextHeight()
+        {
+            if (_movies == null || _movies.Count == 0)
+                return _preferredCardTextHeight;
+
+            int maxTextHeight = _preferredCardTextHeight;
+            foreach (var movie in _movies)
+            {
+                if (movie == null)
+                    continue;
+
+                maxTextHeight = Math.Max(
+                    maxTextHeight,
+                    MediaCardFactory.GetRecommendedTextHeight(
+                        _cardWidth,
+                        _preferredCardTextHeight,
+                        movie.Name,
+                        null,
+                        (int)UiTheme.MediaCardTitle,
+                        (int)UiTheme.MediaCardSubtitle));
+            }
+
+            return maxTextHeight;
         }
 
         private View CreatePosterCard(JellyfinMovie movie, int rowNumber)
@@ -286,9 +326,9 @@ namespace JellyfinTizen.Screens
             BuildPosterUrls(movie, out var posterLowUrl, out var posterHighUrl);
 
             var wrapper = MediaCardFactory.CreateImageCard(
-                PosterWidth,
-                PosterHeight,
-                CardTextHeight,
+                _cardWidth,
+                _cardHeight,
+                _cardTextHeight,
                 movie.Name,
                 subtitle: null,
                 imageUrl: null,
@@ -330,7 +370,16 @@ namespace JellyfinTizen.Screens
 
             string basePath = null;
             int highQuality = 90;
-            if (movie.HasPrimary)
+            if (_useLandscapeCards && movie.HasThumb)
+            {
+                basePath = $"{serverUrl}/Items/{movie.Id}/Images/Thumb/0";
+            }
+            else if (_useLandscapeCards && movie.HasBackdrop)
+            {
+                basePath = $"{serverUrl}/Items/{movie.Id}/Images/Backdrop/0";
+                highQuality = 85;
+            }
+            else if (movie.HasPrimary)
             {
                 basePath = $"{serverUrl}/Items/{movie.Id}/Images/Primary/0";
             }
@@ -347,9 +396,9 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(basePath))
                 return;
 
-            int lowWidth = Math.Max(120, PosterWidth / 2);
+            int lowWidth = Math.Max(_useLandscapeCards ? 180 : 120, _cardWidth / 2);
             lowUrl = $"{basePath}?maxWidth={lowWidth}&quality=52&api_key={apiKey}";
-            highUrl = $"{basePath}?maxWidth={PosterWidth}&quality={highQuality}&api_key={apiKey}";
+            highUrl = $"{basePath}?maxWidth={_cardWidth}&quality={highQuality}&api_key={apiKey}";
         }
 
         private void StartBuildTimer()
@@ -426,7 +475,7 @@ namespace JellyfinTizen.Screens
 
             var timer = PerfTrace.Start();
 
-            int rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
+            int rowHeight = (_cardHeight + _cardTextHeight) + (FocusPad * 2) + RowSpacing;
             int viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
                 ? (int)_contentViewport.SizeHeight
                 : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
@@ -810,7 +859,7 @@ namespace JellyfinTizen.Screens
 
             if (_colIndex == 0)
             {
-                targetX = SidePadding;
+                targetX = _sidePadding;
             }
             else
             {
@@ -818,7 +867,7 @@ namespace JellyfinTizen.Screens
                 var viewportWidth = viewport.SizeWidth;
 
                 var left = focused.PositionX;
-                var right = left + PosterWidth;
+                var right = left + _cardWidth;
 
                 var visibleLeft = offset;
                 var visibleRight = offset + viewportWidth;
@@ -855,7 +904,7 @@ namespace JellyfinTizen.Screens
             var viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
                 ? _contentViewport.SizeHeight
                 : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
-            var rowHeight = (PosterHeight + CardTextHeight) + (FocusPad * 2) + RowSpacing;
+            var rowHeight = (_cardHeight + _cardTextHeight) + (FocusPad * 2) + RowSpacing;
 
             var currentOffset = -_verticalContainer.PositionY;
             var targetY = _verticalContainer.PositionY;
@@ -913,14 +962,14 @@ namespace JellyfinTizen.Screens
 
             var movie = _movies[index];
 
-            if (movie.ItemType == "Series")
+            if (movie.IsSeries)
             {
                 NavigationService.NavigateWithLoading(
                     () => new SeriesDetailsScreen(movie),
                     "Loading details..."
                 );
             }
-            else if (movie.ItemType == "Episode")
+            else if (movie.UsesThumbDetailsLayout)
             {
                 NavigationService.NavigateWithLoading(
                     () => new EpisodeDetailsLoadingScreen(movie),

@@ -277,7 +277,7 @@ namespace JellyfinTizen.Core
             {
                 var collectionType = item.GetProperty("CollectionType").GetString();
 
-                if (collectionType != "movies" && collectionType != "tvshows")
+                if (!JellyfinLibrary.IsSupportedCollectionType(collectionType))
                     continue;
                 
                 var hasPrimary = false;
@@ -460,7 +460,7 @@ namespace JellyfinTizen.Core
         {
             var url =
                 $"/Users/{UserId}/Items?Filters=IsResumable" +
-                "&IncludeItemTypes=Movie,Episode" +
+                "&IncludeItemTypes=Movie,Episode,MusicVideo,Video" +
                 "&Recursive=true" +
                 "&SortBy=DatePlayed" +
                 "&SortOrder=Descending" +

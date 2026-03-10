@@ -199,7 +199,7 @@ namespace JellyfinTizen.Screens
             if (librariesRow.Items.Count > 0)
                 rows.Add(librariesRow);
 
-            var tvLib = libs.Find(l => l.CollectionType == "tvshows");
+            var tvLib = libs.Find(l => l.IsTvShows);
             var nextUpTask = tvLib != null
                 ? WithTimeout(AppState.Jellyfin.GetNextUpAsync(tvLib.Id, 20), 10000)
                 : Task.FromResult(new List<JellyfinTizen.Models.JellyfinMovie>());
@@ -273,6 +273,9 @@ namespace JellyfinTizen.Screens
             var recentTasks = new List<Task<RecentLibraryResult>>(libs.Count);
             for (int i = 0; i < libs.Count; i++)
             {
+                if (libs[i].UsesLandscapeGridCards)
+                    continue;
+
                 recentTasks.Add(BuildRecentItemsForLibraryAsync(libs[i], i, serverUrl, apiKey));
             }
 
@@ -301,13 +304,9 @@ namespace JellyfinTizen.Screens
             await RecentFetchGate.WaitAsync();
             try
             {
-                var includeTypes = lib.CollectionType == "tvshows"
-                    ? "Series"
-                    : "Movie";
-
                 var timer = PerfTrace.Start();
                 var recent = await WithTimeout(
-                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, includeTypes, RecentPerLibraryLimit),
+                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, lib.LibraryItemTypes, RecentPerLibraryLimit),
                     10000
                 );
                 PerfTrace.End($"HomeLoadingScreen.RecentFetch.{lib.Name}", timer);

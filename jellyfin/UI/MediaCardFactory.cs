@@ -1,3 +1,4 @@
+using System;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 
@@ -5,6 +6,36 @@ namespace JellyfinTizen.UI
 {
     public static class MediaCardFactory
     {
+        public static int GetRecommendedTextHeight(
+            int width,
+            int preferredTextHeight,
+            string title,
+            string subtitle = null,
+            int titlePoint = 26,
+            int subtitlePoint = 20)
+        {
+            bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
+            int candidate = Math.Max(48, preferredTextHeight);
+            int maxTextHeight = candidate + Math.Max(32, preferredTextHeight / 2);
+
+            while (candidate <= maxTextHeight)
+            {
+                float adaptiveTitlePoint = ResolveAdaptiveTitlePointSize(
+                    title,
+                    titlePoint,
+                    width,
+                    candidate,
+                    hasSubtitle);
+
+                if (EstimateRequiredTextHeight(title, subtitle, width, adaptiveTitlePoint, subtitlePoint) <= candidate)
+                    return candidate;
+
+                candidate += 8;
+            }
+
+            return maxTextHeight;
+        }
+
         public static View CreateImageCard(
             int width,
             int imageHeight,
@@ -18,6 +49,13 @@ namespace JellyfinTizen.UI
             int subtitlePoint = 20)
         {
             _ = focusBorder;
+            bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
+            float adaptiveTitlePoint = ResolveAdaptiveTitlePointSize(
+                title,
+                titlePoint,
+                width,
+                textHeight,
+                hasSubtitle);
 
             var wrapper = new View
             {
@@ -36,6 +74,7 @@ namespace JellyfinTizen.UI
                 Name = "CardFrame",
                 WidthSpecification = width,
                 HeightSpecification = imageHeight,
+                PivotPoint = PivotPoint.BottomCenter,
                 CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BackgroundColor = Color.Transparent,
@@ -74,11 +113,11 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = textHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 20, 8),
+                Padding = new Extents(8, 8, 16, 12),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 2)
+                    CellPadding = new Size2D(0, hasSubtitle ? 4 : 0)
                 }
             };
 
@@ -86,16 +125,16 @@ namespace JellyfinTizen.UI
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = titlePoint,
+                PointSize = adaptiveTitlePoint,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Top,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
                 Ellipsis = true
             });
 
-            if (!string.IsNullOrWhiteSpace(subtitle))
+            if (hasSubtitle)
             {
                 textContainer.Add(new TextLabel(subtitle)
                 {
@@ -113,6 +152,118 @@ namespace JellyfinTizen.UI
             wrapper.Add(frame);
             wrapper.Add(textContainer);
             return wrapper;
+        }
+
+        private static int EstimateRequiredTextHeight(
+            string title,
+            string subtitle,
+            int availableWidth,
+            float titlePointSize,
+            float subtitlePointSize)
+        {
+            bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
+            int safeWidth = Math.Max(120, availableWidth - 16);
+            int lineCount = EstimateWrappedLineCount(title, safeWidth, titlePointSize);
+            int titleHeight = (int)Math.Ceiling(lineCount * (titlePointSize * 1.28f));
+            int subtitleHeight = hasSubtitle
+                ? (int)Math.Ceiling(subtitlePointSize * 1.30f)
+                : 0;
+            int contentGap = hasSubtitle ? 4 : 0;
+            int verticalPadding = 28;
+
+            return verticalPadding + titleHeight + contentGap + subtitleHeight;
+        }
+
+        private static float ResolveAdaptiveTitlePointSize(
+            string title,
+            float preferredPointSize,
+            int availableWidth,
+            int textHeight,
+            bool hasSubtitle)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return preferredPointSize;
+
+            int safeWidth = Math.Max(120, availableWidth - 16);
+            int subtitleReserve = hasSubtitle ? 30 : 0;
+            int verticalPadding = 28;
+            int availableTitleHeight = Math.Max(36, textHeight - verticalPadding - subtitleReserve);
+            float pointSize = preferredPointSize;
+            float minimumPointSize = Math.Max(18f, preferredPointSize - 10f);
+
+            while (pointSize > minimumPointSize)
+            {
+                int estimatedLineCount = EstimateWrappedLineCount(title, safeWidth, pointSize);
+                float estimatedHeight = estimatedLineCount * (pointSize * 1.28f);
+                if (estimatedHeight <= availableTitleHeight)
+                    break;
+
+                pointSize -= 2f;
+            }
+
+            return Math.Max(minimumPointSize, pointSize);
+        }
+
+        private static int EstimateWrappedLineCount(string text, int availableWidth, float pointSize)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 1;
+
+            float approximateCharWidth = Math.Max(6f, pointSize * 0.54f);
+            int maxCharsPerLine = Math.Max(8, (int)Math.Floor(availableWidth / approximateCharWidth));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(paragraph))
+                {
+                    lineCount++;
+                    continue;
+                }
+
+                int currentLineLength = 0;
+                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int wordLength = word.Length;
+                    if (currentLineLength == 0)
+                    {
+                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        currentLineLength = wordLength % maxCharsPerLine;
+                        if (currentLineLength == 0 && wordLength > 0)
+                            currentLineLength = maxCharsPerLine;
+                        continue;
+                    }
+
+                    int requiredLength = currentLineLength + 1 + wordLength;
+                    if (requiredLength <= maxCharsPerLine)
+                    {
+                        currentLineLength = requiredLength;
+                        continue;
+                    }
+
+                    int overflowLength = wordLength;
+                    lineCount++;
+                    currentLineLength = 0;
+
+                    if (overflowLength >= maxCharsPerLine)
+                    {
+                        int extraLines = (int)Math.Ceiling(overflowLength / (double)maxCharsPerLine);
+                        lineCount += extraLines - 1;
+                        currentLineLength = overflowLength % maxCharsPerLine;
+                        if (currentLineLength == 0)
+                            currentLineLength = maxCharsPerLine;
+                    }
+                    else
+                    {
+                        currentLineLength = overflowLength;
+                    }
+                }
+
+                if (currentLineLength == 0)
+                    lineCount++;
+            }
+
+            return Math.Max(1, lineCount);
         }
     }
 }

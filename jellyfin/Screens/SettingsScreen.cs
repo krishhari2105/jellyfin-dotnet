@@ -26,6 +26,20 @@ namespace JellyfinTizen.Screens
             Initialize();
         }
 
+        public override void OnShow()
+        {
+            _toggleIndex = 0;
+            FocusCurrentToggle();
+            RunOnUiThread(() =>
+            {
+                RunOnUiThread(() =>
+                {
+                    _toggleIndex = 0;
+                    FocusCurrentToggle();
+                });
+            });
+        }
+
         private void Initialize()
         {
             var root = UiFactory.CreateAtmosphericBackground();

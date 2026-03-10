@@ -160,8 +160,7 @@ namespace JellyfinTizen.Screens
                     continue;
 
                 var rowInfo = GetRowStyle(row.Kind);
-
-                var textHeight = GetCardTextHeight(row);
+                var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
                 var cardHeight = rowInfo.CardHeight + textHeight;
                 var rowHeight = rowInfo.RowHeight + textHeight;
                 //var titleImageGap = row.Kind == HomeRowKind.Libraries ? LibraryTitleImageGap : 0;
@@ -227,7 +226,35 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private int GetCardTextHeight(HomeRowData row)
+        private int GetCardTextHeight(HomeRowData row, int cardWidth)
+        {
+            int preferredTextHeight = GetPreferredCardTextHeight(row);
+            if (row?.Items == null || row.Items.Count == 0)
+                return preferredTextHeight;
+
+            int maxTextHeight = preferredTextHeight;
+            bool allowSubtitle = row.Kind != HomeRowKind.Libraries;
+            foreach (var item in row.Items)
+            {
+                if (item == null)
+                    continue;
+
+                var subtitle = allowSubtitle ? item.Subtitle : null;
+                maxTextHeight = Math.Max(
+                    maxTextHeight,
+                    MediaCardFactory.GetRecommendedTextHeight(
+                        cardWidth,
+                        preferredTextHeight,
+                        item.Title,
+                        subtitle,
+                        (int)UiTheme.MediaCardTitle,
+                        (int)UiTheme.MediaCardSubtitle));
+            }
+
+            return maxTextHeight;
+        }
+
+        private static int GetPreferredCardTextHeight(HomeRowData row)
         {
             bool hasSubtitle = row?.Kind != HomeRowKind.Libraries &&
                                row?.Items != null &&
@@ -521,14 +548,14 @@ namespace JellyfinTizen.Screens
 
             if (item.Media != null)
             {
-                if (item.Media.ItemType == "Series")
+                if (item.Media.IsSeries)
                 {
                     NavigationService.NavigateWithLoading(
                         () => new SeriesDetailsScreen(item.Media),
                         "Loading details..."
                     );
                 }
-                else if (item.Media.ItemType == "Episode")
+                else if (item.Media.UsesThumbDetailsLayout)
                 {
                     NavigationService.NavigateWithLoading(
                         () => new EpisodeDetailsLoadingScreen(item.Media),
@@ -555,11 +582,7 @@ namespace JellyfinTizen.Screens
                 );
             });
 
-            var includeTypes = lib.CollectionType == "tvshows"
-                ? "Series"
-                : "Movie";
-
-            var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, includeTypes);
+            var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
             var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
             if (elapsedMs < 280)
             {
@@ -569,7 +592,7 @@ namespace JellyfinTizen.Screens
             RunOnUiThread(() =>
             {
                 NavigationService.Navigate(
-                    new LibraryMoviesGridScreen(lib.Name, items),
+                    new LibraryMoviesGridScreen(lib, items),
                     addToStack: false,
                     animated: false
                 );
