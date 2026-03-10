@@ -54,21 +54,85 @@ namespace JellyfinTizen.Core
 
                 DirectPlayProfiles = new List<DirectPlayProfile>
                 {
+                    // Keep direct-play rules container-specific. A single DirectPlayProfile is
+                    // treated as a broad allow-list, so mixing unrelated containers/codecs here
+                    // can make the server assume unsupported combinations are valid.
                     new DirectPlayProfile
                     {
                         Type = "Video",
-                        Container = "mkv,mp4,m4v,mov,avi,ts,webm",
-                        VideoCodec = "h264,hevc,vp9,av1",
-                        // DTS FIX: We intentionally OMIT "dts,dca" from this list.
-                        // Jellyfin will see the file has DTS, see this list lacks it, 
-                        // and trigger a transcode (Video: Copy, Audio: AAC).
-                        AudioCodec = "aac,mp3,ac3,eac3,flac,vorbis,opus"
+                        Container = "mp4,m4v",
+                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
+                        // MP4/ISOBMFF can carry VP9 and AV1, but direct play still depends on
+                        // decoder support on the target TV model.
+                        // DTS FIX: We intentionally omit "dts,dca" from every video profile.
+                        // Jellyfin will see the file has DTS, see the active profile lacks it,
+                        // and trigger audio transcoding while still allowing video copy.
+                        AudioCodec = "aac,mp3,ac3,eac3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "mov",
+                        VideoCodec = "h264",
+                        AudioCodec = "aac,mp3,ac3,eac3,pcm_s16le,pcm_s24le"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "mkv",
+                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
+                        AudioCodec = "aac,mp3,ac3,eac3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "webm",
+                        VideoCodec = "vp8,vp9,av1",
+                        AudioCodec = "vorbis,opus"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "ts,mpegts",
+                        VideoCodec = "h264,hevc,vc1,mpeg2video",
+                        AudioCodec = "aac,mp3,ac3,eac3,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "m2ts",
+                        VideoCodec = "h264,hevc,vc1,mpeg2video",
+                        AudioCodec = "aac,mp3,ac3,eac3,mp2,pcm_s16le,pcm_s24le,aac_latm,flac"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "avi",
+                        VideoCodec = "h264,mpeg4,msmpeg4,divx,xvid",
+                        AudioCodec = "mp3,ac3,mp2,pcm_s16le"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "mpg,mpeg,vob,vro",
+                        AudioCodec = "ac3,mp2,pcm_s16le"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Video",
+                        Container = "flv,3gp",
+                        AudioCodec = "aac,mp3"
                     },
                     new DirectPlayProfile
                     {
                         Type = "Audio",
-                        Container = "mp3,aac,flac,m4a",
-                        AudioCodec = "mp3,aac,opus,flac,vorbis"
+                        Container = "opus,mp3,aac,m4a,m4b,flac,webma,wma,wav,ogg"
+                    },
+                    new DirectPlayProfile
+                    {
+                        Type = "Audio",
+                        Container = "webm",
+                        AudioCodec = "opus,webma"
                     }
                 },
                 TranscodingProfiles = new List<TranscodingProfile>
@@ -78,8 +142,8 @@ namespace JellyfinTizen.Core
                     {
                         Container = "mp4",
                         Type = "Video",
-                        AudioCodec = "ac3,eac3,aac",
-                        VideoCodec = "hevc,h264,av1",
+                        AudioCodec = "ac3,eac3,aac,mp3,opus,ac4",
+                        VideoCodec = "hevc,h264,av1,vp9",
                         Context = "Streaming",
                         Protocol = "hls"
                     },
@@ -87,8 +151,8 @@ namespace JellyfinTizen.Core
                     {
                         Container = "ts",
                         Type = "Video",
-                        AudioCodec = "ac3,eac3,aac",
-                        VideoCodec = "hevc,h264,av1",
+                        AudioCodec = "ac3,eac3,aac,mp3,opus",
+                        VideoCodec = "hevc,h264",
                         Context = "Streaming",
                         Protocol = "hls"
                     },
@@ -97,8 +161,8 @@ namespace JellyfinTizen.Core
                     {
                         Container = "mkv",
                         Type = "Video",
-                        AudioCodec = "ac3,aac,eac3",
-                        VideoCodec = "h264,hevc,av1",
+                        AudioCodec = "ac3,eac3,aac,mp3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis",
+                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
                         Context = "Streaming",
                         Protocol = "http"
                     }
