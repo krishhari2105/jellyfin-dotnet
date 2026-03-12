@@ -6112,25 +6112,12 @@ namespace JellyfinTizen.Screens
 
                 _suppressStopReportOnce = true;
                 StopPlayback();
-                var seasons = await AppState.Jellyfin.GetSeasonsAsync(_movie.SeriesId);
-                if (seasons == null || seasons.Count == 0) { NavigationService.NavigateBack(); return; }
-
-                seasons = seasons
-                    .OrderBy(s => s.IndexNumber)
-                    .ThenBy(s => s.Name)
+                var orderedEpisodes = (await AppState.Jellyfin.GetEpisodesAsync(_movie.SeriesId, lightweight: true) ?? new List<JellyfinMovie>())
+                    .Where(e => e != null && e.ItemType == "Episode")
+                    .OrderBy(e => e.ParentIndexNumber)
+                    .ThenBy(e => e.IndexNumber)
+                    .ThenBy(e => e.Name)
                     .ToList();
-
-                var orderedEpisodes = new List<JellyfinMovie>();
-                foreach (var season in seasons)
-                {
-                    var eps = await AppState.Jellyfin.GetEpisodesAsync(season.Id, lightweight: true) ?? new List<JellyfinMovie>();
-                    var orderedSeasonEpisodes = eps
-                        .Where(e => e != null && e.ItemType == "Episode")
-                        .OrderBy(e => e.IndexNumber)
-                        .ThenBy(e => e.Name)
-                        .ToList();
-                    orderedEpisodes.AddRange(orderedSeasonEpisodes);
-                }
 
                 if (orderedEpisodes.Count == 0) { NavigationService.NavigateBack(); return; }
 

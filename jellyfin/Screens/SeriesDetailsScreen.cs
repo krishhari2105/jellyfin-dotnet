@@ -22,10 +22,10 @@ namespace JellyfinTizen.Screens
         private const int FocusPad = UiTheme.HomeFocusPad;
         private const int SeasonRowTopInset = FocusPad;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
-        private const int TitleLogoMaxWidth = 420;
+        private const int TitleLogoMaxWidth = 720;
         private const int TitleLogoQuality = 76;
-        private const int TitleLogoDisplayWidth = 560;
-        private const int TitleLogoDisplayHeight = 104;
+        private const int TitleLogoDisplayWidth = 720;
+        private const int TitleLogoDisplayHeight = 136;
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _series;
@@ -42,11 +42,7 @@ namespace JellyfinTizen.Screens
         public SeriesDetailsScreen(JellyfinMovie series)
         {
             _series = series;
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
 
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -56,6 +52,7 @@ namespace JellyfinTizen.Screens
                 serverUrl,
                 apiKey,
                 maxWidth: 1920);
+            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
 
             var backdrop = new ImageView
             {
@@ -69,7 +66,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = UiTheme.DetailsBackdropDim
+                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
             };
 
             var content = new View

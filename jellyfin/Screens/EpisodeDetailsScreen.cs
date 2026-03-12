@@ -100,11 +100,7 @@ namespace JellyfinTizen.Screens
             _hasPrefetchedMediaSources = prefetchedMediaSources != null;
             _subtitleStreamsLoaded = _hasPrefetchedSubtitleStreams;
             _mediaSourcesLoaded = _hasPrefetchedMediaSources;
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
             var backdropItemId =
@@ -117,6 +113,7 @@ namespace JellyfinTizen.Screens
                 apiKey,
                 maxWidth: 1920,
                 fallbackBackdropItemId: backdropItemId != _episode.Id ? backdropItemId : null);
+            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -128,7 +125,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = UiTheme.DetailsBackdropDim
+                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
             };
             var content = new View
             {

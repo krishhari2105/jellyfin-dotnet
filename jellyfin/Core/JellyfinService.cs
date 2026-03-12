@@ -342,24 +342,31 @@ namespace JellyfinTizen.Core
         }
 
         public async Task<(List<JellyfinMovie> Items, int TotalRecordCount)> GetEpisodesPageAsync(
+            string seriesId,
             string seasonId,
             int startIndex,
             int limit,
             bool lightweight = true)
         {
+            if (string.IsNullOrWhiteSpace(seriesId))
+                throw new ArgumentException("Series ID is required for episode queries.", nameof(seriesId));
+
             int clampedStart = Math.Max(0, startIndex);
             int clampedLimit = Math.Max(1, limit);
             string fields = lightweight ? EpisodeListFields : FullMediaFields;
+            string seasonFilter = string.IsNullOrWhiteSpace(seasonId)
+                ? string.Empty
+                : $"&SeasonId={seasonId}";
 
             var url =
-                $"/Users/{UserId}/Items?ParentId={seasonId}" +
-                "&IncludeItemTypes=Episode" +
-                "&Recursive=true" +
+                $"/Shows/{seriesId}/Episodes?UserId={UserId}" +
+                seasonFilter +
                 $"&Fields={fields}" +
-                "&SortBy=IndexNumber" +
+                "&IsMissing=false" +
+                "&SortBy=ParentIndexNumber,IndexNumber" +
+                "&SortOrder=Ascending" +
                 $"&StartIndex={clampedStart}" +
-                $"&Limit={clampedLimit}" +
-                $"&UserId={UserId}";
+                $"&Limit={clampedLimit}";
 
             var json = await GetAsync(url);
 
@@ -378,7 +385,7 @@ namespace JellyfinTizen.Core
             return (parsedItems, Math.Max(totalRecordCount, clampedStart + parsedItems.Count));
         }
 
-        public async Task<List<JellyfinMovie>> GetEpisodesAsync(string seasonId, bool lightweight = false)
+        public async Task<List<JellyfinMovie>> GetEpisodesAsync(string seriesId, string seasonId = null, bool lightweight = false)
         {
             const int PageSize = 200;
             int nextStart = 0;
@@ -388,6 +395,7 @@ namespace JellyfinTizen.Core
             while (nextStart < totalCount)
             {
                 var (items, totalRecordCount) = await GetEpisodesPageAsync(
+                    seriesId,
                     seasonId,
                     nextStart,
                     PageSize,

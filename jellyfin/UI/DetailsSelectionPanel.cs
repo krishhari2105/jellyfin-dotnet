@@ -20,6 +20,9 @@ namespace JellyfinTizen.UI
 
     public sealed class DetailsSelectionPanel
     {
+        private const int DetailsPanelListHeight = 380;
+        private const int DetailsPanelHeight = UiTheme.PlayerOverlayHeaderHeight + DetailsPanelListHeight;
+
         private readonly View _overlay;
         private readonly View _panel;
         private readonly TextLabel _titleLabel;
@@ -41,10 +44,10 @@ namespace JellyfinTizen.UI
             _panel = new View
             {
                 WidthSpecification = UiTheme.PlayerOverlayWidth,
-                HeightSpecification = UiTheme.PlayerOverlayHeight,
+                HeightSpecification = DetailsPanelHeight,
                 BackgroundColor = MonochromeAuthFactory.PanelFallbackColor,
                 PositionX = Math.Max(30, Window.Default.Size.Width - UiTheme.PlayerOverlayWidth - 50),
-                PositionY = Math.Max(100, Window.Default.Size.Height - UiTheme.PlayerOverlayHeight - 280),
+                PositionY = Math.Max(100, Window.Default.Size.Height - DetailsPanelHeight - 280),
                 CornerRadius = MonochromeAuthFactory.PanelCornerRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BorderlineWidth = MonochromeAuthFactory.PanelBorderWidth,
@@ -68,7 +71,7 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 PositionY = UiTheme.PlayerOverlayHeaderHeight,
-                HeightSpecification = UiTheme.PlayerAudioScrollHeight,
+                HeightSpecification = DetailsPanelListHeight,
                 ScrollingDirection = ScrollableBase.Direction.Vertical,
                 BackgroundColor = Color.Transparent
             };
@@ -222,7 +225,7 @@ namespace JellyfinTizen.UI
 
             int viewportHeight = _scrollView.SizeHeight > 0
                 ? (int)Math.Round(_scrollView.SizeHeight)
-                : UiTheme.PlayerAudioScrollHeight;
+                : DetailsPanelListHeight;
             int currentTop = (int)(-_listContainer.PositionY);
             int currentBottom = currentTop + viewportHeight;
 

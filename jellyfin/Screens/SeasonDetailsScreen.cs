@@ -26,6 +26,7 @@ namespace JellyfinTizen.Screens
 
         private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _season;
+        private readonly ImageView _backdropView;
         private View _infoColumn;
         private View _episodeViewport;
         private View _episodeRowContainer;
@@ -40,27 +41,22 @@ namespace JellyfinTizen.Screens
         private TextLabel _episodeLoadingText;
         private Animation _episodeScrollAnimation;
         private int _episodeCardTextHeight = PreferredEpisodeCardTextHeight;
+        private bool _seriesBackdropResolved;
 
         public SeasonDetailsScreen(JellyfinMovie season)
         {
             _season = season;
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
 
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
-            var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
-                _season,
-                serverUrl,
-                apiKey,
-                maxWidth: 1920,
-                fallbackBackdropItemId: _season.SeriesId);
+            var backdropUrl = !string.IsNullOrWhiteSpace(_season.SeriesId)
+                ? JellyfinImageUrlBuilder.BuildImageUrl(serverUrl, _season.SeriesId, "Backdrop", 1920, 90, apiKey)
+                : JellyfinImageUrlBuilder.BuildBackdropUrl(_season, serverUrl, apiKey, maxWidth: 1920);
+            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
 
-            var backdrop = new ImageView
+            _backdropView = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
@@ -72,7 +68,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = UiTheme.DetailsBackdropDim
+                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
             };
 
             var content = new View
@@ -159,7 +155,7 @@ namespace JellyfinTizen.Screens
             content.Add(posterFrame);
             content.Add(_infoColumn);
 
-            root.Add(backdrop);
+            root.Add(_backdropView);
             root.Add(dimOverlay);
             root.Add(content);
 
@@ -168,21 +164,13 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
-            if (_episodes == null)
+            if (!_seriesBackdropResolved && !string.IsNullOrWhiteSpace(_season.SeriesId))
             {
+                _ = ResolveSeriesBackdropAsync();
+            }
+
+            if (_episodes == null || _episodes.Count == 0)
                 _ = LoadEpisodesAsync();
-            }
-            else if (_episodeViews.Count > 0)
-            {
-                _isEpisodeViewFocused = true;
-
-                // FIX: Restore previous index
-                int targetIndex = (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
-                    ? _episodeIndex
-                    : 0;
-
-                FocusEpisode(targetIndex);
-            }
         }
 
         public override void OnHide()
@@ -196,6 +184,7 @@ namespace JellyfinTizen.Screens
                 return;
 
             _isEpisodeLoadInProgress = true;
+
             var loading = new TextLabel("Loading episodes...")
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -208,6 +197,7 @@ namespace JellyfinTizen.Screens
             try
             {
                 var (items, totalRecordCount) = await AppState.Jellyfin.GetEpisodesPageAsync(
+                    _season.SeriesId,
                     _season.Id,
                     startIndex: 0,
                     limit: EpisodePageSize,
@@ -221,15 +211,20 @@ namespace JellyfinTizen.Screens
                 _hasMoreEpisodes = firstPage.Count > 0 || _totalEpisodeCount > 0;
 
                 EnsureEpisodeSection();
+                ResetEpisodeSection();
+                UpdateEpisodeViewportHeight();
                 AppendEpisodeCards(firstPage);
                 _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount;
             }
             catch
             {
-                _episodes = new List<JellyfinMovie>();
-                _totalEpisodeCount = 0;
-                _nextEpisodeStartIndex = 0;
-                _hasMoreEpisodes = false;
+                if (_episodes == null)
+                {
+                    _episodes = new List<JellyfinMovie>();
+                    _totalEpisodeCount = 0;
+                    _nextEpisodeStartIndex = 0;
+                    _hasMoreEpisodes = false;
+                }
             }
             finally
             {
@@ -247,6 +242,36 @@ namespace JellyfinTizen.Screens
             _isEpisodeViewFocused = true;
             FocusEpisode(0);
             _ = LoadMoreEpisodesAsync(force: false);
+        }
+
+        private void ResetEpisodeSection()
+        {
+            if (_episodeRowContainer != null)
+            {
+                while (_episodeRowContainer.ChildCount > 0)
+                {
+                    var child = _episodeRowContainer.GetChildAt(0);
+                    if (child == null)
+                        break;
+
+                    _episodeRowContainer.Remove(child);
+                }
+
+                _episodeRowContainer.PositionX = FocusPad;
+            }
+
+            _episodeViews.Clear();
+            _episodes = new List<JellyfinMovie>();
+            _episodeIndex = -1;
+        }
+
+        private void UpdateEpisodeViewportHeight()
+        {
+            if (_episodeViewport == null)
+                return;
+
+            int cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
+            _episodeViewport.HeightSpecification = cardHeight + (FocusPad * 2);
         }
 
         private void EnsureEpisodeSection()
@@ -359,6 +384,7 @@ namespace JellyfinTizen.Screens
             try
             {
                 var (items, totalRecordCount) = await AppState.Jellyfin.GetEpisodesPageAsync(
+                    _season.SeriesId,
                     _season.Id,
                     startIndex: _nextEpisodeStartIndex,
                     limit: EpisodePageSize,
@@ -383,6 +409,35 @@ namespace JellyfinTizen.Screens
             {
                 _isEpisodeLoadInProgress = false;
                 SetEpisodeLoadingText(string.Empty, visible: false);
+            }
+        }
+
+        private async Task ResolveSeriesBackdropAsync()
+        {
+            if (_seriesBackdropResolved || string.IsNullOrWhiteSpace(_season.SeriesId))
+                return;
+
+            _seriesBackdropResolved = true;
+
+            try
+            {
+                var series = await AppState.Jellyfin.GetItemAsync(_season.SeriesId);
+                var apiKey = Uri.EscapeDataString(AppState.AccessToken);
+                var serverUrl = AppState.Jellyfin.ServerUrl;
+                var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(series, serverUrl, apiKey, maxWidth: 1920);
+
+                if (string.IsNullOrWhiteSpace(backdropUrl))
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    if (_backdropView != null)
+                        _backdropView.ResourceUrl = backdropUrl;
+                });
+            }
+            catch
+            {
+                // Keep the optimistic series-backdrop URL already assigned in the constructor.
             }
         }
 

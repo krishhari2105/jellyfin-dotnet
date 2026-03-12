@@ -33,23 +33,58 @@ namespace JellyfinTizen.Screens
             List<MediaStream> subtitleStreams = null;
             List<MediaSourceInfo> mediaSources = null;
             JellyfinMovie detailedEpisode = null;
+            JellyfinMovie serverEpisode = null;
 
             try
             {
                 var subtitleTask = AppState.Jellyfin.GetSubtitleStreamsAsync(_episode.Id);
                 var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
                 var itemTask = AppState.Jellyfin.GetItemAsync(_episode.Id);
-                await Task.WhenAll(subtitleTask, playbackTask, itemTask);
 
-                subtitleStreams = subtitleTask.Result ?? new List<MediaStream>();
-                mediaSources = playbackTask.Result?.MediaSources ?? new List<MediaSourceInfo>();
-                detailedEpisode = MergeEpisode(_episode, itemTask.Result);
+                try
+                {
+                    serverEpisode = await itemTask;
+                }
+                catch
+                {
+                    serverEpisode = null;
+                }
+
+                try
+                {
+                    subtitleStreams = await subtitleTask ?? new List<MediaStream>();
+                }
+                catch
+                {
+                    subtitleStreams = new List<MediaStream>();
+                }
+
+                try
+                {
+                    mediaSources = (await playbackTask)?.MediaSources ?? new List<MediaSourceInfo>();
+                }
+                catch
+                {
+                    mediaSources = new List<MediaSourceInfo>();
+                }
+
+                if (serverEpisode == null)
+                {
+                    await EnsureMinimumDisplayTimeAsync(shownAt);
+
+                    if (GetParent() != null)
+                        NavigationService.NavigateBack(animated: false);
+
+                    return;
+                }
+
+                detailedEpisode = MergeEpisode(_episode, serverEpisode);
             }
             catch
             {
-                subtitleStreams = subtitleStreams ?? new List<MediaStream>();
-                mediaSources = mediaSources ?? new List<MediaSourceInfo>();
-                detailedEpisode = detailedEpisode ?? _episode;
+                subtitleStreams ??= new List<MediaStream>();
+                mediaSources ??= new List<MediaSourceInfo>();
+                detailedEpisode ??= _episode;
             }
 
             if (mediaSources.Count == 0)
@@ -61,17 +96,20 @@ namespace JellyfinTizen.Screens
                 });
             }
 
-            var elapsedMs = (DateTime.UtcNow - shownAt).TotalMilliseconds;
-            if (elapsedMs < 280)
-            {
-                await Task.Delay((int)(280 - elapsedMs));
-            }
+            await EnsureMinimumDisplayTimeAsync(shownAt);
 
             NavigationService.Navigate(
                 new EpisodeDetailsScreen(detailedEpisode ?? _episode, subtitleStreams, mediaSources),
                 addToStack: false,
                 animated: false
             );
+        }
+
+        private static async Task EnsureMinimumDisplayTimeAsync(DateTime shownAt)
+        {
+            var elapsedMs = (DateTime.UtcNow - shownAt).TotalMilliseconds;
+            if (elapsedMs < 280)
+                await Task.Delay((int)(280 - elapsedMs));
         }
 
         private static string BuildLoadingMessage(JellyfinMovie item)

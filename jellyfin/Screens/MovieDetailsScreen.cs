@@ -42,10 +42,10 @@ namespace JellyfinTizen.Screens
         private const int SubtitleActionButtonIconSize = 34;
         private const int DetailsHorizontalPadding = 90;
         private const int DetailsColumnGap = 60;
-        private const int TitleLogoMaxWidth = 420;
+        private const int TitleLogoMaxWidth = 720;
         private const int TitleLogoQuality = 76;
-        private const int TitleLogoDisplayWidth = 560;
-        private const int TitleLogoDisplayHeight = 104;
+        private const int TitleLogoDisplayWidth = 720;
+        private const int TitleLogoDisplayHeight = 136;
         private readonly JellyfinMovie _mediaItem;
         private readonly bool _resumeAvailable;
         private View _playButton;
@@ -98,11 +98,7 @@ namespace JellyfinTizen.Screens
         {
             _mediaItem = movie;
             _resumeAvailable = movie.PlaybackPositionTicks > 0;
-            var root = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
-            };
+            var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
@@ -111,6 +107,7 @@ namespace JellyfinTizen.Screens
                 apiKey,
                 maxWidth: 1920,
                 fallbackBackdropItemId: _mediaItem.IsEpisode ? _mediaItem.SeriesId : null);
+            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -122,7 +119,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = UiTheme.DetailsBackdropDim
+                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
             };
             var content = new View
             {
