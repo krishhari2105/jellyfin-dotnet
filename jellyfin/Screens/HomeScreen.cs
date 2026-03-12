@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
@@ -572,31 +573,44 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async void OpenLibrary(JellyfinLibrary lib)
+        private void OpenLibrary(JellyfinLibrary lib)
         {
-            var loadingShownAt = DateTime.UtcNow;
-            RunOnUiThread(() =>
-            {
-                NavigationService.Navigate(
-                    new LoadingScreen("Loading items...")
-                );
-            });
+            _ = OpenLibraryAsync(lib);
+        }
 
-            var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
-            var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
-            if (elapsedMs < 280)
+        private async Task OpenLibraryAsync(JellyfinLibrary lib)
+        {
+            try
             {
-                await System.Threading.Tasks.Task.Delay((int)(280 - elapsedMs));
+                var loadingShownAt = DateTime.UtcNow;
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LoadingScreen("Loading items...")
+                    );
+                });
+
+                var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
+                var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
+                if (elapsedMs < 280)
+                {
+                    await Task.Delay((int)(280 - elapsedMs));
+                }
+
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LibraryMoviesGridScreen(lib, items),
+                        addToStack: false,
+                        animated: false
+                    );
+                });
             }
-
-            RunOnUiThread(() =>
+            catch (Exception ex)
             {
-                NavigationService.Navigate(
-                    new LibraryMoviesGridScreen(lib, items),
-                    addToStack: false,
-                    animated: false
-                );
-            });
+                Console.WriteLine($"[HomeScreen] Failed to open library '{lib?.Name}': {ex.Message}");
+                RunOnUiThread(() => NavigationService.NavigateBack(animated: false));
+            }
         }
 
         private void FocusSettings(bool focused)

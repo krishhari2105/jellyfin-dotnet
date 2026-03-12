@@ -84,7 +84,7 @@ namespace JellyfinTizen.Screens
                 case AppKey.Enter:
                     if (focused == _continueButton)
                     {
-                        OnContinue();
+                        _ = OnContinueAsync();
                         return;
                     }
                     break;
@@ -96,7 +96,7 @@ namespace JellyfinTizen.Screens
             MonochromeAuthFactory.SetButtonFocusState(_continueButton, primary: true, focused: focused);
         }
 
-        private async void OnContinue()
+        private async Task OnContinueAsync()
         {
             var url = _serverInput.Text?.Trim();
             if (string.IsNullOrEmpty(url))

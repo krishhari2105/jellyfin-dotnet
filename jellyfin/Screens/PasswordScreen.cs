@@ -107,7 +107,7 @@ namespace JellyfinTizen.Screens
 
                 case AppKey.Enter:
                     if (_loginFocused)
-                        Login();
+                        _ = LoginAsync();
                     break;
             }
         }
@@ -128,7 +128,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async void Login()
+        private async Task LoginAsync()
         {
             var password = SanitizePassword(_passwordInput.Text);
             var username = AppState.Username?.Trim();

@@ -82,6 +82,7 @@ namespace JellyfinTizen.Core
         // STEP 2 will use this
         public async Task<string> GetAsync(string path)
         {
+            EnsureConnected();
             var response = await _http.GetAsync(ServerUrl + path);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
@@ -94,6 +95,7 @@ namespace JellyfinTizen.Core
 
         public async Task PostAsync(string path)
         {
+            EnsureConnected();
             var response = await _http.PostAsync(ServerUrl + path, null);
             
             if (!response.IsSuccessStatusCode)
@@ -210,6 +212,7 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body, bool useCamelCase)
         {
+            EnsureConnected();
             var json = SerializeJson(body, useCamelCase);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -228,6 +231,12 @@ namespace JellyfinTizen.Core
             }
 
             return await response.Content.ReadAsStringAsync();
+        }
+
+        private void EnsureConnected()
+        {
+            if (_http == null || string.IsNullOrWhiteSpace(ServerUrl))
+                throw new InvalidOperationException("JellyfinService is not connected. Call Connect(serverUrl) first.");
         }
 
         private static bool IsAuthenticationRejection(HttpStatusCode? statusCode)
@@ -269,17 +278,22 @@ namespace JellyfinTizen.Core
             var json = await GetAsync($"/Users/{userId}/Views");
 
             using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
+            if (!TryGetItemsArray(doc.RootElement, out var items))
+                return new List<JellyfinLibrary>();
 
             var libraries = new List<JellyfinLibrary>();
 
             foreach (var item in items.EnumerateArray())
             {
-                var collectionType = item.GetProperty("CollectionType").GetString();
-
+                var collectionType = TryGetString(item, "CollectionType");
                 if (!JellyfinLibrary.IsSupportedCollectionType(collectionType))
                     continue;
-                
+
+                var id = TryGetString(item, "Id");
+                var name = TryGetString(item, "Name");
+                if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
+                    continue;
+
                 var hasPrimary = false;
                 if (item.TryGetProperty("ImageTags", out var imageTags) &&
                     imageTags.ValueKind == JsonValueKind.Object)
@@ -290,8 +304,8 @@ namespace JellyfinTizen.Core
 
                 libraries.Add(new JellyfinLibrary
                 {
-                    Id = item.GetProperty("Id").GetString(),
-                    Name = item.GetProperty("Name").GetString(),
+                    Id = id,
+                    Name = name,
                     CollectionType = collectionType,
                     HasPrimaryImage = hasPrimary
                 });
@@ -318,9 +332,9 @@ namespace JellyfinTizen.Core
             var json = await GetAsync(url);
 
             using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
-
-            return ParseMediaItems(items);
+            return TryGetItemsArray(doc.RootElement, out var items)
+                ? ParseMediaItems(items)
+                : new List<JellyfinMovie>();
         }
 
         public async Task<List<JellyfinMovie>> GetSeasonsAsync(string seriesId)
@@ -336,9 +350,9 @@ namespace JellyfinTizen.Core
             var json = await GetAsync(url);
 
             using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
-
-            return ParseMediaItems(items);
+            return TryGetItemsArray(doc.RootElement, out var items)
+                ? ParseMediaItems(items)
+                : new List<JellyfinMovie>();
         }
 
         public async Task<(List<JellyfinMovie> Items, int TotalRecordCount)> GetEpisodesPageAsync(
@@ -442,9 +456,9 @@ namespace JellyfinTizen.Core
             var json = await GetAsync(url);
 
             using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
-
-            return ParseMediaItems(items);
+            return TryGetItemsArray(doc.RootElement, out var items)
+                ? ParseMediaItems(items)
+                : new List<JellyfinMovie>();
         }
 
         public async Task<List<JellyfinMovie>> GetNextUpAsync(string tvLibraryId, int limit)
@@ -518,6 +532,12 @@ namespace JellyfinTizen.Core
             }
 
             return null;
+        }
+
+
+        private static bool TryGetItemsArray(JsonElement root, out JsonElement items)
+        {
+            return root.TryGetProperty("Items", out items) && items.ValueKind == JsonValueKind.Array;
         }
 
         private List<JellyfinMovie> ParseMediaItems(JsonElement items)

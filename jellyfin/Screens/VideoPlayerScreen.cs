@@ -315,7 +315,12 @@ namespace JellyfinTizen.Screens
             BackgroundColor = Color.Black;
         }
 
-        private async void StartPlayback()
+        private void StartPlayback()
+        {
+            _ = StartPlaybackAsync();
+        }
+
+        private async Task StartPlaybackAsync()
         {
             int playbackToken = ++_playbackToken;
             var playbackMovie = _movie;
@@ -3603,7 +3608,12 @@ namespace JellyfinTizen.Screens
             PlayNextEpisode();
         }
 
-        private async void SkipIntro()
+        private void SkipIntro()
+        {
+            _ = SkipIntroAsync();
+        }
+
+        private async Task SkipIntroAsync()
         {
             if (_player == null || !_hasIntroSegment)
                 return;
@@ -5025,7 +5035,12 @@ namespace JellyfinTizen.Screens
                 $"jf=[{jellyfinList}],reqIdx={reqIndex},reqEmbOrd={reqOrd},native={nativeSelected}/{nativeCount},langs=[{nativeList}]");
         }
 
-        private async void SelectSubtitle()
+        private void SelectSubtitle()
+        {
+            _ = SelectSubtitleAsync();
+        }
+
+        private async Task SelectSubtitleAsync()
         {
             if (_subtitleListContainer == null) return;
             if (_subtitleIndex < 0 || _subtitleIndex >= _subtitleListContainer.ChildCount) return;
@@ -6084,7 +6099,12 @@ namespace JellyfinTizen.Screens
             }
         }
         
-        private async void PlayNextEpisode()
+        private void PlayNextEpisode()
+        {
+            _ = PlayNextEpisodeAsync();
+        }
+
+        private async Task PlayNextEpisodeAsync()
         {
             if (_isEpisodeSwitchInProgress)
                 return;

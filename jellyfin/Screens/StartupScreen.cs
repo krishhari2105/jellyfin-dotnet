@@ -30,7 +30,7 @@ namespace JellyfinTizen.Screens
             }
 
             _loaded = true;
-            Load();
+            _ = LoadAsync();
         }
 
         public override void OnHide()
@@ -40,7 +40,7 @@ namespace JellyfinTizen.Screens
             _fallbackTimer = null;
         }
 
-        private async void Load()
+        private async Task LoadAsync()
         {
             if (_loadingVisual == null)
             {

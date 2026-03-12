@@ -187,12 +187,22 @@ namespace JellyfinTizen.Core
             );
         }
 
-        public static async void NavigateWithLoading(
+        public static void NavigateWithLoading(
             Func<ScreenBase> screenFactory,
             string message = "Loading...",
             bool addToStack = true,
             bool animated = true,
             int minDisplayMs = 220)
+        {
+            _ = NavigateWithLoadingAsync(screenFactory, message, addToStack, animated, minDisplayMs);
+        }
+
+        private static async Task NavigateWithLoadingAsync(
+            Func<ScreenBase> screenFactory,
+            string message,
+            bool addToStack,
+            bool animated,
+            int minDisplayMs)
         {
             if (_window == null || screenFactory == null)
                 return;
@@ -215,8 +225,9 @@ namespace JellyfinTizen.Core
             {
                 target = screenFactory();
             }
-            catch
+            catch (Exception ex)
             {
+                Console.WriteLine($"[Navigation] NavigateWithLoading factory failed: {ex.Message}");
                 if (ReferenceEquals(_currentScreen, loadingScreen))
                     NavigateBack(animated: false);
                 return;
@@ -613,7 +624,7 @@ namespace JellyfinTizen.Core
 
         private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
         {
-            return UseBlackScreenProfile(outgoing, incoming);
+            return !UseBlackScreenProfile(outgoing, incoming);
         }
 
         private static bool UseBlackScreenProfile(ScreenBase outgoing, ScreenBase incoming)
