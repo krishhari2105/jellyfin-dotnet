@@ -9,6 +9,8 @@ namespace JellyfinTizen.UI
     {
         private const int HiddenCursorWidth = 0;
         private const int VisibleCursorWidth = 2;
+        private const int AuthPlaceholderCursorHeight = 30;
+        private const int AuthPlaceholderCursorBlinkIntervalMs = 530;
         private const int AuthPanelWidth = 760;
         private const int AuthPanelYOffset = 0;
         private const int AuthPanelSidePadding = 52;
@@ -18,16 +20,10 @@ namespace JellyfinTizen.UI
         private const int AuthButtonHeight = 74;
         private const float AuthTitleSize = 42.0f;
         private const float AuthSubtitleSize = 22.0f;
-        private static readonly bool EnableAuthBackgroundBlur = false;
-        private static readonly bool EnableAuthBlurDiagnostics = false;
         private static readonly Color AuthBackdropColor = new Color(9f / 255f, 15f / 255f, 31f / 255f, 1f);
-        private static readonly Color AuthBackdropBlueWash = new Color(0f, 0f, 0f, 0f);
-        private static readonly Color AuthPanelColor = new Color(7f / 255f, 13f / 255f, 28f / 255f, 0.62f);
-        private static readonly Color AuthPanelFallbackColor = new Color(7f / 255f, 13f / 255f, 28f / 255f, 0.62f);
-        private static readonly Color AuthPanelFallbackBorder = new Color(1f, 1f, 1f, 0.24f);
         private static readonly Color AuthFieldColor = new Color(11f / 255f, 18f / 255f, 34f / 255f, 1f);
         private static readonly Color AuthFieldFocusColor = new Color(18f / 255f, 28f / 255f, 49f / 255f, 1f);
-        private static bool _runtimeBlurActive;
+        private static readonly Color AuthCursorFallbackColor = new Color(1f, 1f, 1f, 0.96f);
         public const float PanelCornerRadius = 24.0f;
         public const float PanelBorderWidth = 1.4f;
         public static readonly Color PanelFallbackColor = new Color(7f / 255f, 13f / 255f, 28f / 255f, 0.62f);
@@ -35,28 +31,12 @@ namespace JellyfinTizen.UI
 
         public static View CreateBackground()
         {
-            _runtimeBlurActive = EnableAuthBackgroundBlur;
-
-            var background = new View
+            return new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 BackgroundColor = AuthBackdropColor
             };
-
-            background.Add(new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = AuthBackdropBlueWash
-            });
-
-            if (EnableAuthBlurDiagnostics)
-                background.Add(CreateBlurDiagnosticBars());
-
-            if (EnableAuthBackgroundBlur)
-                _runtimeBlurActive = TryAttachBackgroundBlur(background);
-            return background;
         }
 
         public static View CreatePanel(int width = AuthPanelWidth, int yOffset = AuthPanelYOffset)
@@ -75,11 +55,9 @@ namespace JellyfinTizen.UI
                 PositionUsesPivotPoint = true,
                 CornerRadius = PanelCornerRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = _runtimeBlurActive ? AuthPanelColor : AuthPanelFallbackColor,
+                BackgroundColor = PanelFallbackColor,
                 BorderlineWidth = PanelBorderWidth,
-                BorderlineColor = _runtimeBlurActive
-                    ? new Color(1f, 1f, 1f, 0.18f)
-                    : AuthPanelFallbackBorder,
+                BorderlineColor = PanelFallbackBorder,
                 Padding = new Extents(
                     AuthPanelSidePadding,
                     AuthPanelSidePadding,
@@ -125,6 +103,7 @@ namespace JellyfinTizen.UI
 
         public static View CreateInputFieldShell(string placeholder, out TextField field)
         {
+            int textFieldHeight = 38;
             var shell = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -140,8 +119,8 @@ namespace JellyfinTizen.UI
             field = new TextField
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 38,
-                PositionY = (AuthFieldHeight - 38) / 2,
+                HeightSpecification = textFieldHeight,
+                PositionY = (AuthFieldHeight - textFieldHeight) / 2,
                 PointSize = 26,
                 TextColor = new Color(1f, 1f, 1f, 0.96f),
                 VerticalAlignment = VerticalAlignment.Center,
@@ -153,37 +132,85 @@ namespace JellyfinTizen.UI
             };
             var input = field;
 
-            var placeholderMap = new PropertyMap();
-            placeholderMap.Add("text", new PropertyValue(placeholder));
-            placeholderMap.Add("textColor", new PropertyValue(new Color(1f, 1f, 1f, 0.48f)));
-            placeholderMap.Add("pointSize", new PropertyValue(26.0f));
-            placeholderMap.Add("horizontalAlignment", new PropertyValue("BEGIN"));
-            placeholderMap.Add("verticalAlignment", new PropertyValue("CENTER"));
+            var placeholderMap = CreateInputPlaceholderMap(placeholder);
+            var hiddenPlaceholderMap = CreateInputPlaceholderMap(string.Empty);
             input.Placeholder = placeholderMap;
-            input.DecorationBoundingBox = new Rectangle(12, 0, 4076, 38);
+            input.DecorationBoundingBox = new Rectangle(12, 0, 4076, textFieldHeight);
+            var placeholderCursorColor = TryResolveNativeCursorColor(input, out var nativeCursorColor)
+                ? nativeCursorColor
+                : AuthCursorFallbackColor;
+
+            var placeholderCursor = new View
+            {
+                WidthSpecification = VisibleCursorWidth,
+                HeightSpecification = AuthPlaceholderCursorHeight,
+                PositionX = 12,
+                PositionY = input.PositionY + ((textFieldHeight - AuthPlaceholderCursorHeight) / 2),
+                BackgroundColor = placeholderCursorColor,
+                CornerRadius = 1.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                Opacity = 0.0f
+            };
+            bool placeholderCursorVisible = true;
+            var placeholderCursorBlinkTimer = new Timer(AuthPlaceholderCursorBlinkIntervalMs);
+            placeholderCursorBlinkTimer.Tick += (_, _) =>
+            {
+                placeholderCursorVisible = !placeholderCursorVisible;
+                placeholderCursor.Opacity = placeholderCursorVisible ? 1.0f : 0.0f;
+                return true;
+            };
+
+            bool isFocused = false;
+            void SyncInputVisualState()
+            {
+                bool isEmpty = string.IsNullOrEmpty(input.Text);
+                bool showPlaceholderCursor = isFocused && isEmpty;
+                input.CursorWidth = isFocused && !isEmpty
+                    ? VisibleCursorWidth
+                    : HiddenCursorWidth;
+                input.Placeholder = !isFocused && isEmpty
+                    ? placeholderMap
+                    : hiddenPlaceholderMap;
+                if (showPlaceholderCursor)
+                {
+                    placeholderCursorVisible = true;
+                    placeholderCursor.Opacity = 1.0f;
+                    placeholderCursorBlinkTimer.Stop();
+                    placeholderCursorBlinkTimer.Start();
+                }
+                else
+                {
+                    placeholderCursorBlinkTimer.Stop();
+                    placeholderCursor.Opacity = 0.0f;
+                }
+            }
 
             input.FocusGained += (_, _) =>
             {
+                isFocused = true;
                 shell.BackgroundColor = AuthFieldFocusColor;
                 shell.BorderlineColor = new Color(1f, 1f, 1f, 0.64f);
                 shell.BorderlineWidth = 2.0f;
-                SyncCursorVisibility(input);
+                SyncInputVisualState();
             };
 
             input.FocusLost += (_, _) =>
             {
+                isFocused = false;
                 shell.BackgroundColor = AuthFieldColor;
                 shell.BorderlineColor = new Color(1f, 1f, 1f, 0.16f);
                 shell.BorderlineWidth = 1.4f;
+                SyncInputVisualState();
             };
-            input.TextChanged += (_, _) => SyncCursorVisibility(input);
-            SyncCursorVisibility(input);
+            input.TextChanged += (_, _) => SyncInputVisualState();
+            SyncInputVisualState();
 
             shell.Add(input);
+            shell.Add(placeholderCursor);
             return shell;
         }
 
-        public static View CreateButton(string text, out TextLabel label, bool primary)
+        public static View CreateButton(string text, out TextLabel label)
         {
             int buttonWidth = EstimatePillWidth(text);
             var button = new View
@@ -206,12 +233,12 @@ namespace JellyfinTizen.UI
                 TextColor = new Color(1f, 1f, 1f, 0.96f)
             };
 
-            SetButtonFocusState(button, primary, focused: false);
+            SetButtonFocusState(button, focused: false);
             button.Add(label);
             return button;
         }
 
-        public static void SetButtonFocusState(View button, bool primary, bool focused)
+        public static void SetButtonFocusState(View button, bool focused)
         {
             if (button == null)
                 return;
@@ -255,14 +282,15 @@ namespace JellyfinTizen.UI
             };
         }
 
-        private static void SyncCursorVisibility(TextField field)
+        private static PropertyMap CreateInputPlaceholderMap(string text)
         {
-            if (field == null)
-                return;
-
-            field.CursorWidth = string.IsNullOrEmpty(field.Text)
-                ? HiddenCursorWidth
-                : VisibleCursorWidth;
+            var placeholderMap = new PropertyMap();
+            placeholderMap.Add("text", new PropertyValue(text ?? string.Empty));
+            placeholderMap.Add("textColor", new PropertyValue(new Color(1f, 1f, 1f, 0.48f)));
+            placeholderMap.Add("pointSize", new PropertyValue(26.0f));
+            placeholderMap.Add("horizontalAlignment", new PropertyValue("BEGIN"));
+            placeholderMap.Add("verticalAlignment", new PropertyValue("CENTER"));
+            return placeholderMap;
         }
 
         private static float ResolvePillRadius(View button)
@@ -296,195 +324,46 @@ namespace JellyfinTizen.UI
             }
         }
 
-        private static bool TryAttachBackgroundBlur(View background)
+        private static bool TryResolveNativeCursorColor(TextField field, out Color color)
         {
-            if (background == null)
-                return false;
-
-            try
-            {
-                Type blurType = ResolveGaussianBlurViewType();
-                if (blurType == null)
-                    return false;
-
-                object blurObject = Activator.CreateInstance(blurType);
-                if (blurObject is not View blurView)
-                    return false;
-
-                blurView.WidthResizePolicy = ResizePolicyType.FillToParent;
-                blurView.HeightResizePolicy = ResizePolicyType.FillToParent;
-                blurView.BackgroundColor = AuthBackdropColor;
-                blurView.Opacity = 0.36f;
-
-                SetNumericPropertyIfPresent(blurObject, "BlurStrength", 0.16f);
-                SetNumericPropertyIfPresent(blurObject, "BlurRadius", 14.0f);
-                SetNumericPropertyIfPresent(blurObject, "BlurDownscaleFactor", 1.0f);
-
-                background.Add(blurView);
-                bool activated = InvokeParameterlessMethodIfPresent(blurObject, "ActivateOnce");
-                if (!activated)
-                {
-                    activated = InvokeParameterlessMethodIfPresent(blurObject, "Activate");
-                }
-
-                if (!activated)
-                {
-                    background.Remove(blurView);
-                    blurView.Dispose();
-                    return false;
-                }
-
+            if (TryReadColorProperty(field, "PrimaryCursorColor", out color))
                 return true;
-            }
-            catch
-            {
-                // Blur is optional and device-dependent; ignore unsupported paths.
-                return false;
-            }
+            if (TryReadColorProperty(field, "SecondaryCursorColor", out color))
+                return true;
+            return TryReadColorProperty(field, "CursorColor", out color);
         }
 
-        private static View CreateBlurDiagnosticBars()
+        private static bool TryReadColorProperty(object target, string propertyName, out Color color)
         {
-            int screenWidth = Window.Default.Size.Width;
-            int screenHeight = Window.Default.Size.Height;
-            const int barCount = 14;
-            const int barWidth = 20;
-            const int barHeight = 30;
-            const int barGap = 10;
-            int rowWidth = (barCount * barWidth) + ((barCount - 1) * barGap);
+            color = default;
 
-            var row = new View
-            {
-                WidthSpecification = rowWidth,
-                HeightSpecification = barHeight,
-                PositionX = (screenWidth - rowWidth) / 2,
-                PositionY = (screenHeight / 2) + 118
-            };
-
-            for (int i = 0; i < barCount; i++)
-            {
-                var bar = new View
-                {
-                    WidthSpecification = barWidth,
-                    HeightSpecification = barHeight,
-                    PositionX = i * (barWidth + barGap),
-                    CornerRadius = 6.0f,
-                    CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                    BackgroundColor = (i % 2 == 0)
-                        ? new Color(1f, 1f, 1f, 0.42f)
-                        : new Color(70f / 255f, 130f / 255f, 1f, 0.42f)
-                };
-                row.Add(bar);
-            }
-
-            return row;
-        }
-
-        private static Type ResolveGaussianBlurViewType()
-        {
-            Type type = Type.GetType("Tizen.NUI.GaussianBlurView, Tizen.NUI", false)
-                ?? Type.GetType("Tizen.NUI.BaseComponents.GaussianBlurView, Tizen.NUI", false);
-            if (type != null)
-                return type;
-
-            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-            for (int i = 0; i < assemblies.Length; i++)
-            {
-                var assembly = assemblies[i];
-                var assemblyName = assembly.GetName().Name;
-                if (string.IsNullOrEmpty(assemblyName) || !assemblyName.StartsWith("Tizen.NUI", StringComparison.Ordinal))
-                    continue;
-
-                type = assembly.GetType("Tizen.NUI.GaussianBlurView", false)
-                    ?? assembly.GetType("Tizen.NUI.BaseComponents.GaussianBlurView", false);
-                if (type != null)
-                    return type;
-
-                try
-                {
-                    var types = assembly.GetTypes();
-                    for (int j = 0; j < types.Length; j++)
-                    {
-                        var candidate = types[j];
-                        if (candidate != null && candidate.Name == "GaussianBlurView")
-                            return candidate;
-                    }
-                }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    var partialTypes = ex.Types;
-                    if (partialTypes == null)
-                        continue;
-
-                    for (int j = 0; j < partialTypes.Length; j++)
-                    {
-                        var candidate = partialTypes[j];
-                        if (candidate != null && candidate.Name == "GaussianBlurView")
-                            return candidate;
-                    }
-                }
-            }
-
-            return null;
-        }
-
-        private static bool SetNumericPropertyIfPresent(object target, string propertyName, float value)
-        {
             if (target == null || string.IsNullOrEmpty(propertyName))
                 return false;
 
             var property = target.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.Instance);
-            if (property == null || !property.CanWrite)
-                return false;
-
-            object convertedValue;
-            var type = property.PropertyType;
-            if (type == typeof(float))
-                convertedValue = value;
-            else if (type == typeof(double))
-                convertedValue = (double)value;
-            else if (type == typeof(int))
-                convertedValue = (int)Math.Round(value);
-            else if (type == typeof(uint))
-                convertedValue = (uint)Math.Max(0, (int)Math.Round(value));
-            else
+            if (property == null || !property.CanRead)
                 return false;
 
             try
             {
-                property.SetValue(target, convertedValue);
-                return true;
+                var value = property.GetValue(target);
+                if (value is Color resolvedColor)
+                {
+                    color = resolvedColor;
+                    return true;
+                }
+
+                if (value is Vector4 vector)
+                {
+                    color = new Color(vector.X, vector.Y, vector.Z, vector.W);
+                    return true;
+                }
             }
             catch
             {
-                return false;
             }
-        }
 
-        private static bool InvokeParameterlessMethodIfPresent(object target, string methodName)
-        {
-            if (target == null || string.IsNullOrEmpty(methodName))
-                return false;
-
-            var method = target.GetType().GetMethod(
-                methodName,
-                BindingFlags.Public | BindingFlags.Instance,
-                binder: null,
-                types: Type.EmptyTypes,
-                modifiers: null
-            );
-            if (method == null)
-                return false;
-
-            try
-            {
-                method.Invoke(target, null);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return false;
         }
     }
 }

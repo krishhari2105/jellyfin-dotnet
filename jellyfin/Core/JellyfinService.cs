@@ -55,7 +55,7 @@ namespace JellyfinTizen.Core
             {
                 Timeout = System.TimeSpan.FromSeconds(10)
             };
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinTizen/1.0");
+            _http.DefaultRequestHeaders.UserAgent.ParseAdd($"JellyfinTizen/{ClientVersion}");
 
             _connectedServerUrl = normalizedUrl;
             SetAuthorizationHeader(null);
@@ -82,7 +82,8 @@ namespace JellyfinTizen.Core
         // STEP 2 will use this
         public async Task<string> GetAsync(string path)
         {
-            var response = await _http.GetAsync(ServerUrl + path);
+            EnsureConnected();
+            using var response = await _http.GetAsync(ServerUrl + path);
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
         }
@@ -94,7 +95,8 @@ namespace JellyfinTizen.Core
 
         public async Task PostAsync(string path)
         {
-            var response = await _http.PostAsync(ServerUrl + path, null);
+            EnsureConnected();
+            using var response = await _http.PostAsync(ServerUrl + path, null);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -112,7 +114,7 @@ namespace JellyfinTizen.Core
         public async Task<List<JellyfinUser>> GetPublicUsersAsync()
         {
             var json = await GetAsync("/Users/Public");
-            return JsonSerializer.Deserialize<List<JellyfinUser>>(json);
+            return JsonSerializer.Deserialize<List<JellyfinUser>>(json) ?? new List<JellyfinUser>();
         }
 
         public async Task<(string userId, string username)> GetCurrentUserAsync()
@@ -210,10 +212,11 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body, bool useCamelCase)
         {
+            EnsureConnected();
             var json = SerializeJson(body, useCamelCase);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _http.PostAsync(ServerUrl + path, content);
+            using var response = await _http.PostAsync(ServerUrl + path, content);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -239,6 +242,7 @@ namespace JellyfinTizen.Core
 
         private async Task<string> PostAuthenticateByNameAsync(Dictionary<string, string> body)
         {
+            EnsureConnected();
             var json = SerializeJson(body, useCamelCase: false);
             using var request = new HttpRequestMessage(HttpMethod.Post, ServerUrl + AuthenticateByNamePath)
             {
@@ -248,7 +252,7 @@ namespace JellyfinTizen.Core
             request.Headers.TryAddWithoutValidation("Accept", AuthenticateAcceptHeader);
             request.Headers.TryAddWithoutValidation("Authorization", BuildAuthorizationHeader(string.Empty));
 
-            var response = await _http.SendAsync(request);
+            using var response = await _http.SendAsync(request);
             if (!response.IsSuccessStatusCode)
             {
                 var responseContent = await response.Content.ReadAsStringAsync();
@@ -262,6 +266,14 @@ namespace JellyfinTizen.Core
             }
 
             return await response.Content.ReadAsStringAsync();
+        }
+
+        private void EnsureConnected()
+        {
+            if (_http != null && !string.IsNullOrWhiteSpace(ServerUrl))
+                return;
+
+            throw new InvalidOperationException("Jellyfin service is not connected to a server.");
         }
 
         public async Task<List<JellyfinLibrary>> GetLibrariesAsync(string userId)

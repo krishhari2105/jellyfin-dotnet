@@ -18,8 +18,9 @@ namespace JellyfinTizen.Screens
 
         private TextField _serverInput;
         private View _continueButton;
-        private TextLabel _continueText;
         private TextLabel _errorLabel;
+        private bool _continueInProgress;
+        private System.Threading.Timer _errorTimer;
 
         public ServerSetupScreen()
         {
@@ -29,7 +30,7 @@ namespace JellyfinTizen.Screens
             panel.Add(MonochromeAuthFactory.CreateSubtitle("Enter your server URL to continue."));
 
             var serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
-            _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _continueText, primary: true);
+            _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _);
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(serverInputShell);
@@ -41,6 +42,7 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            _continueInProgress = false;
             if (string.IsNullOrWhiteSpace(_serverInput.Text))
             {
                 var saved = AppState.ServerUrl;
@@ -53,8 +55,17 @@ namespace JellyfinTizen.Screens
             HighlightButton(false);
         }
 
+        public override void OnHide()
+        {
+            _continueInProgress = false;
+            DisposeTimer(ref _errorTimer);
+        }
+
         public void HandleKey(AppKey key)
         {
+            if (_continueInProgress)
+                return;
+
             var focused = FocusManager.Instance.GetCurrentFocusView();
 
             switch (key)
@@ -84,7 +95,7 @@ namespace JellyfinTizen.Screens
                 case AppKey.Enter:
                     if (focused == _continueButton)
                     {
-                        OnContinue();
+                        FireAndForget(OnContinueAsync());
                         return;
                     }
                     break;
@@ -93,42 +104,52 @@ namespace JellyfinTizen.Screens
 
         private void HighlightButton(bool focused)
         {
-            MonochromeAuthFactory.SetButtonFocusState(_continueButton, primary: true, focused: focused);
+            MonochromeAuthFactory.SetButtonFocusState(_continueButton, focused: focused);
         }
 
-        private async void OnContinue()
+        private async Task OnContinueAsync()
         {
+            if (_continueInProgress)
+                return;
+
             var url = _serverInput.Text?.Trim();
             if (string.IsNullOrEmpty(url))
-                return;
-
-            // Auto prepend http or https if not already present
-            var probeResult = await ValidateAndPrependProtocol(url);
-            if (probeResult == null || string.IsNullOrWhiteSpace(probeResult.Url))
             {
-                ShowErrorMessage("Server not found. Please try again.");
+                ShowErrorMessage("Server URL required.");
                 return;
             }
 
-            if (!AppState.CanStoreServer(probeResult.Url))
-            {
-                ShowErrorMessage($"You can save up to {AppState.MaxStoredServers} servers.");
-                return;
-            }
-
-            if (!AppState.TrySaveServer(probeResult.Url, probeResult.Name))
-            {
-                ShowErrorMessage("Unable to save server. Please try again.");
-                return;
-            }
-
-            RunOnUiThread(() =>
-            {
-                NavigationService.Navigate(new LoadingScreen("Fetching users..."));
-            });
+            _continueInProgress = true;
+            DisposeTimer(ref _errorTimer);
+            _errorLabel.Text = string.Empty;
 
             try
             {
+                // Auto prepend http or https if not already present
+                var probeResult = await ValidateAndPrependProtocol(url);
+                if (probeResult == null || string.IsNullOrWhiteSpace(probeResult.Url))
+                {
+                    ShowErrorMessage("Server not found. Please try again.");
+                    return;
+                }
+
+                if (!AppState.CanStoreServer(probeResult.Url))
+                {
+                    ShowErrorMessage($"You can save up to {AppState.MaxStoredServers} servers.");
+                    return;
+                }
+
+                if (!AppState.TrySaveServer(probeResult.Url, probeResult.Name))
+                {
+                    ShowErrorMessage("Unable to save server. Please try again.");
+                    return;
+                }
+
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(new LoadingScreen("Fetching users..."));
+                });
+
                 var users = await AppState.Jellyfin.GetPublicUsersAsync();
                 RunOnUiThread(() =>
                 {
@@ -145,6 +166,10 @@ namespace JellyfinTizen.Screens
                     NavigationService.NavigateBack();
                     ShowErrorMessage("Failed to connect. Please try again.");
                 });
+            }
+            finally
+            {
+                _continueInProgress = false;
             }
         }
 
@@ -183,7 +208,7 @@ namespace JellyfinTizen.Screens
                 using var httpClient = new System.Net.Http.HttpClient();
                 httpClient.Timeout = System.TimeSpan.FromSeconds(5);
                 var normalizedInput = url.TrimEnd('/');
-                var response = await httpClient.GetAsync(normalizedInput + "/System/Info/Public");
+                using var response = await httpClient.GetAsync(normalizedInput + "/System/Info/Public");
                 if (!response.IsSuccessStatusCode)
                     return null;
 
@@ -232,17 +257,7 @@ namespace JellyfinTizen.Screens
 
         private void ShowErrorMessage(string message)
         {
-            _errorLabel.Text = message;
-            
-            // Clear error after 5 seconds
-            var timer = new System.Timers.Timer(5000);
-            timer.Elapsed += (sender, e) =>
-            {
-                RunOnUiThread(() => _errorLabel.Text = string.Empty);
-                timer.Stop();
-                timer.Dispose();
-            };
-            timer.Start();
+            ShowTransientMessage(_errorLabel, message, ref _errorTimer);
         }
     }
 }

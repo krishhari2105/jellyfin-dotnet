@@ -24,7 +24,6 @@ namespace JellyfinTizen.Screens
         private const int EpisodePageSize = 40;
         private const int EpisodePrefetchThreshold = 8;
 
-        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _season;
         private readonly ImageView _backdropView;
         private View _infoColumn;
@@ -39,7 +38,6 @@ namespace JellyfinTizen.Screens
         private int _nextEpisodeStartIndex;
         private int _totalEpisodeCount;
         private TextLabel _episodeLoadingText;
-        private Animation _episodeScrollAnimation;
         private int _episodeCardTextHeight = PreferredEpisodeCardTextHeight;
         private bool _seriesBackdropResolved;
 
@@ -171,11 +169,6 @@ namespace JellyfinTizen.Screens
 
             if (_episodes == null || _episodes.Count == 0)
                 _ = LoadEpisodesAsync();
-        }
-
-        public override void OnHide()
-        {
-            UiAnimator.StopAndDispose(ref _episodeScrollAnimation);
         }
 
         private async Task LoadEpisodesAsync()
@@ -598,7 +591,7 @@ namespace JellyfinTizen.Screens
             }
 
             if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, UiTheme.MediaCardFocusBorder, lightweight: false);
+                MediaCardFocus.ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
             else
                 MediaCardFocus.ClearFrameFocus(frame);
         }
@@ -645,10 +638,7 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            UiAnimator.Replace(
-                ref _episodeScrollAnimation,
-                UiAnimator.AnimateTo(_episodeRowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
-            );
+            _episodeRowContainer.PositionX = targetX;
         }
 
     }

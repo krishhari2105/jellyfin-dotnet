@@ -23,8 +23,6 @@ namespace JellyfinTizen.Screens
             Audio
         }
 
-        private const int PosterWidth = 420;
-        private const int PosterHeight = 630;
         private const float ButtonFocusScale = 1.08f;
         private const int FixedTopContentHeight = 500;
         private const int FixedOverviewViewportHeight = 240;
@@ -82,9 +80,6 @@ namespace JellyfinTizen.Screens
         private bool _actionButtonReflowScheduled;
         private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
         private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
-        private readonly bool _hasPrefetchedSubtitleStreams;
-        private readonly bool _hasPrefetchedMediaSources;
-
         public EpisodeDetailsScreen(
             JellyfinMovie episode,
             List<MediaStream> prefetchedSubtitleStreams = null,
@@ -96,10 +91,8 @@ namespace JellyfinTizen.Screens
                 _subtitleStreams = prefetchedSubtitleStreams;
             if (prefetchedMediaSources != null)
                 _mediaSources = prefetchedMediaSources;
-            _hasPrefetchedSubtitleStreams = prefetchedSubtitleStreams != null;
-            _hasPrefetchedMediaSources = prefetchedMediaSources != null;
-            _subtitleStreamsLoaded = _hasPrefetchedSubtitleStreams;
-            _mediaSourcesLoaded = _hasPrefetchedMediaSources;
+            _subtitleStreamsLoaded = prefetchedSubtitleStreams != null;
+            _mediaSourcesLoaded = prefetchedMediaSources != null;
             var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -580,7 +573,7 @@ namespace JellyfinTizen.Screens
             if (button == null)
                 return;
 
-            UiFactory.SetButtonFocusState(button, primary: true, focused: focused);
+            UiFactory.SetButtonFocusState(button, focused: focused);
             ApplyActionButtonIconState(button, focused);
         }
 

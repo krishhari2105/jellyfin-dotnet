@@ -56,7 +56,7 @@ namespace JellyfinTizen.Screens
                 BorderlineWidth = 1.5f,
                 Focusable = true
             };
-            UiFactory.SetButtonFocusState(_burnInToggle, primary: false, focused: false);
+            UiFactory.SetButtonFocusState(_burnInToggle, focused: false);
 
             _burnInLabel = new TextLabel(GetBurnInLabel())
             {
@@ -79,7 +79,7 @@ namespace JellyfinTizen.Screens
                 BorderlineWidth = 1.5f,
                 Focusable = true
             };
-            UiFactory.SetButtonFocusState(_forceTsToggle, primary: false, focused: false);
+            UiFactory.SetButtonFocusState(_forceTsToggle, focused: false);
 
             _forceTsLabel = new TextLabel(GetForceTsLabel())
             {
@@ -144,8 +144,8 @@ namespace JellyfinTizen.Screens
 
         private void BindToggleFocus(View toggle)
         {
-            toggle.FocusGained += (s, e) => UiFactory.SetButtonFocusState(toggle, primary: false, focused: true);
-            toggle.FocusLost += (s, e) => UiFactory.SetButtonFocusState(toggle, primary: false, focused: false);
+            toggle.FocusGained += (s, e) => UiFactory.SetButtonFocusState(toggle, focused: true);
+            toggle.FocusLost += (s, e) => UiFactory.SetButtonFocusState(toggle, focused: false);
         }
 
         private void ToggleCurrentOption()

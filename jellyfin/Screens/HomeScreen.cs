@@ -5,33 +5,27 @@ using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 using JellyfinTizen.UI;
-using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
     public class HomeScreen : ScreenBase, IKeyHandler
     {
         private const int TopBarHeight = UiTheme.HomeTopBarHeight;
-        private const int RowsStartY = TopBarHeight + UiTheme.HomeRowsTopGap;
         private const int SidePadding = UiTheme.HomeSidePadding;
         private const int FocusBorder = UiTheme.HomeFocusBorder;
         private const int FocusPad = UiTheme.HomeFocusPad;
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
-        private const int LibraryTitleImageGap = 12;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
-        private static readonly bool UseLightweightFocusMode = true;
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _rowViewports = new();
         private readonly List<int> _rowCardWidths = new();
-        private readonly List<int> _rowCardHeights = new();
         private readonly List<int> _rowSpacings = new();
         private readonly List<int> _rowTops = new();
         private readonly List<int> _rowHeights = new();
-        private readonly Dictionary<View, Animation> _focusAnimations = new();
 
         private View _contentViewport;
         private View _verticalContainer;
@@ -46,12 +40,9 @@ namespace JellyfinTizen.Screens
         private int _settingsIndex;
         private bool _settingsVisible;
         private int _settingsPanelBaseX;
-
-        private Animation _horizontalScrollAnimation;
-        private Animation _verticalScrollAnimation;
+        private bool _libraryNavigationInProgress;
 
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
-        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
 
         public HomeScreen(List<HomeRowData> rows)
         {
@@ -111,6 +102,7 @@ namespace JellyfinTizen.Screens
 
             _settingsFocused = false;
             _settingsVisible = false;
+            _libraryNavigationInProgress = false;
             ResetSettingsPanelVisualState();
 
             Highlight(true);
@@ -129,13 +121,6 @@ namespace JellyfinTizen.Screens
             {
                 FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);
             }
-        }
-
-        public override void OnHide()
-        {
-            UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
-            UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
-            UiAnimator.StopAndDisposeAll(_focusAnimations);
         }
 
         private void ResetSettingsPanelVisualState()
@@ -163,7 +148,6 @@ namespace JellyfinTizen.Screens
                 var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
                 var cardHeight = rowInfo.CardHeight + textHeight;
                 var rowHeight = rowInfo.RowHeight + textHeight;
-                //var titleImageGap = row.Kind == HomeRowKind.Libraries ? LibraryTitleImageGap : 0;
                 var titleImageGap = 0;
 
                 var viewportTopPadding = (ushort)Math.Min(FocusPad + titleImageGap, (int)ushort.MaxValue);
@@ -217,7 +201,6 @@ namespace JellyfinTizen.Screens
                 _rowContainers.Add(rowContainer);
                 _rowViewports.Add(viewport);
                 _rowCardWidths.Add(rowInfo.CardWidth);
-                _rowCardHeights.Add(cardHeight);
                 _rowSpacings.Add(rowInfo.Spacing);
                 _rowTops.Add(y);
                 _rowHeights.Add(rowHeight + (FocusPad * 2));
@@ -380,10 +363,10 @@ namespace JellyfinTizen.Screens
             var card = _rowCards[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
+            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
 
             if (focused)
             {
-                AnimateCardScale(scaleTarget, new Vector3(FocusScale, FocusScale, 1f));
                 if (frame != null)
                 {
                     frame.PositionZ = 30;
@@ -394,51 +377,16 @@ namespace JellyfinTizen.Screens
                     card.PositionZ = 30;
                 }
 
-                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);
+                MediaCardFocus.ApplyFrameFocus(frame, _focusColor);
             }
             else
             {
-                AnimateCardScale(scaleTarget, Vector3.One);
                 if (frame != null)
                     frame.PositionZ = 0;
                 card.PositionZ = 0;
 
                 MediaCardFocus.ClearFrameFocus(frame);
             }
-        }
-
-        private void AnimateCardScale(View card, Vector3 targetScale)
-        {
-            if (card == null)
-            {
-                return;
-            }
-
-            if (UseLightweightFocusMode)
-            {
-                if (_focusAnimations.TryGetValue(card, out var existingDirect))
-                {
-                    UiAnimator.StopAndDispose(ref existingDirect);
-                    _focusAnimations.Remove(card);
-                }
-
-                card.Scale = targetScale;
-                return;
-            }
-
-            if (_focusAnimations.TryGetValue(card, out var existing))
-            {
-                UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(card);
-            }
-
-            var animation = UiAnimator.Start(
-                UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(card, "Scale", targetScale),
-                () => _focusAnimations.Remove(card)
-            );
-
-            _focusAnimations[card] = animation;
         }
 
         private void ScrollHorizontalIfNeeded()
@@ -476,17 +424,7 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            if (UseLightweightFocusMode)
-            {
-                UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
-                rowContainer.PositionX = targetX;
-                return;
-            }
-
-            UiAnimator.Replace(
-                ref _horizontalScrollAnimation,
-                UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
-            );
+            rowContainer.PositionX = targetX;
         }
 
         private void ScrollVerticalIfNeeded()
@@ -522,17 +460,7 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            if (UseLightweightFocusMode)
-            {
-                UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
-                _verticalContainer.PositionY = targetY;
-                return;
-            }
-
-            UiAnimator.Replace(
-                ref _verticalScrollAnimation,
-                UiAnimator.AnimateTo(_verticalContainer, "PositionY", targetY, UiAnimator.ScrollDurationMs)
-            );
+            _verticalContainer.PositionY = targetY;
         }
 
         private void ActivateFocusedCard()
@@ -542,7 +470,7 @@ namespace JellyfinTizen.Screens
 
             if (row.Kind == HomeRowKind.Libraries && item.Library != null)
             {
-                OpenLibrary(item.Library);
+                FireAndForget(OpenLibraryAsync(item.Library));
                 return;
             }
 
@@ -572,31 +500,45 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async void OpenLibrary(JellyfinLibrary lib)
+        private async System.Threading.Tasks.Task OpenLibraryAsync(JellyfinLibrary lib)
         {
+            if (lib == null || _libraryNavigationInProgress)
+                return;
+
+            _libraryNavigationInProgress = true;
             var loadingShownAt = DateTime.UtcNow;
-            RunOnUiThread(() =>
+            try
             {
-                NavigationService.Navigate(
-                    new LoadingScreen("Loading items...")
-                );
-            });
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LoadingScreen("Loading items...")
+                    );
+                });
 
-            var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
-            var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
-            if (elapsedMs < 280)
-            {
-                await System.Threading.Tasks.Task.Delay((int)(280 - elapsedMs));
+                var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
+                var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
+                if (elapsedMs < 280)
+                {
+                    await System.Threading.Tasks.Task.Delay((int)(280 - elapsedMs));
+                }
+
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LibraryMoviesGridScreen(lib, items),
+                        addToStack: false
+                    );
+                });
             }
-
-            RunOnUiThread(() =>
+            catch
             {
-                NavigationService.Navigate(
-                    new LibraryMoviesGridScreen(lib, items),
-                    addToStack: false,
-                    animated: false
-                );
-            });
+                RunOnUiThread(() => NavigationService.NavigateBack());
+            }
+            finally
+            {
+                _libraryNavigationInProgress = false;
+            }
         }
 
         private void FocusSettings(bool focused)
@@ -697,7 +639,7 @@ namespace JellyfinTizen.Screens
 
             if (_settingsIndex == 1)
             {
-                _ = LogoutAsync();
+                FireAndForget(LogoutAsync());
                 return;
             }
 
@@ -723,14 +665,29 @@ namespace JellyfinTizen.Screens
                 );
             });
 
-            var users = await AppState.Jellyfin.GetPublicUsersAsync();
-            RunOnUiThread(() =>
+            try
             {
-                NavigationService.Navigate(
-                    new UserSelectScreen(users),
-                    addToStack: false
-                );
-            });
+                var users = await AppState.Jellyfin.GetPublicUsersAsync();
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new UserSelectScreen(users),
+                        addToStack: false
+                    );
+                });
+            }
+            catch
+            {
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        AppState.HasStoredServers()
+                            ? new ServerPickerScreen("Failed to fetch users. Please try again.")
+                            : new ServerSetupScreen(),
+                        addToStack: false
+                    );
+                });
+            }
         }
 
         private void SwitchServer()

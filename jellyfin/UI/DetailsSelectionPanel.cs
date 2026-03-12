@@ -197,7 +197,7 @@ namespace JellyfinTizen.UI
             };
 
             row.Add(label);
-            UiFactory.SetButtonFocusState(row, primary: false, focused: false);
+            UiFactory.SetButtonFocusState(row, focused: false);
             return row;
         }
 
@@ -208,7 +208,7 @@ namespace JellyfinTizen.UI
             {
                 var row = _listContainer.GetChildAt((uint)i);
                 bool selected = i == _selectedIndex;
-                UiFactory.SetButtonFocusState(row, primary: false, focused: selected);
+                UiFactory.SetButtonFocusState(row, focused: selected);
                 row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
             }
         }

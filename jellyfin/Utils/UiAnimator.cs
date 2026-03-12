@@ -10,8 +10,6 @@ namespace JellyfinTizen.Utils
         public const int FocusDurationMs = 120;
         public const int ScrollDurationMs = 160;
         public const int PanelDurationMs = 200;
-        public const int ScreenDurationMs = 240;
-        public const float ScreenSlideDistance = 120f;
 
         private static readonly object _sync = new();
         private static readonly HashSet<Animation> _activeAnimations = new();

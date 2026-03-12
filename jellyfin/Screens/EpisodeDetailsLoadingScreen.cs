@@ -73,7 +73,7 @@ namespace JellyfinTizen.Screens
                     await EnsureMinimumDisplayTimeAsync(shownAt);
 
                     if (GetParent() != null)
-                        NavigationService.NavigateBack(animated: false);
+                        NavigationService.NavigateBack();
 
                     return;
                 }
@@ -100,8 +100,7 @@ namespace JellyfinTizen.Screens
 
             NavigationService.Navigate(
                 new EpisodeDetailsScreen(detailedEpisode ?? _episode, subtitleStreams, mediaSources),
-                addToStack: false,
-                animated: false
+                addToStack: false
             );
         }
 

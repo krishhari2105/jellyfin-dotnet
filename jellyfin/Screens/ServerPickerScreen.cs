@@ -46,6 +46,7 @@ namespace JellyfinTizen.Screens
         private int _selectedActionIndex;
         private bool _cardsFocused;
         private bool _busy;
+        private System.Threading.Timer _errorTimer;
 
         public ServerPickerScreen(string initialErrorMessage = null)
         {
@@ -121,8 +122,8 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            _addButton = MonochromeAuthFactory.CreateButton("Add Server", out _, primary: true);
-            _removeButton = MonochromeAuthFactory.CreateButton("Remove Selected", out _, primary: false);
+            _addButton = MonochromeAuthFactory.CreateButton("Add Server", out _);
+            _removeButton = MonochromeAuthFactory.CreateButton("Remove Selected", out _);
             _actionButtons.Add(_addButton);
             _actionButtons.Add(_removeButton);
             actionRow.Add(_addButton);
@@ -159,6 +160,12 @@ namespace JellyfinTizen.Screens
 
             if (!string.IsNullOrWhiteSpace(_initialErrorMessage))
                 ShowErrorMessage(_initialErrorMessage);
+        }
+
+        public override void OnHide()
+        {
+            _busy = false;
+            DisposeTimer(ref _errorTimer);
         }
 
         public void HandleKey(AppKey key)
@@ -205,7 +212,7 @@ namespace JellyfinTizen.Screens
                     if (_cardsFocused)
                     {
                         if (_cards.Count > 0)
-                            _ = SelectServerAsync(_cards[_selectedCardIndex].Server);
+                            FireAndForget(SelectServerAsync(_cards[_selectedCardIndex].Server));
                     }
                     else
                     {
@@ -338,8 +345,8 @@ namespace JellyfinTizen.Screens
 
             var addFocused = !_cardsFocused && _selectedActionIndex == 0;
             var removeFocused = !_cardsFocused && _selectedActionIndex == 1;
-            MonochromeAuthFactory.SetButtonFocusState(_addButton, primary: true, focused: addFocused);
-            MonochromeAuthFactory.SetButtonFocusState(_removeButton, primary: false, focused: removeFocused);
+            MonochromeAuthFactory.SetButtonFocusState(_addButton, focused: addFocused);
+            MonochromeAuthFactory.SetButtonFocusState(_removeButton, focused: removeFocused);
             _removeButton.Opacity = _cards.Count > 0 ? 1.0f : 0.45f;
         }
 
@@ -662,16 +669,7 @@ namespace JellyfinTizen.Screens
 
         private void ShowErrorMessage(string message)
         {
-            _errorLabel.Text = message ?? string.Empty;
-
-            var timer = new System.Timers.Timer(5000);
-            timer.Elapsed += (_, _) =>
-            {
-                RunOnUiThread(() => _errorLabel.Text = string.Empty);
-                timer.Stop();
-                timer.Dispose();
-            };
-            timer.Start();
+            ShowTransientMessage(_errorLabel, message, ref _errorTimer);
         }
     }
 }

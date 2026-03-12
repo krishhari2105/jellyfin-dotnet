@@ -34,13 +34,11 @@ namespace JellyfinTizen.UI
             return null;
         }
 
-        public static void ApplyFrameFocus(View frame, Color fillColor, Color lineColor, bool lightweight)
+        public static void ApplyFrameFocus(View frame, Color lineColor)
         {
             if (frame == null)
                 return;
 
-            _ = fillColor;
-            _ = lightweight;
             frame.CornerRadius = UiTheme.MediaCardRadius;
             frame.BackgroundColor = Color.Transparent;
             frame.BorderlineWidth = 2.0f;

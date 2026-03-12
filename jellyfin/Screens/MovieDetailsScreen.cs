@@ -615,14 +615,14 @@ namespace JellyfinTizen.Screens
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
             {
                 _episodeViews[_episodeIndex].BackgroundColor = Color.Transparent;
-                AnimateScale(_episodeViews[_episodeIndex], Vector3.One);
+                SetScaleInstant(_episodeViews[_episodeIndex], Vector3.One);
             }
             _episodeIndex = index;
             if (_episodeIndex >= 0 && _episodeIndex < _episodeViews.Count)
             {
                 // Lighter grey for better visibility, no border to keep corners rounded
                 _episodeViews[_episodeIndex].BackgroundColor = new Color(0.35f, 0.35f, 0.35f, 1.0f);
-                AnimateScale(_episodeViews[_episodeIndex], new Vector3(EpisodeFocusScale, EpisodeFocusScale, 1f));
+                SetScaleInstant(_episodeViews[_episodeIndex], new Vector3(EpisodeFocusScale, EpisodeFocusScale, 1f));
                 FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
             }
         }
@@ -745,7 +745,7 @@ namespace JellyfinTizen.Screens
             if (button == null)
                 return;
 
-            UiFactory.SetButtonFocusState(button, primary: true, focused: focused);
+            UiFactory.SetButtonFocusState(button, focused: focused);
             ApplyActionButtonIconState(button, focused);
         }
 
@@ -1027,6 +1027,20 @@ namespace JellyfinTizen.Screens
             );
 
             _focusAnimations[view] = animation;
+        }
+
+        private void SetScaleInstant(View view, Vector3 targetScale)
+        {
+            if (view == null)
+                return;
+
+            if (_focusAnimations.TryGetValue(view, out var existing))
+            {
+                UiAnimator.StopAndDispose(ref existing);
+                _focusAnimations.Remove(view);
+            }
+
+            view.Scale = targetScale;
         }
         private void ActivateFocusedButton()
         {

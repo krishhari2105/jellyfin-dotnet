@@ -12,7 +12,6 @@ namespace JellyfinTizen.Screens
     public class LibraryMoviesGridScreen : ScreenBase, IKeyHandler
     {
         private const int TopBarHeight = UiTheme.HomeTopBarHeight;
-        private const int ContentStartY = TopBarHeight + UiTheme.HomeRowsTopGap;
         private const int TopBarZ = 10;
         private const int TopBarLeftPadding = UiTheme.HomeSidePadding;
         private const int PortraitCardWidth = 260;
@@ -29,7 +28,6 @@ namespace JellyfinTizen.Screens
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
         private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
-        private static readonly bool UseLightweightFocusMode = true;
         private const int PreferredPortraitCardTextHeight = 96;
         private const int PreferredLandscapeCardTextHeight = 80;
         private const int RowBuildBatchSize = 2;
@@ -41,7 +39,6 @@ namespace JellyfinTizen.Screens
         private const int HighQualityDelayMs = 320;
 
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
-        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
 
         private readonly List<JellyfinMovie> _movies;
         private readonly int _cardWidth;
@@ -53,7 +50,6 @@ namespace JellyfinTizen.Screens
         private readonly List<List<View>> _grid = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
-        private readonly Dictionary<View, Animation> _focusAnimations = new();
         private readonly Dictionary<int, List<PosterEntry>> _posterEntriesByRow = new();
 
         private View _contentViewport;
@@ -72,9 +68,6 @@ namespace JellyfinTizen.Screens
         private int _settingsIndex;
         private bool _settingsVisible;
         private int _settingsPanelBaseX;
-
-        private Animation _horizontalScrollAnimation;
-        private Animation _verticalScrollAnimation;
         private Timer _buildTimer;
         private Timer _posterRefreshTimer;
         private Timer _highQualityDelayTimer;
@@ -268,9 +261,6 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
-            UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
-            UiAnimator.StopAndDisposeAll(_focusAnimations);
             _buildTimer?.Stop();
             _posterRefreshTimer?.Stop();
             _highQualityDelayTimer?.Stop();
@@ -661,7 +651,7 @@ namespace JellyfinTizen.Screens
             var card = _grid[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
-            AnimateCardScale(scaleTarget, focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One);
+            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
             if (frame != null)
             {
                 frame.PositionZ = focused ? 20 : 0;
@@ -673,43 +663,9 @@ namespace JellyfinTizen.Screens
             }
 
             if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, _focusColor, UseLightweightFocusMode);
+                MediaCardFocus.ApplyFrameFocus(frame, _focusColor);
             else
                 MediaCardFocus.ClearFrameFocus(frame);
-        }
-
-        private void AnimateCardScale(View card, Vector3 targetScale)
-        {
-            if (card == null)
-            {
-                return;
-            }
-
-            if (UseLightweightFocusMode)
-            {
-                if (_focusAnimations.TryGetValue(card, out var existingDirect))
-                {
-                    UiAnimator.StopAndDispose(ref existingDirect);
-                    _focusAnimations.Remove(card);
-                }
-
-                card.Scale = targetScale;
-                return;
-            }
-
-            if (_focusAnimations.TryGetValue(card, out var existing))
-            {
-                UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(card);
-            }
-
-            var animation = UiAnimator.Start(
-                UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(card, "Scale", targetScale),
-                () => _focusAnimations.Remove(card)
-            );
-
-            _focusAnimations[card] = animation;
         }
 
         private void FocusSettings(bool focused)
@@ -883,20 +839,8 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            if (UseLightweightFocusMode)
-            {
-                UiAnimator.StopAndDispose(ref _horizontalScrollAnimation);
-                rowContainer.PositionX = targetX;
-                StartPosterRefreshTimer(1);
-                return;
-            }
-
-            UiAnimator.Replace(
-                ref _horizontalScrollAnimation,
-                UiAnimator.AnimateTo(rowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
-            );
-            EnsureVisiblePostersLoaded();
-            StartPosterRefreshTimer();
+            rowContainer.PositionX = targetX;
+            StartPosterRefreshTimer(1);
         }
 
         private void ScrollVerticalIfNeeded()
@@ -936,20 +880,8 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            if (UseLightweightFocusMode)
-            {
-                UiAnimator.StopAndDispose(ref _verticalScrollAnimation);
-                _verticalContainer.PositionY = targetY;
-                StartPosterRefreshTimer(1);
-                return;
-            }
-
-            UiAnimator.Replace(
-                ref _verticalScrollAnimation,
-                UiAnimator.AnimateTo(_verticalContainer, "PositionY", targetY, UiAnimator.ScrollDurationMs)
-            );
-            EnsureVisiblePostersLoaded();
-            StartPosterRefreshTimer();
+            _verticalContainer.PositionY = targetY;
+            StartPosterRefreshTimer(1);
         }
 
 

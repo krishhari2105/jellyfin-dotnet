@@ -12,9 +12,10 @@ namespace JellyfinTizen.Screens
     {
         private TextField _passwordInput;
         private View _loginButton;
-        private TextLabel _loginText;
         private bool _loginFocused;
         private TextLabel _errorLabel;
+        private bool _loginInProgress;
+        private System.Threading.Timer _errorTimer;
 
         public PasswordScreen(string username)
         {
@@ -35,7 +36,7 @@ namespace JellyfinTizen.Screens
             ConfigurePasswordImeLayout();
             _passwordInput.FocusGained += (_, _) => ConfigurePasswordImeContext();
 
-            _loginButton = MonochromeAuthFactory.CreateButton("Login", out _loginText, primary: true);
+            _loginButton = MonochromeAuthFactory.CreateButton("Login", out _);
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(passwordInputShell);
@@ -51,7 +52,14 @@ namespace JellyfinTizen.Screens
             FocusManager.Instance.SetCurrentFocusView(_passwordInput);
             ConfigurePasswordImeContext();
             _loginFocused = false;
-            MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
+            _loginInProgress = false;
+            MonochromeAuthFactory.SetButtonFocusState(_loginButton, focused: false);
+        }
+
+        public override void OnHide()
+        {
+            _loginInProgress = false;
+            DisposeTimer(ref _errorTimer);
         }
 
         private void ConfigurePasswordImeLayout()
@@ -91,6 +99,9 @@ namespace JellyfinTizen.Screens
 
         public void HandleKey(AppKey key)
         {
+            if (_loginInProgress)
+                return;
+
             switch (key)
             {
                 case AppKey.Back:
@@ -107,7 +118,7 @@ namespace JellyfinTizen.Screens
 
                 case AppKey.Enter:
                     if (_loginFocused)
-                        Login();
+                        FireAndForget(LoginAsync());
                     break;
             }
         }
@@ -119,32 +130,42 @@ namespace JellyfinTizen.Screens
             if (focused)
             {
                 FocusManager.Instance.SetCurrentFocusView(_loginButton);
-                MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: true);
+                MonochromeAuthFactory.SetButtonFocusState(_loginButton, focused: true);
             }
             else
             {
                 FocusManager.Instance.SetCurrentFocusView(_passwordInput);
-                MonochromeAuthFactory.SetButtonFocusState(_loginButton, primary: true, focused: false);
+                MonochromeAuthFactory.SetButtonFocusState(_loginButton, focused: false);
             }
         }
 
-        private async void Login()
+        private async System.Threading.Tasks.Task LoginAsync()
         {
+            if (_loginInProgress)
+                return;
+
             var password = SanitizePassword(_passwordInput.Text);
             var username = AppState.Username?.Trim();
 
             if (string.IsNullOrEmpty(password))
-                return;
-
-            RunOnUiThread(() =>
             {
-                NavigationService.Navigate(
-                    new LoadingScreen("Signing in...")
-                );
-            });
+                ShowErrorMessage("Password required.");
+                return;
+            }
+
+            _loginInProgress = true;
+            DisposeTimer(ref _errorTimer);
+            _errorLabel.Text = string.Empty;
 
             try
             {
+                RunOnUiThread(() =>
+                {
+                    NavigationService.Navigate(
+                        new LoadingScreen("Signing in...")
+                    );
+                });
+
                 var result = await AppState.Jellyfin.AuthenticateAsync(
                     username,
                     password
@@ -189,6 +210,10 @@ namespace JellyfinTizen.Screens
                     NavigationService.NavigateBack();
                     ShowErrorMessage("Sign-in failed. Please try again.");
                 });
+            }
+            finally
+            {
+                _loginInProgress = false;
             }
         }
 
@@ -242,17 +267,7 @@ namespace JellyfinTizen.Screens
 
         private void ShowErrorMessage(string message)
         {
-            _errorLabel.Text = message;
-            
-            // Clear error after 5 seconds
-            var timer = new System.Timers.Timer(5000);
-            timer.Elapsed += (sender, e) =>
-            {
-                RunOnUiThread(() => _errorLabel.Text = string.Empty);
-                timer.Stop();
-                timer.Dispose();
-            };
-            timer.Start();
+            ShowTransientMessage(_errorLabel, message, ref _errorTimer);
         }
     }
 }

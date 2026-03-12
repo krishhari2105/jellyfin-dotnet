@@ -30,7 +30,7 @@ namespace JellyfinTizen.Screens
             }
 
             _loaded = true;
-            Load();
+            FireAndForget(LoadAsync());
         }
 
         public override void OnHide()
@@ -40,103 +40,118 @@ namespace JellyfinTizen.Screens
             _fallbackTimer = null;
         }
 
-        private async void Load()
+        private async Task LoadAsync()
         {
-            if (_loadingVisual == null)
+            try
             {
-                _loadingVisual = new AppleTvLoadingVisual("Loading...");
-                Add(_loadingVisual.Root);
-            }
-            else
-            {
-                _loadingVisual.SetMessage("Loading...");
-            }
-
-            _loadingVisual.Start();
-
-            // Safety fallback if network calls hang for any reason.
-            _fallbackTimer = new ThreadingTimer(_ =>
-            {
-                if (_navigated)
-                    return;
-
-                _navigated = true;
-                try
+                if (_loadingVisual == null)
                 {
-                    Tizen.Applications.CoreApplication.Post(() =>
+                    _loadingVisual = new AppleTvLoadingVisual("Loading...");
+                    Add(_loadingVisual.Root);
+                }
+                else
+                {
+                    _loadingVisual.SetMessage("Loading...");
+                }
+
+                _loadingVisual.Start();
+
+                // Safety fallback if network calls hang for any reason.
+                _fallbackTimer = new ThreadingTimer(_ =>
+                {
+                    if (_navigated)
+                        return;
+
+                    _navigated = true;
+                    try
+                    {
+                        Tizen.Applications.CoreApplication.Post(() =>
+                        {
+                            NavigationService.Navigate(
+                                CreateServerEntryScreen(),
+                                addToStack: false
+                            );
+                        });
+                    }
+                    catch
                     {
                         NavigationService.Navigate(
                             CreateServerEntryScreen(),
                             addToStack: false
                         );
-                    });
-                }
-                catch
-                {
-                    NavigationService.Navigate(
-                        CreateServerEntryScreen(),
-                        addToStack: false
-                    );
-                }
-            }, null, 12000, Timeout.Infinite);
+                    }
+                }, null, 12000, Timeout.Infinite);
 
-            if (await TryResumeSavedTokenSessionAsync())
-            {
+                if (await TryResumeSavedTokenSessionAsync())
+                {
+                    if (!_navigated)
+                    {
+                        _navigated = true;
+                        _fallbackTimer?.Dispose();
+                        NavigationService.Navigate(
+                            new HomeLoadingScreen(),
+                            addToStack: false
+                        );
+                    }
+                    return;
+                }
+
+                if (AppState.TryRestoreServer())
+                {
+                    if (!_navigated)
+                    {
+                        NavigationService.Navigate(
+                            new LoadingScreen("Fetching users..."),
+                            addToStack: false
+                        );
+                    }
+
+                    try
+                    {
+                        var users = await WithTimeout(
+                            AppState.Jellyfin.GetPublicUsersAsync(),
+                            10000
+                        );
+                        if (!_navigated)
+                        {
+                            _navigated = true;
+                            _fallbackTimer?.Dispose();
+                            NavigationService.Navigate(
+                                new UserSelectScreen(users),
+                                addToStack: false
+                            );
+                        }
+                    }
+                    catch
+                    {
+                        if (!_navigated)
+                        {
+                            _navigated = true;
+                            _fallbackTimer?.Dispose();
+                            NavigationService.Navigate(
+                                CreateServerEntryScreen(),
+                                addToStack: false
+                            );
+                        }
+                    }
+                    return;
+                }
+
                 if (!_navigated)
                 {
                     _navigated = true;
                     _fallbackTimer?.Dispose();
                     NavigationService.Navigate(
-                        new HomeLoadingScreen(),
+                        CreateServerEntryScreen(),
                         addToStack: false
                     );
                 }
-                return;
             }
-
-            if (AppState.TryRestoreServer())
+            catch
             {
-                if (!_navigated)
-                {
-                    NavigationService.Navigate(
-                        new LoadingScreen("Fetching users..."),
-                        addToStack: false
-                    );
-                }
+                if (_navigated)
+                    return;
 
-                try
-                {
-                    var users = await WithTimeout(
-                        AppState.Jellyfin.GetPublicUsersAsync(),
-                        10000
-                    );
-                    if (!_navigated)
-                    {
-                        _navigated = true;
-                        _fallbackTimer?.Dispose();
-                        NavigationService.Navigate(
-                            new UserSelectScreen(users),
-                            addToStack: false
-                        );
-                    }
-                }
-                catch
-                {
-                    if (!_navigated)
-                    {
-                        _navigated = true;
-                        _fallbackTimer?.Dispose();
-                        NavigationService.Navigate(
-                            CreateServerEntryScreen(),
-                            addToStack: false
-                        );
-                    }
-                }
-                return;
-            }
-
-            if (!_navigated)
-            {
                 _navigated = true;
                 _fallbackTimer?.Dispose();
                 NavigationService.Navigate(

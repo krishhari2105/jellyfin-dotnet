@@ -6,51 +6,17 @@ using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Screens;
 using JellyfinTizen.UI;
-using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
-        private enum TransitionProfile
-        {
-            Slide,
-            BlackScreen
-        }
-
-        private readonly struct TransitionSpec
-        {
-            public TransitionSpec(
-                int durationMs,
-                float slideDistance,
-                bool deferIncomingOnShow,
-                bool deferOutgoingOnHide,
-                TransitionProfile profile)
-            {
-                DurationMs = durationMs;
-                SlideDistance = slideDistance;
-                DeferIncomingOnShow = deferIncomingOnShow;
-                DeferOutgoingOnHide = deferOutgoingOnHide;
-                Profile = profile;
-            }
-
-            public int DurationMs { get; }
-            public float SlideDistance { get; }
-            public bool DeferIncomingOnShow { get; }
-            public bool DeferOutgoingOnHide { get; }
-            public TransitionProfile Profile { get; }
-        }
-
-        private static readonly Vector3 UnitScale = new(1f, 1f, 1f);
-        private const int BlackScreenTransitionDurationMs = 180;
         private const int ExitPopupWidth = 660;
         private const int ExitPopupButtonHeight = 64;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
         private static readonly Stack<ScreenBase> _stack = new();
-        private static Animation _screenTransitionAnimation;
-        private static bool _isTransitioning;
         private static View _exitConfirmationOverlay;
         private static View _exitConfirmationPanel;
         private static View _exitStayButton;
@@ -72,9 +38,6 @@ namespace JellyfinTizen.Core
         private static void OnKeyEvent(object sender, Window.KeyEventArgs e)
         {
             if (e.Key.State != Key.StateType.Down)
-                return;
-
-            if (_isTransitioning)
                 return;
 
             // 2. Map the Key
@@ -126,73 +89,28 @@ namespace JellyfinTizen.Core
             handler.HandleKey(key);
         }
 
-        public static void Navigate(ScreenBase screen, bool addToStack = true, bool animated = true)
+        public static void Navigate(ScreenBase screen, bool addToStack = true)
         {
             if (_window == null || screen == null)
                 return;
 
-            if (_currentScreen == null || _isTransitioning)
-            {
-                NavigateImmediate(screen, addToStack);
-                return;
-            }
-
-            var outgoing = _currentScreen;
-            var incoming = screen;
-            if (!ShouldAnimateTransition(outgoing, incoming, animated))
-            {
-                NavigateImmediate(screen, addToStack);
-                return;
-            }
-
-            var transition = GetTransitionSpec(outgoing, incoming);
-            var slide = transition.SlideDistance;
-
-            _isTransitioning = true;
-
-            if (!transition.DeferOutgoingOnHide)
-                outgoing.OnHide();
-            if (addToStack) _stack.Push(outgoing);
-
-            PrepareIncomingForNavigate(incoming, slide, transition.Profile);
-            _window.Add(incoming);
-            _currentScreen = incoming;
-            if (!transition.DeferIncomingOnShow)
-                incoming.OnShow();
-
-            UiAnimator.Replace(
-                ref _screenTransitionAnimation,
-                UiAnimator.Start(
-                    transition.DurationMs,
-                    animation =>
-                    {
-                        ConfigureNavigateAnimation(animation, incoming, outgoing, slide, transition.Profile);
-                    },
-                    () =>
-                    {
-                        ResetScreenTransform(incoming);
-                        if (transition.DeferOutgoingOnHide)
-                        {
-                            try { outgoing.OnHide(); } catch { }
-                        }
-                        CleanupOutgoingAfterNavigate(outgoing, addToStack);
-                        if (transition.DeferIncomingOnShow)
-                        {
-                            try { incoming.OnShow(); } catch { }
-                        }
-                        _isTransitioning = false;
-                        _screenTransitionAnimation = null;
-                    }
-                )
-            );
+            NavigateImmediate(screen, addToStack);
         }
 
-        public static async void NavigateWithLoading(
+        public static void NavigateWithLoading(
             Func<ScreenBase> screenFactory,
             string message = "Loading...",
             bool addToStack = true,
-            bool animated = true,
             int minDisplayMs = 220)
+        {
+            _ = NavigateWithLoadingAsync(screenFactory, message, addToStack, minDisplayMs);
+        }
+
+        private static async Task NavigateWithLoadingAsync(
+            Func<ScreenBase> screenFactory,
+            string message,
+            bool addToStack,
+            int minDisplayMs)
         {
             if (_window == null || screenFactory == null)
                 return;
@@ -200,41 +118,47 @@ namespace JellyfinTizen.Core
             if (_currentScreen is LoadingScreen)
             {
                 var immediate = screenFactory();
-                Navigate(immediate, addToStack, animated);
+                Navigate(immediate, addToStack);
                 return;
             }
 
-            var loadingScreen = new LoadingScreen(message);
-            var shownAt = DateTime.UtcNow;
-            Navigate(loadingScreen, addToStack: addToStack, animated: false);
-
-            await Task.Yield();
-
-            ScreenBase target;
             try
             {
-                target = screenFactory();
+                var loadingScreen = new LoadingScreen(message);
+                var shownAt = DateTime.UtcNow;
+                Navigate(loadingScreen, addToStack: addToStack);
+
+                await Task.Yield();
+
+                ScreenBase target;
+                try
+                {
+                    target = screenFactory();
+                }
+                catch
+                {
+                    if (ReferenceEquals(_currentScreen, loadingScreen))
+                        NavigateBack();
+                    return;
+                }
+
+                var elapsedMs = (DateTime.UtcNow - shownAt).TotalMilliseconds;
+                if (elapsedMs < minDisplayMs)
+                {
+                    await Task.Delay((int)(minDisplayMs - elapsedMs));
+                }
+
+                if (!ReferenceEquals(_currentScreen, loadingScreen))
+                    return;
+
+                Navigate(target, addToStack: false);
             }
             catch
             {
-                if (ReferenceEquals(_currentScreen, loadingScreen))
-                    NavigateBack(animated: false);
-                return;
             }
-
-            var elapsedMs = (DateTime.UtcNow - shownAt).TotalMilliseconds;
-            if (elapsedMs < minDisplayMs)
-            {
-                await Task.Delay((int)(minDisplayMs - elapsedMs));
-            }
-
-            if (!ReferenceEquals(_currentScreen, loadingScreen))
-                return;
-
-            Navigate(target, addToStack: false, animated: animated);
         }
 
-        public static void NavigateBack(bool animated = true)
+        public static void NavigateBack()
         {
             if (_stack.Count == 0)
             {
@@ -242,67 +166,7 @@ namespace JellyfinTizen.Core
                 return;
             }
 
-            if (_currentScreen == null || _isTransitioning)
-            {
-                NavigateBackImmediate();
-                return;
-            }
-
-            var incomingCandidate = _stack.Peek();
-            if (!ShouldAnimateTransition(_currentScreen, incomingCandidate, animated))
-            {
-                NavigateBackImmediate();
-                return;
-            }
-
-            var outgoing = _currentScreen;
-            var incoming = _stack.Pop();
-            var transition = GetTransitionSpec(outgoing, incoming);
-            var slide = transition.SlideDistance;
-
-            if (incoming == null)
-            {
-                ShowExitConfirmation();
-                return;
-            }
-
-            _isTransitioning = true;
-
-            if (!transition.DeferOutgoingOnHide)
-                outgoing.OnHide();
-
-            PrepareIncomingForNavigateBack(incoming, slide, transition.Profile);
-            _window.Add(incoming);
-            _currentScreen = incoming;
-            if (!transition.DeferIncomingOnShow)
-                incoming.OnShow();
-
-            UiAnimator.Replace(
-                ref _screenTransitionAnimation,
-                UiAnimator.Start(
-                    transition.DurationMs,
-                    animation =>
-                    {
-                        ConfigureNavigateBackAnimation(animation, incoming, outgoing, slide, transition.Profile);
-                    },
-                    () =>
-                    {
-                        ResetScreenTransform(incoming);
-                        if (transition.DeferOutgoingOnHide)
-                        {
-                            try { outgoing.OnHide(); } catch { }
-                        }
-                        try { _window.Remove(outgoing); } catch { }
-                        try { outgoing.Dispose(); } catch { }
-                        if (transition.DeferIncomingOnShow)
-                        {
-                            try { incoming.OnShow(); } catch { }
-                        }
-                        _isTransitioning = false;
-                        _screenTransitionAnimation = null;
-                    }
-                )
-            );
+            NavigateBackImmediate();
         }
 
         public static void ClearStack()
@@ -403,8 +267,8 @@ namespace JellyfinTizen.Core
                 }
             };
 
-            _exitStayButton = CreateExitConfirmationButton("Stay", primary: false);
-            _exitConfirmButton = CreateExitConfirmationButton("Exit", primary: true);
+            _exitStayButton = CreateExitConfirmationButton("Stay");
+            _exitConfirmButton = CreateExitConfirmationButton("Exit");
             _exitConfirmationButtons.Clear();
             _exitConfirmationButtons.Add(_exitStayButton);
             _exitConfirmationButtons.Add(_exitConfirmButton);
@@ -419,7 +283,7 @@ namespace JellyfinTizen.Core
             _window.Add(_exitConfirmationOverlay);
         }
 
-        private static View CreateExitConfirmationButton(string text, bool primary)
+        private static View CreateExitConfirmationButton(string text)
         {
             var button = new View
             {
@@ -450,7 +314,7 @@ namespace JellyfinTizen.Core
             };
 
             button.Add(label);
-            MonochromeAuthFactory.SetButtonFocusState(button, primary, focused: false);
+            MonochromeAuthFactory.SetButtonFocusState(button, focused: false);
             return button;
         }
 
@@ -527,8 +391,7 @@ namespace JellyfinTizen.Core
             for (int i = 0; i < _exitConfirmationButtons.Count; i++)
             {
                 bool focused = i == _exitConfirmationFocusIndex;
-                bool primary = ReferenceEquals(_exitConfirmationButtons[i], _exitConfirmButton);
-                MonochromeAuthFactory.SetButtonFocusState(_exitConfirmationButtons[i], primary, focused);
+                MonochromeAuthFactory.SetButtonFocusState(_exitConfirmationButtons[i], focused);
                 _exitConfirmationButtons[i].Scale = Vector3.One;
             }
 
@@ -554,160 +417,6 @@ namespace JellyfinTizen.Core
             HideExitConfirmation();
         }
 
-        private static void CleanupOutgoingAfterNavigate(ScreenBase outgoing, bool addToStack)
-        {
-            try { _window.Remove(outgoing); } catch { }
-
-            if (addToStack)
-            {
-                try
-                {
-                    outgoing.PositionX = 0.0f;
-                    outgoing.PositionY = 0.0f;
-                    outgoing.Opacity = 1.0f;
-                    outgoing.Scale = UnitScale;
-                }
-                catch { }
-            }
-            else
-            {
-                try { outgoing.Dispose(); } catch { }
-            }
-        }
-
-        private static float GetSlideDistance()
-        {
-            if (_window == null)
-                return UiAnimator.ScreenSlideDistance;
-
-            return Math.Max(UiAnimator.ScreenSlideDistance, _window.Size.Width * 0.08f);
-        }
-
-        private static TransitionSpec GetTransitionSpec(ScreenBase outgoing, ScreenBase incoming)
-        {
-            bool outgoingIsVideoPlayer = outgoing is VideoPlayerScreen;
-            bool incomingIsVideoPlayer = incoming is VideoPlayerScreen;
-            var profile = UseBlackScreenProfile(outgoing, incoming)
-                ? TransitionProfile.BlackScreen
-                : TransitionProfile.Slide;
-            return new TransitionSpec(
-                profile == TransitionProfile.BlackScreen ? BlackScreenTransitionDurationMs : UiAnimator.ScreenDurationMs,
-                GetSlideDistance(),
-                deferIncomingOnShow: incomingIsVideoPlayer,
-                deferOutgoingOnHide: outgoingIsVideoPlayer,
-                profile: profile);
-        }
-
-        private static bool ShouldAnimateTransition(ScreenBase outgoing, ScreenBase incoming, bool animated)
-        {
-            if (!animated)
-                return false;
-
-            // On lower-end TVs, even lightweight fades around player attach can hitch.
-            // Prefer an instant swap for details <-> player navigation.
-            if (UseBlackScreenProfile(outgoing, incoming))
-                return false;
-
-            return UseFullTransitionProfile(outgoing, incoming);
-        }
-
-        private static bool UseFullTransitionProfile(ScreenBase outgoing, ScreenBase incoming)
-        {
-            return UseBlackScreenProfile(outgoing, incoming);
-        }
-
-        private static bool UseBlackScreenProfile(ScreenBase outgoing, ScreenBase incoming)
-        {
-            return (outgoing is MovieDetailsScreen && incoming is VideoPlayerScreen) ||
-                   (outgoing is VideoPlayerScreen && incoming is MovieDetailsScreen) ||
-                   (outgoing is EpisodeDetailsScreen && incoming is VideoPlayerScreen) ||
-                   (outgoing is VideoPlayerScreen && incoming is EpisodeDetailsScreen);
-        }
-
-        private static void PrepareIncomingForNavigate(ScreenBase incoming, float slide, TransitionProfile profile)
-        {
-            if (profile == TransitionProfile.BlackScreen)
-            {
-                incoming.PositionX = 0.0f;
-                incoming.Opacity = 0.0f;
-                incoming.Scale = UnitScale;
-                return;
-            }
-
-            incoming.PositionX = slide;
-            incoming.Opacity = 0.0f;
-            incoming.Scale = UnitScale;
-        }
-
-        private static void PrepareIncomingForNavigateBack(ScreenBase incoming, float slide, TransitionProfile profile)
-        {
-            if (profile == TransitionProfile.BlackScreen)
-            {
-                incoming.PositionX = 0.0f;
-                incoming.Opacity = 0.0f;
-                incoming.Scale = UnitScale;
-                return;
-            }
-
-            incoming.PositionX = -slide * 0.6f;
-            incoming.Opacity = 0.0f;
-            incoming.Scale = UnitScale;
-        }
-
-        private static void ConfigureNavigateAnimation(
-            Animation animation,
-            ScreenBase incoming,
-            ScreenBase outgoing,
-            float slide,
-            TransitionProfile profile)
-        {
-            if (profile == TransitionProfile.BlackScreen)
-            {
-                // For details -> player, fade in the incoming black screen instead of
-                // fading out the heavy details tree to keep the transition smooth.
-                if (incoming is VideoPlayerScreen)
-                {
-                    animation.AnimateTo(incoming, "Opacity", 1.0f);
-                }
-                else
-                {
-                    animation.AnimateTo(outgoing, "Opacity", 0.0f);
-                }
-                return;
-            }
-
-            animation.AnimateTo(incoming, "PositionX", 0.0f);
-            animation.AnimateTo(incoming, "Opacity", 1.0f);
-            animation.AnimateTo(outgoing, "PositionX", -slide * 0.6f);
-            animation.AnimateTo(outgoing, "Opacity", 0.0f);
-        }
-
-        private static void ConfigureNavigateBackAnimation(
-            Animation animation,
-            ScreenBase incoming,
-            ScreenBase outgoing,
-            float slide,
-            TransitionProfile profile)
-        {
-            if (profile == TransitionProfile.BlackScreen)
-            {
-                if (incoming is VideoPlayerScreen)
-                {
-                    animation.AnimateTo(incoming, "Opacity", 1.0f);
-                }
-                else
-                {
-                    animation.AnimateTo(outgoing, "Opacity", 0.0f);
-                }
-                return;
-            }
-
-            animation.AnimateTo(incoming, "PositionX", 0.0f);
-            animation.AnimateTo(incoming, "Opacity", 1.0f);
-            animation.AnimateTo(outgoing, "PositionX", slide);
-            animation.AnimateTo(outgoing, "Opacity", 0.0f);
-        }
-
         private static void ResetScreenTransform(ScreenBase screen)
         {
             if (screen == null)
@@ -718,7 +427,7 @@ namespace JellyfinTizen.Core
                 screen.PositionX = 0.0f;
                 screen.PositionY = 0.0f;
                 screen.Opacity = 1.0f;
-                screen.Scale = UnitScale;
+                screen.Scale = Vector3.One;
             }
             catch { }
         }

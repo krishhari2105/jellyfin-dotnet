@@ -27,7 +27,6 @@ namespace JellyfinTizen.Screens
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
 
-        private readonly Color _focusBorderColor = UiTheme.MediaCardFocusFill;
         private readonly JellyfinMovie _series;
         private View _infoColumn;
         private View _seasonViewport;
@@ -36,7 +35,6 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _seasonViews = new();
         private int _seasonIndex = -1;
         private bool _isSeasonViewFocused;
-        private Animation _seasonScrollAnimation;
         private int _seasonCardTextHeight = PreferredSeasonCardTextHeight;
 
         public SeriesDetailsScreen(JellyfinMovie series)
@@ -208,11 +206,6 @@ namespace JellyfinTizen.Screens
 
                 FocusSeason(targetIndex);
             }
-        }
-
-        public override void OnHide()
-        {
-            UiAnimator.StopAndDispose(ref _seasonScrollAnimation);
         }
 
         private async Task LoadSeasonsAsync()
@@ -426,7 +419,7 @@ namespace JellyfinTizen.Screens
             }
 
             if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, _focusBorderColor, UiTheme.MediaCardFocusBorder, lightweight: false);
+                MediaCardFocus.ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
             else
                 MediaCardFocus.ClearFrameFocus(frame);
         }
@@ -473,10 +466,7 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            UiAnimator.Replace(
-                ref _seasonScrollAnimation,
-                UiAnimator.AnimateTo(_seasonRowContainer, "PositionX", targetX, UiAnimator.ScrollDurationMs)
-            );
+            _seasonRowContainer.PositionX = targetX;
         }
 
     }

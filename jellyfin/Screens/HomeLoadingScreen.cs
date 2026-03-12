@@ -48,7 +48,7 @@ namespace JellyfinTizen.Screens
             }
 
             _loaded = true;
-            Load();
+            FireAndForget(LoadAsync());
         }
 
         public override void OnHide()
@@ -58,7 +58,7 @@ namespace JellyfinTizen.Screens
             _fallbackTimer = null;
         }
 
-        private async void Load()
+        private async Task LoadAsync()
         {
             if (_loadingVisual == null)
             {
@@ -210,7 +210,7 @@ namespace JellyfinTizen.Screens
 
             await Task.WhenAll(nextUpTask, continueTask);
 
-            var nextUp = nextUpTask.Result;
+            var nextUp = await nextUpTask;
             if (nextUp.Count > 0)
             {
                 var nextUpRow = new JellyfinTizen.Models.HomeRowData
@@ -239,7 +239,7 @@ namespace JellyfinTizen.Screens
                 rows.Add(nextUpRow);
             }
 
-            var continueWatching = continueTask.Result;
+            var continueWatching = await continueTask;
             if (continueWatching.Count > 0)
             {
                 var continueRow = new JellyfinTizen.Models.HomeRowData

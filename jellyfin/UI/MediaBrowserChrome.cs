@@ -198,7 +198,7 @@ namespace JellyfinTizen.UI
             };
 
             row.Add(label);
-            UiFactory.SetButtonFocusState(row, primary: false, focused: false);
+            UiFactory.SetButtonFocusState(row, focused: false);
             return row;
         }
 
@@ -210,7 +210,7 @@ namespace JellyfinTizen.UI
             for (int i = 0; i < options.Count; i++)
             {
                 bool focused = i == selectedIndex;
-                UiFactory.SetButtonFocusState(options[i], primary: false, focused: focused);
+                UiFactory.SetButtonFocusState(options[i], focused: focused);
 
                 if (options[i].ChildCount > 0 && options[i].GetChildAt(0) is TextLabel label)
                 {

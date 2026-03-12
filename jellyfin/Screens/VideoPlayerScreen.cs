@@ -315,7 +315,12 @@ namespace JellyfinTizen.Screens
             BackgroundColor = Color.Black;
         }
 
-        private async void StartPlayback()
+        private void StartPlayback()
+        {
+            FireAndForget(StartPlaybackAsync());
+        }
+
+        private async Task StartPlaybackAsync()
         {
             int playbackToken = ++_playbackToken;
             var playbackMovie = _movie;
@@ -802,7 +807,7 @@ namespace JellyfinTizen.Screens
                     if (!string.IsNullOrWhiteSpace(apiKey))
                         client.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
 
-                    var response = await client.GetAsync(downloadUrl);
+                    using var response = await client.GetAsync(downloadUrl);
                     response.EnsureSuccessStatusCode();
                     var data = await response.Content.ReadAsByteArrayAsync();
                     await File.WriteAllBytesAsync(localPath, data);
@@ -2904,7 +2909,7 @@ namespace JellyfinTizen.Screens
 
             content.Add(label);
             btn.Add(content);
-            UiFactory.SetButtonFocusState(btn, primary: true, focused: false);
+            UiFactory.SetButtonFocusState(btn, focused: false);
             ApplyOsdButtonIconState(btn, focused: false);
             return btn;
         }
@@ -3251,7 +3256,7 @@ namespace JellyfinTizen.Screens
             content.Add(_smartActionSubtitleLabel);
             content.Add(_smartActionIcon);
             _smartActionPopup.Add(content);
-            UiFactory.SetButtonFocusState(_smartActionPopup, primary: true, focused: false);
+            UiFactory.SetButtonFocusState(_smartActionPopup, focused: false);
             ApplySmartPopupIconState(focused: false);
             UpdateSmartPopupPosition();
             _smartActionPopup.Hide();
@@ -3336,7 +3341,7 @@ namespace JellyfinTizen.Screens
             if (_smartActionPopup == null)
                 return;
 
-            UiFactory.SetButtonFocusState(_smartActionPopup, primary: true, focused: _smartPopupFocused);
+            UiFactory.SetButtonFocusState(_smartActionPopup, focused: _smartPopupFocused);
             ApplySmartPopupIconState(_smartPopupFocused);
             AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? new Vector3(1.04f, 1.04f, 1f) : Vector3.One);
         }
@@ -3603,7 +3608,12 @@ namespace JellyfinTizen.Screens
             PlayNextEpisode();
         }
 
-        private async void SkipIntro()
+        private void SkipIntro()
+        {
+            FireAndForget(SkipIntroAsync());
+        }
+
+        private async Task SkipIntroAsync()
         {
             if (_player == null || !_hasIntroSegment)
                 return;
@@ -3684,7 +3694,7 @@ namespace JellyfinTizen.Screens
             if (button == null)
                 return;
 
-            UiFactory.SetButtonFocusState(button, primary: true, focused: focused);
+            UiFactory.SetButtonFocusState(button, focused: focused);
             ApplyOsdButtonIconState(button, focused);
             AnimateFocusScale(button, focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One);
         }
@@ -3931,7 +3941,7 @@ namespace JellyfinTizen.Screens
 
             if (_subtitleOffsetButton != null)
             {
-                UiFactory.SetButtonFocusState(_subtitleOffsetButton, primary: false, focused: _subtitleOffsetAdjustMode);
+                UiFactory.SetButtonFocusState(_subtitleOffsetButton, focused: _subtitleOffsetAdjustMode);
                 AnimateFocusScale(_subtitleOffsetButton, _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One);
             }
             _osdTimer.Stop();
@@ -3945,7 +3955,7 @@ namespace JellyfinTizen.Screens
             _subtitleOffsetTrackContainer?.Hide();
             if (_subtitleOffsetButton != null)
             {
-                UiFactory.SetButtonFocusState(_subtitleOffsetButton, primary: false, focused: false);
+                UiFactory.SetButtonFocusState(_subtitleOffsetButton, focused: false);
                 AnimateFocusScale(_subtitleOffsetButton, Vector3.One);
             }
             UpdateOsdFocus();
@@ -4474,7 +4484,7 @@ namespace JellyfinTizen.Screens
                 };
                 var offsetLabel = new TextLabel($"Offset: {FormatSubtitleOffsetLabel()}") { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, TextColor = Color.White, PointSize = UiTheme.PlayerOffsetLabel };
                 _subtitleOffsetButton.Add(offsetLabel);
-                UiFactory.SetButtonFocusState(_subtitleOffsetButton, primary: false, focused: false);
+                UiFactory.SetButtonFocusState(_subtitleOffsetButton, focused: false);
                 offsetContainer.Add(_subtitleOffsetButton);
                 
                 CreateSubtitleOffsetTrack(UiTheme.PlayerSubtitleOffsetButtonWidth);
@@ -4550,7 +4560,7 @@ namespace JellyfinTizen.Screens
             
             var label = new TextLabel(text) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerOverlayItem, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(UiTheme.PlayerOverlayItemPaddingLeft, (ushort)0, (ushort)0, (ushort)0) };
             row.Add(label);
-            UiFactory.SetButtonFocusState(row, primary: false, focused: false);
+            UiFactory.SetButtonFocusState(row, focused: false);
             return row;
         }
 
@@ -4695,7 +4705,7 @@ namespace JellyfinTizen.Screens
             {
                 var row = _subtitleListContainer.GetChildAt((uint)i);
                 bool selected = (i == _subtitleIndex);
-                UiFactory.SetButtonFocusState(row, primary: false, focused: selected);
+                UiFactory.SetButtonFocusState(row, focused: selected);
                 AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
             }
             // Keep subtitle selection fully manual; FocusManager + ScrollableBase can crash on some TVs.
@@ -5025,7 +5035,12 @@ namespace JellyfinTizen.Screens
                 $"jf=[{jellyfinList}],reqIdx={reqIndex},reqEmbOrd={reqOrd},native={nativeSelected}/{nativeCount},langs=[{nativeList}]");
         }
 
-        private async void SelectSubtitle()
+        private void SelectSubtitle()
+        {
+            FireAndForget(SelectSubtitleAsync());
+        }
+
+        private async Task SelectSubtitleAsync()
         {
             if (_subtitleListContainer == null) return;
             if (_subtitleIndex < 0 || _subtitleIndex >= _subtitleListContainer.ChildCount) return;
@@ -5291,7 +5306,7 @@ namespace JellyfinTizen.Screens
                     row.Name = stream.Index.ToString();
                     var label = new TextLabel(displayText) { WidthResizePolicy = ResizePolicyType.FillToParent, HeightResizePolicy = ResizePolicyType.FillToParent, PointSize = UiTheme.PlayerAudioItem, TextColor = Color.White, HorizontalAlignment = HorizontalAlignment.Begin, VerticalAlignment = VerticalAlignment.Center, Padding = new Extents(UiTheme.PlayerOverlayItemPaddingLeft, (ushort)0, (ushort)0, (ushort)0) };
                     row.Add(label);
-                    UiFactory.SetButtonFocusState(row, primary: false, focused: false);
+                    UiFactory.SetButtonFocusState(row, focused: false);
                     _audioListContainer.Add(row);
                 }
             }
@@ -5333,7 +5348,7 @@ namespace JellyfinTizen.Screens
             {
                 var row = _audioListContainer.GetChildAt((uint)i);
                 bool selected = (i == _audioIndex);
-                UiFactory.SetButtonFocusState(row, primary: false, focused: selected);
+                UiFactory.SetButtonFocusState(row, focused: selected);
                 AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
             }
             // Keep audio selection fully manual; device FocusManager + ScrollableBase can crash on some TVs.
@@ -6084,7 +6099,12 @@ namespace JellyfinTizen.Screens
             }
         }
         
-        private async void PlayNextEpisode()
+        private void PlayNextEpisode()
+        {
+            FireAndForget(PlayNextEpisodeAsync());
+        }
+
+        private async Task PlayNextEpisodeAsync()
         {
             if (_isEpisodeSwitchInProgress)
                 return;
