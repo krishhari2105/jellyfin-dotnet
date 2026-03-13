@@ -96,16 +96,11 @@ namespace JellyfinTizen.Screens
             var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
-            var backdropItemId =
-                _episode.IsEpisode && !string.IsNullOrWhiteSpace(_episode.SeriesId)
-                    ? _episode.SeriesId
-                    : _episode.Id;
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
                 _episode,
                 serverUrl,
                 apiKey,
-                maxWidth: 1920,
-                fallbackBackdropItemId: backdropItemId != _episode.Id ? backdropItemId : null);
+                maxWidth: 1920);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
@@ -133,11 +128,13 @@ namespace JellyfinTizen.Screens
             };
             
             var thumbUrl =
-                _episode.HasThumb
-                    ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
-                    : _episode.HasBackdrop
-                        ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=90&api_key={apiKey}"
-                        : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
+                _episode.IsEpisode && _episode.HasPrimary
+                    ? $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
+                    : _episode.HasThumb
+                        ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
+                        : _episode.HasBackdrop
+                            ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=90&api_key={apiKey}"
+                            : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
             
             var thumbFrame = new View
             {

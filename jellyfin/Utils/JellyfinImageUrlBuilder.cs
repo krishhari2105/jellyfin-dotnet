@@ -11,6 +11,7 @@ namespace JellyfinTizen.Utils
             int maxWidth = 1920,
             int backdropQuality = 90,
             int thumbQuality = 90,
+            int primaryQuality = 90,
             string fallbackBackdropItemId = null)
         {
             if (item == null)
@@ -21,6 +22,9 @@ namespace JellyfinTizen.Utils
 
             if (item.HasThumb)
                 return BuildImageUrl(serverUrl, item.Id, "Thumb", maxWidth, thumbQuality, apiKey);
+
+            if (item.UsesThumbDetailsLayout && item.HasPrimary)
+                return BuildImageUrl(serverUrl, item.Id, "Primary", maxWidth, primaryQuality, apiKey);
 
             if (!string.IsNullOrWhiteSpace(fallbackBackdropItemId))
                 return BuildImageUrl(serverUrl, fallbackBackdropItemId, "Backdrop", maxWidth, backdropQuality, apiKey);
