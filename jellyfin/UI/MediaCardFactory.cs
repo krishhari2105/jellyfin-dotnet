@@ -46,10 +46,13 @@ namespace JellyfinTizen.UI
             out ImageView imageView,
             int focusBorder = 5,
             int titlePoint = 26,
-            int subtitlePoint = 20)
+            int subtitlePoint = 20,
+            float? progressRatio = null)
         {
             _ = focusBorder;
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
+            bool showProgress = progressRatio.HasValue && progressRatio.Value > 0f;
+            float clampedProgress = Math.Clamp(progressRatio ?? 0f, 0f, 1f);
             float adaptiveTitlePoint = ResolveAdaptiveTitlePointSize(
                 title,
                 titlePoint,
@@ -106,6 +109,39 @@ namespace JellyfinTizen.UI
                 PreMultipliedAlpha = false
             };
             imageContainer.Add(imageView);
+
+            if (showProgress)
+            {
+                int progressWidth = Math.Max(0, width - (UiTheme.MediaCardProgressInset * 2));
+                int progressFillWidth = Math.Max(2, (int)Math.Round(progressWidth * clampedProgress));
+                int progressY = imageHeight - UiTheme.MediaCardProgressBottomInset - UiTheme.MediaCardProgressHeight;
+
+                var progressTrack = new View
+                {
+                    Name = "CardProgressTrack",
+                    WidthSpecification = progressWidth,
+                    HeightSpecification = UiTheme.MediaCardProgressHeight,
+                    PositionX = UiTheme.MediaCardProgressInset,
+                    PositionY = progressY,
+                    BackgroundColor = UiTheme.MediaCardProgressTrack,
+                    CornerRadius = UiTheme.MediaCardProgressRadius,
+                    CornerRadiusPolicy = VisualTransformPolicyType.Absolute
+                };
+
+                var progressFill = new View
+                {
+                    Name = "CardProgressFill",
+                    WidthSpecification = progressFillWidth,
+                    HeightSpecification = UiTheme.MediaCardProgressHeight,
+                    BackgroundColor = UiTheme.MediaCardProgressFill,
+                    CornerRadius = UiTheme.MediaCardProgressRadius,
+                    CornerRadiusPolicy = VisualTransformPolicyType.Absolute
+                };
+
+                progressTrack.Add(progressFill);
+                imageContainer.Add(progressTrack);
+            }
+
             frame.Add(imageContainer);
 
             var textContainer = new View

@@ -14,6 +14,8 @@ namespace JellyfinTizen.UI
         public static readonly Color AccentSoft = new Color(0f / 255f, 167f / 255f, 225f / 255f, 0.24f);
         public static readonly Color MediaCardFocusFill = new Color(1f, 1f, 1f, 0.16f);
         public static readonly Color MediaCardFocusBorder = new Color(1f, 1f, 1f, 0.92f);
+        public static readonly Color MediaCardProgressTrack = new Color(243f / 255f, 247f / 255f, 255f / 255f, 0.58f);
+        public static readonly Color MediaCardProgressFill = AccentFocused;
         public static readonly Color TextPrimary = new Color(243f / 255f, 247f / 255f, 255f / 255f, 1f);
         public static readonly Color TextSecondary = new Color(183f / 255f, 195f / 255f, 216f / 255f, 1f);
         public static readonly Color Danger = new Color(255f / 255f, 90f / 255f, 100f / 255f, 1f);
@@ -65,6 +67,10 @@ namespace JellyfinTizen.UI
         public const float MediaCardSubtitle = 20f;
         public const float MediaCardRadius = 18.0f;
         public const float MediaCardFocusScale = 1.05f;
+        public const int MediaCardProgressHeight = 8;
+        public const int MediaCardProgressInset = 10;
+        public const int MediaCardProgressBottomInset = 10;
+        public const float MediaCardProgressRadius = 4.0f;
         public const float SettingsPanelTitle = 26f;
         public const float SettingsPanelOption = 24f;
 

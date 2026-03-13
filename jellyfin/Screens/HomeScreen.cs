@@ -274,6 +274,10 @@ namespace JellyfinTizen.Screens
         private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight)
         {
             var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
+            var progressRatio = kind == HomeRowKind.ContinueWatching
+                ? GetPlaybackProgressRatio(item?.Media)
+                : null;
+
             return MediaCardFactory.CreateImageCard(
                 width,
                 imageHeight,
@@ -284,8 +288,20 @@ namespace JellyfinTizen.Screens
                 out _,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                progressRatio: progressRatio
             );
+        }
+
+        private static float? GetPlaybackProgressRatio(JellyfinMovie media)
+        {
+            if (media == null || media.PlaybackPositionTicks <= 0 || media.RunTimeTicks <= 0)
+                return null;
+
+            return (float)Math.Clamp(
+                media.PlaybackPositionTicks / (double)media.RunTimeTicks,
+                0d,
+                1d);
         }
 
         public void HandleKey(AppKey key)
