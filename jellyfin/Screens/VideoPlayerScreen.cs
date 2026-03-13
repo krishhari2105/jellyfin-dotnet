@@ -4456,6 +4456,7 @@ namespace JellyfinTizen.Screens
             if (_player == null) return;
             if (_subtitleOverlay == null) CreateSubtitleOverlay();
             HideAudioOverlay();
+            HidePlaybackInfoOverlay();
             ExitSubtitleOffsetAdjustMode();
             var wasVisible = _subtitleOverlayVisible;
 
@@ -5269,6 +5270,7 @@ namespace JellyfinTizen.Screens
             if (_player == null) return;
             if (_audioOverlay == null) CreateAudioOverlay();
             HideSubtitleOverlay();
+            HidePlaybackInfoOverlay();
             ExitSubtitleOffsetAdjustMode();
             var wasVisible = _audioOverlayVisible;
 
@@ -5801,11 +5803,13 @@ namespace JellyfinTizen.Screens
             _osdVisible = false;
             _audioOverlayVisible = false;
             _subtitleOverlayVisible = false;
+            _playbackInfoOverlayVisible = false;
             _subtitleOffsetAdjustMode = false;
             UiAnimator.StopAndDispose(ref _osdAnimation);
             UiAnimator.StopAndDispose(ref _topOsdAnimation);
             UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
             UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
+            UiAnimator.StopAndDispose(ref _playbackInfoOverlayAnimation);
             UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
             UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
             UiAnimator.StopAndDispose(ref _playPauseFadeAnimation);
@@ -5822,6 +5826,7 @@ namespace JellyfinTizen.Screens
             _playPauseFeedbackContainer?.Hide();
             _audioOverlay?.Hide();
             _subtitleOverlay?.Hide();
+            _playbackInfoOverlay?.Hide();
             _subtitleOffsetTrackContainer?.Hide();
             _osd?.Hide();
             _topOsd?.Hide();
@@ -5923,7 +5928,10 @@ namespace JellyfinTizen.Screens
                     if ((!_osdVisible && HandleSmartPopupEnter()) ||
                         (_osdVisible && _smartPopupFocused && HandleSmartPopupEnter()))
                         break;
-                    if (_audioOverlayVisible) SelectAudioTrack();
+                    if (_playbackInfoOverlayVisible)
+                    {
+                    }
+                    else if (_audioOverlayVisible) SelectAudioTrack();
                     else if (_subtitleOverlayVisible) 
                     {
                         if (_subtitleOffsetAdjustMode) 
@@ -5945,7 +5953,10 @@ namespace JellyfinTizen.Screens
                     }
                     break;
                 case AppKey.Left:
-                    if (_audioOverlayVisible)
+                    if (_playbackInfoOverlayVisible)
+                    {
+                    }
+                    else if (_audioOverlayVisible)
                     {
                         // Let FocusManager handle audio overlay navigation.
                     }
@@ -5960,7 +5971,10 @@ namespace JellyfinTizen.Screens
                     else HandleHiddenDirectionalSeek(-1);
                     break;
                 case AppKey.Right:
-                    if (_audioOverlayVisible)
+                    if (_playbackInfoOverlayVisible)
+                    {
+                    }
+                    else if (_audioOverlayVisible)
                     {
                         // Let FocusManager handle audio overlay navigation.
                     }
@@ -5977,7 +5991,11 @@ namespace JellyfinTizen.Screens
                 case AppKey.Up:
                     if (!_osdVisible && TryScrollStreamDebugOverlay(-1))
                         break;
-                    if (_audioOverlayVisible)
+                    if (_playbackInfoOverlayVisible)
+                    {
+                        TryScrollPlaybackInfoOverlay(-1);
+                    }
+                    else if (_audioOverlayVisible)
                     {
                         MoveAudioSelection(-1);
                     }
@@ -6000,7 +6018,11 @@ namespace JellyfinTizen.Screens
                 case AppKey.Down:
                     if (!_osdVisible && TryScrollStreamDebugOverlay(1))
                         break;
-                    if (_audioOverlayVisible)
+                    if (_playbackInfoOverlayVisible)
+                    {
+                        TryScrollPlaybackInfoOverlay(1);
+                    }
+                    else if (_audioOverlayVisible)
                     {
                         MoveAudioSelection(1);
                     }
@@ -6017,7 +6039,11 @@ namespace JellyfinTizen.Screens
                     else ShowOSD();
                     break;
                 case AppKey.Back:
-                    if (_subtitleOverlayVisible) 
+                    if (_playbackInfoOverlayVisible)
+                    {
+                        HidePlaybackInfoOverlay();
+                    }
+                    else if (_subtitleOverlayVisible) 
                     {
                         if (_subtitleOffsetAdjustMode) ExitSubtitleOffsetAdjustMode();
                         else HideSubtitleOverlay();
@@ -6043,6 +6069,9 @@ namespace JellyfinTizen.Screens
                     }
                     else if (_osdVisible) HideOSD();
                     else NavigationService.NavigateBack();
+                    break;
+                case AppKey.Red:
+                    TogglePlaybackInfoOverlay();
                     break;
             }
         }

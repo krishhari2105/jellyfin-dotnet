@@ -74,6 +74,8 @@ namespace JellyfinTizen.Core
                 "MediaRewind" => AppKey.MediaRewind,
                 "XF86AudioForward" => AppKey.MediaFastForward,
                 "MediaFastForward" => AppKey.MediaFastForward,
+                "XF86Red" => AppKey.Red,
+                "ColorF0Red" => AppKey.Red,
                 // -------------------------------------------------------------
 
                 _ => AppKey.Unknown

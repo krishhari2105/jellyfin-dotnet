@@ -844,7 +844,13 @@ namespace JellyfinTizen.Core
                         SupportsTranscoding = TryGetBool(src, "SupportsTranscoding", out var supportsTranscoding) && supportsTranscoding,
                         // TranscodingUrl is only present if transcoding is needed/possible
                         TranscodingUrl = TryGetString(src, "TranscodingUrl"),
+                        TranscodingContainer = TryGetString(src, "TranscodingContainer"),
+                        TranscodingSubProtocol = TryGetString(src, "TranscodingSubProtocol"),
                         TranscodingReasons = TryGetStringArray(src, "TranscodingReasons"),
+                        Protocol = TryGetString(src, "Protocol"),
+                        Container = TryGetString(src, "Container"),
+                        Size = TryGetInt64Loose(src, "Size", out var sourceSize) ? sourceSize : null,
+                        Bitrate = TryGetInt32Loose(src, "Bitrate", out var sourceBitrate) ? sourceBitrate : null,
                         MediaStreams = new List<MediaStream>()
                     };
 
@@ -881,7 +887,10 @@ namespace JellyfinTizen.Core
                                     : null,
                                 ChannelLayout = s.TryGetProperty("ChannelLayout", out var channelLayoutProp)
                                     ? channelLayoutProp.GetString()
-                                    : null
+                                    : null,
+                                BitRate = TryGetInt32Loose(s, "BitRate", out var streamBitrate) ? streamBitrate : null,
+                                SampleRate = TryGetInt32Loose(s, "SampleRate", out var sampleRate) ? sampleRate : null,
+                                Profile = TryGetString(s, "Profile")
                             };
                             
                             ms.MediaStreams.Add(mediaStream);
@@ -1149,6 +1158,21 @@ namespace JellyfinTizen.Core
                 return false;
 
             return prop.TryGetInt64(out value);
+        }
+
+        private static bool TryGetInt64Loose(JsonElement element, string propertyName, out long value)
+        {
+            value = 0;
+            if (!element.TryGetProperty(propertyName, out var prop))
+                return false;
+
+            if (prop.ValueKind == JsonValueKind.Number)
+                return prop.TryGetInt64(out value);
+
+            if (prop.ValueKind == JsonValueKind.String)
+                return long.TryParse(prop.GetString(), out value);
+
+            return false;
         }
 
         private static double? TryGetAspectRatio(JsonElement element, string propertyName)

@@ -17,7 +17,13 @@ namespace JellyfinTizen.Models
         public bool SupportsDirectStream { get; set; }
         public bool SupportsTranscoding { get; set; }
         public string TranscodingUrl { get; set; }
+        public string TranscodingContainer { get; set; }
+        public string TranscodingSubProtocol { get; set; }
         public List<string> TranscodingReasons { get; set; }
+        public string Protocol { get; set; }
+        public string Container { get; set; }
+        public long? Size { get; set; }
+        public int? Bitrate { get; set; }
         // Note: DirectStreamUrl is often null, so we construct it manually if DirectPlay is supported
         public List<MediaStream> MediaStreams { get; set; }
     }
@@ -110,6 +116,9 @@ namespace JellyfinTizen.Models
         public string VideoRange { get; set; }
         public int? Channels { get; set; }
         public string ChannelLayout { get; set; }
+        public int? BitRate { get; set; }
+        public int? SampleRate { get; set; }
+        public string Profile { get; set; }
     }
 
     public class MediaSegmentInfo

@@ -16,6 +16,7 @@ namespace JellyfinTizen.Core
         MediaNext,
         MediaPrevious,
         MediaRewind,
-        MediaFastForward
+        MediaFastForward,
+        Red
     }
 }
