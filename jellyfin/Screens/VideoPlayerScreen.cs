@@ -459,7 +459,8 @@ namespace JellyfinTizen.Screens
                 var mediaSource = ResolvePreferredMediaSource(playbackInfo);
                 if (mediaSource == null)
                     return;
-                _currentMediaSource = mediaSource; 
+                _currentMediaSource = mediaSource;
+                _useFullscreenAspectMode = AppState.TryGetAspectMode(playbackMovie.Id, mediaSource.Id) ?? false;
                 AlignRequestedSubtitleIndexForCurrentMediaSource(mediaSource);
                 bool startupSubtitleSelectionUnavailable =
                     hasSelectedSubtitle &&
@@ -494,6 +495,7 @@ namespace JellyfinTizen.Screens
                         playbackInfo = subtitleOffPlaybackInfo;
                         mediaSource = subtitleOffSource;
                         _currentMediaSource = mediaSource;
+                        _useFullscreenAspectMode = AppState.TryGetAspectMode(playbackMovie.Id, mediaSource.Id) ?? false;
                     }
                 }
 
@@ -2135,7 +2137,7 @@ namespace JellyfinTizen.Screens
             if (_player == null)
                 return;
 
-            if (_useFullscreenAspectMode && _isAspectToggleVisible)
+            if (_useFullscreenAspectMode)
                 _player.DisplaySettings.Mode = ResolveFullscreenDisplayMode();
             else
                 _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
@@ -2182,6 +2184,8 @@ namespace JellyfinTizen.Screens
                 if (playbackToken != _playbackToken)
                     return;
 
+                var savedAspectMode = AppState.TryGetAspectMode(itemId, _currentMediaSource?.Id);
+                _useFullscreenAspectMode = savedAspectMode ?? false;
                 _isAnamorphicVideo = isAnamorphic;
                 SetAspectToggleVisibility(_isAnamorphicVideo);
                 ApplyDisplayModeForCurrentVideo();
@@ -2238,12 +2242,13 @@ namespace JellyfinTizen.Screens
             UpdateAspectButtonText();
             UpdateOsdFocus();
             _osdTimer.Stop();
+            AppState.SetAspectMode(_movie?.Id, _currentMediaSource?.Id, _useFullscreenAspectMode);
             _osdTimer.Start();
         }
 
         private void UpdateAspectButtonText()
         {
-            string modeText = _useFullscreenAspectMode ? "Aspect: Fullscreen" : "Aspect: Letterbox";
+            string modeText = _useFullscreenAspectMode ? "Fullscreen" : "Letterbox";
             SetOsdButtonText(_aspectButton, modeText);
         }
 
@@ -2362,7 +2367,7 @@ namespace JellyfinTizen.Screens
             _audioButton = CreateOsdButton("audio.svg", "Audio", 168);
             _subtitleButton = CreateOsdButton("sub.svg", "Subtitles", 206);
             _nextButton = CreateOsdButton("next.svg", "Next Episode", 242);
-            _aspectButton = CreateOsdButton(null, "Aspect: Letterbox", 280);
+            _aspectButton = CreateOsdButton(null, "Letterbox", 190);
 
             _controlsContainer.Add(_audioButton);
             _controlsContainer.Add(_subtitleButton);
@@ -4435,12 +4440,12 @@ namespace JellyfinTizen.Screens
             // Keep styling identical across embedded and sidecar paths.
             _subtitleText.TextColor = Color.White;
             _subtitleText.HorizontalAlignment = HorizontalAlignment.Center;
-            _subtitleText.VerticalAlignment = VerticalAlignment.Center;
+            _subtitleText.VerticalAlignment = VerticalAlignment.Bottom;
             _subtitleText.BackgroundColor = Color.Transparent;
             _subtitleText.PointSize = UiTheme.PlayerSubtitleTextSize;
             _subtitleText.HeightSpecification = 180;
             _subtitleText.Padding = new Extents(180, 180, 0, 0);
-            _subtitleTextBaseY = Window.Default.Size.Height - 270;
+            _subtitleTextBaseY = Window.Default.Size.Height - 320;
             try
             {
                 _subtitleText.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Normal });
