@@ -4445,7 +4445,7 @@ namespace JellyfinTizen.Screens
             _subtitleText.PointSize = UiTheme.PlayerSubtitleTextSize;
             _subtitleText.HeightSpecification = 180;
             _subtitleText.Padding = new Extents(180, 180, 0, 0);
-            _subtitleTextBaseY = Window.Default.Size.Height - 320;
+            _subtitleTextBaseY = Window.Default.Size.Height - 310;
             try
             {
                 _subtitleText.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Normal });
