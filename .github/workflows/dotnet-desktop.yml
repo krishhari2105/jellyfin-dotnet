@@ -13,6 +13,9 @@ on:
           - Release
           - Debug
 
+permissions:
+  contents: write          
+
 jobs:
   build:
     name: Build TPK
@@ -94,3 +97,30 @@ jobs:
           path: jellyfin/bin/${{ github.event.inputs.configuration }}/net6.0-tizen9.0/*.tpk
           if-no-files-found: warn
           retention-days: 30
+
+            # ── 10. Create GitHub Release ─────────────────────────────────────────
+      - name: Get current date
+        id: date
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Jellyfin Tizen ${{ github.event.inputs.configuration }} #${{ github.run_number }} (${{ steps.date.outputs.date }})"
+          body: |
+            ## Jellyfin Tizen Client
+
+            **Build:** #${{ github.run_number }}
+            **Configuration:** ${{ github.event.inputs.configuration }}
+            **Date:** ${{ steps.date.outputs.date }}
+            **Commit:** ${{ github.sha }}
+
+            ### Installation
+            1. Download the `.tpk` file below
+            2. Install via Tizen Studio or `sdb install <file>.tpk`
+          files: jellyfin/bin/${{ github.event.inputs.configuration }}/net6.0-tizen9.0/*.tpk
+          draft: false
+          prerelease: ${{ github.event.inputs.configuration == 'Debug' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}    
