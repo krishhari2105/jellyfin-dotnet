@@ -21,11 +21,13 @@ jobs:
 
     - name: Install Tizen Workload Manifest
       run: |
-        # Download the official Samsung helper script
+        # Download the script
         curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh -o workload-install.sh
         chmod +x workload-install.sh
-        # Run the script to register and install the 'tizen' workload
-        sudo ./workload-install.sh
+        
+        # 1. Force use of 'bash' to avoid the syntax error
+        # 2. Use 'env "PATH=$PATH"' so sudo can actually find the 'dotnet' command
+        sudo env "PATH=$PATH" bash ./workload-install.sh
 
     - name: Restore Dependencies
       run: dotnet restore jellyfin.sln
