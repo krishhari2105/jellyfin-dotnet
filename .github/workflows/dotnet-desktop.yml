@@ -1,39 +1,79 @@
-name: Build Tizen Client
+# .github/workflows/build-tizen.yml
+name: Build Jellyfin Tizen Client
 
+# Manual trigger only
 on:
-  push:
-    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
 
 jobs:
   build:
+    name: Build TPK
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        # CRITICAL: Pin to 8.0 because Tizen manifests for .NET 10 are currently broken.
-        dotnet-version: 8.0.x 
+      # ── 2. .NET 8 SDK ──────────────────────────────────────────────────────
+      # Pin to 8.0 — .NET 9/10 Tizen manifests are broken for net6.0-tizen9.0
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
 
-    - name: Install Tizen Workload
-      run: |
-        # Use the CLI directly. Note: Do NOT paste these into a browser.
-        # We use sudo to ensure permission to write to the SDK folder.
-        sudo dotnet workload install tizen --source https://api.nuget.org/v3/index.json --source https://tizen.myget.org/F/dotnet/api/v3/index.json
+      # ── 3. Tizen Workload ──────────────────────────────────────────────────
+      # Samsung's official install script is the most reliable way to get
+      # the right manifest version for the exact SDK band that was installed.
+      # It downloads the manifest, calls `dotnet workload install tizen
+      # --skip-manifest-update`, and handles version-band detection itself.
+      - name: Install Tizen Workload (Samsung official script)
+        run: |
+          curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh \
+            | sudo bash
 
-    - name: Restore Dependencies
-      run: dotnet restore jellyfin.sln
+      # Sanity-check: confirm the workload is visible
+      - name: Verify Tizen Workload
+        run: dotnet workload list
 
-    - name: Build Project
-      # Targeting your specific project and the Release configuration
-      run: dotnet build jellyfin/jellyfin.csproj -c Release --no-restore
+      # ── 4. Restore ────────────────────────────────────────────────────────
+      - name: Restore Dependencies
+        run: |
+          dotnet restore jellyfin.sln \
+            --source https://api.nuget.org/v3/index.json \
+            --source https://tizen.myget.org/F/dotnet/api/v3/index.json
 
-    - name: Upload TPK
-      uses: actions/upload-artifact@v4
-      with:
-        name: jellyfin-tizen-package
-        # This path matches your Tizen 9.0 / API 12 target
-        path: jellyfin/bin/Release/tizen90/*.tpk
+      # ── 5. Build ──────────────────────────────────────────────────────────
+      - name: Build Project
+        run: |
+          dotnet build jellyfin/jellyfin.csproj \
+            -c ${{ github.event.inputs.configuration }} \
+            --no-restore \
+            -v minimal
+
+      # ── 6. Locate TPK ─────────────────────────────────────────────────────
+      # The output directory depends on the TFM (net6.0-tizen9.0 = tizen90)
+      - name: Locate TPK file
+        run: |
+          echo "=== Searching for TPK files ==="
+          find jellyfin/bin -name "*.tpk" 2>/dev/null || echo "No .tpk found yet"
+          find jellyfin/bin -name "*.tpk" -exec echo "Found: {}" \;
+
+      # ── 7. Upload Artifact ────────────────────────────────────────────────
+      - name: Upload TPK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jellyfin-tizen-${{ github.event.inputs.configuration }}-${{ github.run_number }}
+          # Covers both tizen90 and any other tizen* sub-directory
+          path: jellyfin/bin/${{ github.event.inputs.configuration }}/tizen*/*.tpk
+          if-no-files-found: warn
+          retention-days: 30
