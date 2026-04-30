@@ -1,7 +1,6 @@
 # .github/workflows/build-tizen.yml
 name: Build Jellyfin Tizen Client
 
-# Manual trigger only
 on:
   workflow_dispatch:
     inputs:
@@ -24,35 +23,57 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # ── 2. .NET 8 SDK ──────────────────────────────────────────────────────
-      # Pin to 8.0 — .NET 9/10 Tizen manifests are broken for net6.0-tizen9.0
+      # ── 2. Install .NET 8 SDK ─────────────────────────────────────────────
+      # ubuntu-latest now ships with .NET 10 pre-installed.
+      # The Tizen workload manifest for 10.x doesn't exist on NuGet yet,
+      # so we must force .NET 8 for everything in this job.
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      # ── 3. Tizen Workload ──────────────────────────────────────────────────
-      # Samsung's official install script is the most reliable way to get
-      # the right manifest version for the exact SDK band that was installed.
-      # It downloads the manifest, calls `dotnet workload install tizen
-      # --skip-manifest-update`, and handles version-band detection itself.
-      - name: Install Tizen Workload (Samsung official script)
+      # ── 3. Pin CLI to .NET 8 via global.json ──────────────────────────────
+      # The Samsung install script calls `dotnet --version` to discover the
+      # active SDK band. Without global.json it picks up .NET 10 (pre-installed
+      # on the runner), which has no Tizen manifest on NuGet → bad zip error.
+      # Writing global.json at the repo root pins the CLI to 8.x for every
+      # subsequent `dotnet` command in this job.
+      - name: Pin dotnet to 8.x via global.json
+        run: |
+          # Get the exact 8.x version that was just installed
+          DOTNET8_VER=$(dotnet --list-sdks | grep '^8\.' | tail -1 | awk '{print $1}')
+          echo "Pinning to .NET SDK: $DOTNET8_VER"
+          cat > global.json << EOF
+          {
+            "sdk": {
+              "version": "${DOTNET8_VER}",
+              "rollForward": "patch"
+            }
+          }
+          EOF
+          cat global.json
+          dotnet --version   # confirm pin is active
+
+      # ── 4. Install Tizen Workload ─────────────────────────────────────────
+      # Now that global.json forces the CLI to 8.x, the Samsung script will
+      # correctly target the 8.0.x manifest band, which exists on NuGet.
+      - name: Install Tizen Workload
         run: |
           curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh \
             | sudo bash
 
-      # Sanity-check: confirm the workload is visible
-      - name: Verify Tizen Workload
+      # ── 5. Verify Workload ────────────────────────────────────────────────
+      - name: Verify Tizen Workload installed
         run: dotnet workload list
 
-      # ── 4. Restore ────────────────────────────────────────────────────────
+      # ── 6. Restore ────────────────────────────────────────────────────────
       - name: Restore Dependencies
         run: |
           dotnet restore jellyfin.sln \
             --source https://api.nuget.org/v3/index.json \
             --source https://tizen.myget.org/F/dotnet/api/v3/index.json
 
-      # ── 5. Build ──────────────────────────────────────────────────────────
+      # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build Project
         run: |
           dotnet build jellyfin/jellyfin.csproj \
@@ -60,20 +81,16 @@ jobs:
             --no-restore \
             -v minimal
 
-      # ── 6. Locate TPK ─────────────────────────────────────────────────────
-      # The output directory depends on the TFM (net6.0-tizen9.0 = tizen90)
-      - name: Locate TPK file
-        run: |
-          echo "=== Searching for TPK files ==="
-          find jellyfin/bin -name "*.tpk" 2>/dev/null || echo "No .tpk found yet"
-          find jellyfin/bin -name "*.tpk" -exec echo "Found: {}" \;
+      # ── 8. Locate TPK (debug helper) ──────────────────────────────────────
+      - name: Find TPK files
+        if: always()
+        run: find jellyfin/bin -name "*.tpk" 2>/dev/null && echo "TPK found" || echo "No TPK found"
 
-      # ── 7. Upload Artifact ────────────────────────────────────────────────
-      - name: Upload TPK Artifact
+      # ── 9. Upload Artifact ────────────────────────────────────────────────
+      - name: Upload TPK
         uses: actions/upload-artifact@v4
         with:
           name: jellyfin-tizen-${{ github.event.inputs.configuration }}-${{ github.run_number }}
-          # Covers both tizen90 and any other tizen* sub-directory
           path: jellyfin/bin/${{ github.event.inputs.configuration }}/tizen*/*.tpk
           if-no-files-found: warn
           retention-days: 30
