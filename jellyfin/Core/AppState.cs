@@ -737,6 +737,28 @@ namespace JellyfinTizen.Core
             return generated;
         }
 
+        public static bool? TryGetAspectMode(string itemId, string mediaSourceId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                return null;
+
+            string key = $"jf_aspect_{itemId}_{mediaSourceId ?? "default"}";
+            string value = GetPreferenceString(key);
+            if (bool.TryParse(value, out bool isFullscreen))
+                return isFullscreen;
+
+            return null;
+        }
+
+        public static void SetAspectMode(string itemId, string mediaSourceId, bool isFullscreen)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                return;
+
+            string key = $"jf_aspect_{itemId}_{mediaSourceId ?? "default"}";
+            SetPreferenceString(key, isFullscreen.ToString());
+        }
+
         public static string GetUserAvatarUrl(int size = 96)
         {
             if (size <= 0)
