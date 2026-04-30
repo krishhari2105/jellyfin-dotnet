@@ -91,6 +91,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jellyfin-tizen-${{ github.event.inputs.configuration }}-${{ github.run_number }}
-          path: jellyfin/bin/${{ github.event.inputs.configuration }}/tizen*/*.tpk
+          path: jellyfin/bin/${{ github.event.inputs.configuration }}/net6.0-tizen9.0/*.tpk
           if-no-files-found: warn
           retention-days: 30
