@@ -1,9 +1,7 @@
-name: Build Tizen Client
+name: Build Jellyfin Tizen
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
     branches: [ "main" ]
 
 jobs:
@@ -17,26 +15,26 @@ jobs:
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: 6.0.x # Or 8.0.x depending on your csproj
+        # Pinned to 8.0/9.0 because Tizen manifests for .NET 10 
+        # feature bands (like 201) are often missing or broken.
+        dotnet-version: 8.0.x 
 
-    - name: Install Tizen Workload Manifest
+    - name: Install Tizen Workload
       run: |
-        # Download the script
-        curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh -o workload-install.sh
-        chmod +x workload-install.sh
-        
-        # 1. Force use of 'bash' to avoid the syntax error
-        # 2. Use 'env "PATH=$PATH"' so sudo can actually find the 'dotnet' command
-        sudo env "PATH=$PATH" bash ./workload-install.sh
+        # Use the official NuGet feed + the Tizen preview feed for the manifest
+        # We run this with sudo to ensure it can write to the SDK folder
+        sudo dotnet workload install tizen --source https://api.nuget.org/v3/index.json --source https://tizen.myget.org/F/dotnet/api/v3/index.json
 
     - name: Restore Dependencies
       run: dotnet restore jellyfin.sln
 
     - name: Build Project
+      # Targeting your specific project and the Release configuration
       run: dotnet build jellyfin/jellyfin.csproj -c Release --no-restore
 
-    - name: Upload Artifact
+    - name: Upload TPK
       uses: actions/upload-artifact@v4
       with:
-        name: tizen-tpk
+        name: jellyfin-tizen-package
+        # This path matches your Tizen 9.0 (API 12) build output
         path: jellyfin/bin/Release/tizen90/*.tpk
