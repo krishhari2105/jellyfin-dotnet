@@ -16,6 +16,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Net;
 using System.Globalization;
+using System.Text;
 
 namespace JellyfinTizen.Screens
 {
@@ -1827,7 +1828,7 @@ namespace JellyfinTizen.Screens
             {
                 if (!File.Exists(path)) return false;
 
-                string raw = File.ReadAllText(path);
+                string raw = File.ReadAllText(path, Encoding.UTF8);
                 string normalized = raw.Replace("\r\n", "\n").Replace('\r', '\n');
                 string[] blocks = normalized.Split(new[] { "\n\n" }, StringSplitOptions.RemoveEmptyEntries);
                 var cues = new List<SubtitleCue>();

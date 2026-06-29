@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Linq;
 using JellyfinTizen.Models;
+using JellyfinTizen.Utils;
 
 
 namespace JellyfinTizen.Core
@@ -123,25 +124,31 @@ namespace JellyfinTizen.Core
 
         public async Task<List<JellyfinUser>> GetPublicUsersAsync()
         {
-            var json = await GetAsync("/Users/Public");
-            return JsonSerializer.Deserialize<List<JellyfinUser>>(json) ?? new List<JellyfinUser>();
+            return await CacheHelper.GetOrAddAsync(
+                "PublicUsers",
+                async () =>
+                {
+                    var json = await GetAsync("/Users/Public");
+                    return JsonSerializer.Deserialize<List<JellyfinUser>>(json) ?? new List<JellyfinUser>();
+                },
+                TimeSpan.FromMinutes(5));
         }
 
         public async Task<(string userId, string username)> GetCurrentUserAsync()
         {
-            var json = await GetAsync("/Users/Me");
-
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-
-            var userId = root.TryGetProperty("Id", out var idProp)
-                ? idProp.GetString()
-                : null;
-            var username = root.TryGetProperty("Name", out var nameProp)
-                ? nameProp.GetString()
-                : null;
-
-            return (userId, username);
+            var cacheKey = $"CurrentUser_{UserId}";
+            return await CacheHelper.GetOrAddAsync(
+                cacheKey,
+                async () =>
+                {
+                    var json = await GetAsync("/Users/Me");
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+                    var userId = root.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
+                    var username = root.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
+                    return (userId, username);
+                },
+                TimeSpan.FromMinutes(5));
         }
 
         public async Task<(string accessToken, string userId)> AuthenticateAsync(
