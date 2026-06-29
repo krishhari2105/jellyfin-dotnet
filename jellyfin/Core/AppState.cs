@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using JellyfinTizen.Screens;
 
 namespace JellyfinTizen.Core
 {
@@ -40,6 +41,7 @@ namespace JellyfinTizen.Core
             public string Username { get; init; }
             public bool HasSavedSession { get; init; }
             public bool IsActive { get; init; }
+            public bool IsEmby { get; init; }
         }
 
         private sealed class StoredServerRecord
@@ -51,6 +53,7 @@ namespace JellyfinTizen.Core
             public string Username { get; set; }
             public long LastUsedUtcTicks { get; set; }
             public bool IsActive { get; set; }
+            public bool IsEmby { get; set; }
         }
 
         public static void Init()
@@ -61,6 +64,15 @@ namespace JellyfinTizen.Core
             BurnInSubtitles = false;
             ForceTsTranscoding = false;
             EnsureServersLoaded();
+
+            Jellyfin.UnauthorizedDetected += (s, e) =>
+            {
+                ClearSession(clearServer: false);
+                Tizen.Applications.CoreApplication.Post(() =>
+                {
+                    NavigationService.Navigate(new StartupScreen(), addToStack: false);
+                });
+            };
         }
 
         public static IReadOnlyList<StoredServer> GetStoredServers()
@@ -78,7 +90,8 @@ namespace JellyfinTizen.Core
                         HostLabel = BuildHostLabel(s.Url),
                         Username = s.Username,
                         HasSavedSession = HasSession(s),
-                        IsActive = s.IsActive
+                        IsActive = s.IsActive,
+                        IsEmby = s.IsEmby
                     })
                     .ToList();
             }
@@ -138,7 +151,7 @@ namespace JellyfinTizen.Core
             }
         }
 
-        public static bool TrySaveServer(string serverUrl, string displayName = null)
+        public static bool TrySaveServer(string serverUrl, string displayName = null, bool isEmby = false)
         {
             var normalized = NormalizeServerUrl(serverUrl);
             if (string.IsNullOrWhiteSpace(normalized))
@@ -159,6 +172,8 @@ namespace JellyfinTizen.Core
                     };
                     StoredServers.Add(record);
                 }
+
+                record.IsEmby = isEmby;
 
                 var normalizedName = NormalizeServerName(displayName);
                 if (!string.IsNullOrWhiteSpace(normalizedName))
@@ -387,7 +402,8 @@ namespace JellyfinTizen.Core
                                     UserId = SanitizeValue(record.UserId),
                                     Username = SanitizeValue(record.Username),
                                     LastUsedUtcTicks = record.LastUsedUtcTicks,
-                                    IsActive = record.IsActive
+                                    IsActive = record.IsActive,
+                                    IsEmby = record.IsEmby
                                 });
                             }
                         }
@@ -573,6 +589,7 @@ namespace JellyfinTizen.Core
             }
 
             ServerUrl = record.Url;
+            Jellyfin.IsEmby = record.IsEmby;
             Jellyfin.Connect(record.Url);
 
             if (includeSession && HasSession(record))
@@ -619,13 +636,15 @@ namespace JellyfinTizen.Core
                         LastUsedUtcTicks = source.LastUsedUtcTicks > 0
                             ? source.LastUsedUtcTicks
                             : DateTime.UtcNow.Ticks,
-                        IsActive = source.IsActive
+                        IsActive = source.IsActive,
+                        IsEmby = source.IsEmby
                     };
                     continue;
                 }
 
                 existing.LastUsedUtcTicks = Math.Max(existing.LastUsedUtcTicks, source.LastUsedUtcTicks);
                 existing.IsActive = existing.IsActive || source.IsActive;
+                existing.IsEmby = existing.IsEmby || source.IsEmby;
 
                 if (string.IsNullOrWhiteSpace(existing.AccessToken))
                     existing.AccessToken = SanitizeValue(source.AccessToken);

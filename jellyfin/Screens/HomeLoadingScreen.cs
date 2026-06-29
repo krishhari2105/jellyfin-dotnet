@@ -17,8 +17,6 @@ namespace JellyfinTizen.Screens
 {
     public class HomeLoadingScreen : ScreenBase, IKeyHandler
     {
-        private const int RecentPerLibraryLimit = 4;
-        private const int RecentFetchConcurrency = 4;
         private const int ImageUrlCacheMaxEntries = 2500;
 
         private bool _navigated;
@@ -26,14 +24,7 @@ namespace JellyfinTizen.Screens
         private ThreadingTimer _fallbackTimer;
         private AppleTvLoadingVisual _loadingVisual;
         private static readonly object ImageUrlCacheTrimLock = new();
-        private static readonly SemaphoreSlim RecentFetchGate = new(RecentFetchConcurrency, RecentFetchConcurrency);
         private static readonly ConcurrentDictionary<string, string> ImageUrlCache = new();
-
-        private sealed class RecentLibraryResult
-        {
-            public int Index;
-            public List<JellyfinTizen.Models.HomeItemData> Items;
-        }
 
         public HomeLoadingScreen()
         {
@@ -270,73 +261,39 @@ namespace JellyfinTizen.Screens
                 Kind = JellyfinTizen.Models.HomeRowKind.RecentlyAdded
             };
 
-            var recentTasks = new List<Task<RecentLibraryResult>>(libs.Count);
-            for (int i = 0; i < libs.Count; i++)
-            {
-                if (libs[i].UsesLandscapeGridCards)
-                    continue;
-
-                recentTasks.Add(BuildRecentItemsForLibraryAsync(libs[i], i, serverUrl, apiKey));
-            }
-
-            var recentResults = await Task.WhenAll(recentTasks);
-            Array.Sort(recentResults, (a, b) => a.Index.CompareTo(b.Index));
-            foreach (var result in recentResults)
-            {
-                if (result?.Items == null || result.Items.Count == 0)
-                    continue;
-
-                recentRow.Items.AddRange(result.Items);
-            }
-
-            if (recentRow.Items.Count > 0)
-                rows.Add(recentRow);
-
-            return rows;
-        }
-
-        private async Task<RecentLibraryResult> BuildRecentItemsForLibraryAsync(
-            JellyfinTizen.Models.JellyfinLibrary lib,
-            int index,
-            string serverUrl,
-            string apiKey)
-        {
-            await RecentFetchGate.WaitAsync();
             try
             {
                 var timer = PerfTrace.Start();
                 var recent = await WithTimeout(
-                    AppState.Jellyfin.GetRecentlyAddedAsync(lib.Id, lib.LibraryItemTypes, RecentPerLibraryLimit),
+                    AppState.Jellyfin.GetRecentlyAddedGlobalAsync("Movie,Series", 20),
                     10000
                 );
-                PerfTrace.End($"HomeLoadingScreen.RecentFetch.{lib.Name}", timer);
+                PerfTrace.End("HomeLoadingScreen.RecentFetch.Global", timer);
 
-                var items = new List<JellyfinTizen.Models.HomeItemData>(recent.Count);
                 foreach (var item in recent)
                 {
                     var imageUrl = BuildCachedImageUrl(
                         $"recent-primary:{item.Id}:280:78:{apiKey}",
                         () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=280&quality=78&api_key={apiKey}");
 
-                    items.Add(new JellyfinTizen.Models.HomeItemData
+                    recentRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
                         Title = item.Name,
-                        Subtitle = string.IsNullOrWhiteSpace(item.SeriesName) ? lib.Name : item.SeriesName,
+                        Subtitle = item.SeriesName,
                         ImageUrl = imageUrl,
                         Media = item
                     });
                 }
-
-                return new RecentLibraryResult
-                {
-                    Index = index,
-                    Items = items
-                };
             }
-            finally
+            catch (Exception ex)
             {
-                RecentFetchGate.Release();
+                Tizen.Log.Error("Jellyfin", $"Failed to fetch recently added items globally: {ex.Message}");
             }
+
+            if (recentRow.Items.Count > 0)
+                rows.Add(recentRow);
+
+            return rows;
         }
 
         private static string GetThumbOrBackdropUrl(

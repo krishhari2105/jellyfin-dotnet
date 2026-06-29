@@ -14,6 +14,7 @@ namespace JellyfinTizen.Screens
         {
             public string Url { get; set; }
             public string Name { get; set; }
+            public bool IsEmby { get; set; }
         }
 
         private TextField _serverInput;
@@ -139,7 +140,7 @@ namespace JellyfinTizen.Screens
                     return;
                 }
 
-                if (!AppState.TrySaveServer(probeResult.Url, probeResult.Name))
+                if (!AppState.TrySaveServer(probeResult.Url, probeResult.Name, probeResult.IsEmby))
                 {
                     ShowErrorMessage("Unable to save server. Please try again.");
                     return;
@@ -214,13 +215,28 @@ namespace JellyfinTizen.Screens
 
                 var payload = await response.Content.ReadAsStringAsync();
                 string serverName = null;
+                bool isEmby = false;
                 if (!string.IsNullOrWhiteSpace(payload))
                 {
                     try
                     {
                         using var doc = JsonDocument.Parse(payload);
-                        if (doc.RootElement.TryGetProperty("ServerName", out var nameProp))
+                        var root = doc.RootElement;
+                        if (root.TryGetProperty("ServerName", out var nameProp))
                             serverName = nameProp.GetString();
+
+                        if (root.TryGetProperty("ProductName", out var prodProp))
+                        {
+                            var prodName = prodProp.GetString();
+                            if (prodName != null && prodName.IndexOf("emby", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                isEmby = true;
+                            }
+                        }
+                        else
+                        {
+                            isEmby = true;
+                        }
                     }
                     catch
                     {
@@ -234,7 +250,8 @@ namespace JellyfinTizen.Screens
                     return new ServerProbeResult
                     {
                         Url = normalizedInput,
-                        Name = serverName
+                        Name = serverName,
+                        IsEmby = isEmby
                     };
                 }
 
@@ -246,7 +263,8 @@ namespace JellyfinTizen.Screens
                 return new ServerProbeResult
                 {
                     Url = absolute.TrimEnd('/'),
-                    Name = serverName
+                    Name = serverName,
+                    IsEmby = isEmby
                 };
             }
             catch

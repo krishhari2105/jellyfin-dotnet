@@ -361,11 +361,64 @@ namespace JellyfinTizen.Screens
             if (index < 0 || index >= _profiles.Count)
                 return;
 
-            var userName = _profiles[index].User?.Name ?? "User";
-            NavigationService.NavigateWithLoading(
-                () => new PasswordScreen(userName),
-                "Loading sign in..."
-            );
+            var user = _profiles[index].User;
+            var userName = user?.Name ?? "User";
+
+            if (user != null && !user.HasPassword)
+            {
+                NavigationService.NavigateWithLoading(
+                    () =>
+                    {
+                        _ = LoginDirectlyAsync(userName);
+                        return new LoadingScreen("Signing in...");
+                    },
+                    "Loading sign in..."
+                );
+            }
+            else
+            {
+                NavigationService.NavigateWithLoading(
+                    () => new PasswordScreen(userName),
+                    "Loading sign in..."
+                );
+            }
+        }
+
+        private async System.Threading.Tasks.Task LoginDirectlyAsync(string username)
+        {
+            try
+            {
+                AppState.Username = username;
+                var result = await AppState.Jellyfin.AuthenticateAsync(username, string.Empty);
+                AppState.AccessToken = result.accessToken;
+                AppState.UserId = result.userId;
+                AppState.Jellyfin.SetAuthToken(result.accessToken);
+                AppState.Jellyfin.SetUserId(result.userId);
+                AppState.SaveSession(
+                    AppState.Jellyfin.ServerUrl,
+                    result.accessToken,
+                    result.userId,
+                    username
+                );
+
+                RunOnUiThread(() =>
+                {
+                    NavigationService.ClearStack();
+                    NavigationService.Navigate(
+                        new HomeLoadingScreen(),
+                        addToStack: false
+                    );
+                });
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error("Jellyfin", $"Direct sign in failed for {username}: {ex.Message}");
+                RunOnUiThread(() =>
+                {
+                    // Fallback to password screen in case of direct authentication failure
+                    NavigationService.Navigate(new PasswordScreen(username), addToStack: true);
+                });
+            }
         }
 
         public void HandleKey(AppKey key)

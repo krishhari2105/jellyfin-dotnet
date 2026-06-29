@@ -5897,6 +5897,10 @@ namespace JellyfinTizen.Screens
         public void HandleKey(AppKey key)
         {
             if (key == AppKey.Unknown) return;
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+            {
+                CaptureStreamDebugEvent("KeyPressed", $"key={key}");
+            }
             switch (key)
             {
                 case AppKey.MediaPlayPause:

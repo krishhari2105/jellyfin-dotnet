@@ -147,12 +147,6 @@ namespace JellyfinTizen.Screens
             var password = SanitizePassword(_passwordInput.Text);
             var username = AppState.Username?.Trim();
 
-            if (string.IsNullOrEmpty(password))
-            {
-                ShowErrorMessage("Password required.");
-                return;
-            }
-
             _loginInProgress = true;
             DisposeTimer(ref _errorTimer);
             _errorLabel.Text = string.Empty;

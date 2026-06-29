@@ -28,6 +28,8 @@ namespace JellyfinTizen.Core
         public string AccessToken { get; private set; }
         public string UserId { get; private set; }
         public string DeviceId { get; set; } = DefaultDeviceId;
+        public bool IsEmby { get; set; }
+        public event EventHandler UnauthorizedDetected;
         private const string FullMediaFields =
             "Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
         private const string EpisodeListFields =
@@ -84,6 +86,10 @@ namespace JellyfinTizen.Core
         {
             EnsureConnected();
             using var response = await _http.GetAsync(ServerUrl + path);
+            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            {
+                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+            }
             response.EnsureSuccessStatusCode();
             return await response.Content.ReadAsStringAsync();
         }
@@ -97,6 +103,10 @@ namespace JellyfinTizen.Core
         {
             EnsureConnected();
             using var response = await _http.PostAsync(ServerUrl + path, null);
+            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            {
+                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+            }
             
             if (!response.IsSuccessStatusCode)
             {
@@ -217,6 +227,11 @@ namespace JellyfinTizen.Core
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             using var response = await _http.PostAsync(ServerUrl + path, content);
+
+            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            {
+                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+            }
 
             if (!response.IsSuccessStatusCode)
             {
@@ -459,6 +474,25 @@ namespace JellyfinTizen.Core
             return ParseMediaItems(items);
         }
 
+        public async Task<List<JellyfinMovie>> GetRecentlyAddedGlobalAsync(string includeItemTypes, int limit)
+        {
+            var url =
+                $"/Users/{UserId}/Items?IncludeItemTypes={includeItemTypes}" +
+                "&Recursive=true" +
+                $"&Fields={FullMediaFields}" +
+                "&SortBy=DateCreated" +
+                "&SortOrder=Descending" +
+                $"&Limit={limit}" +
+                $"&UserId={UserId}";
+
+            var json = await GetAsync(url);
+
+            using var doc = JsonDocument.Parse(json);
+            var items = doc.RootElement.GetProperty("Items");
+
+            return ParseMediaItems(items);
+        }
+
         public async Task<List<JellyfinMovie>> GetNextUpAsync(string tvLibraryId, int limit)
         {
             var url =
@@ -639,18 +673,28 @@ namespace JellyfinTizen.Core
 
             if (_http.DefaultRequestHeaders.Contains("Authorization"))
                 _http.DefaultRequestHeaders.Remove("Authorization");
+
+            if (_http.DefaultRequestHeaders.Contains("X-Emby-Token"))
+                _http.DefaultRequestHeaders.Remove("X-Emby-Token");
             
             if (string.IsNullOrWhiteSpace(token))
                 return;
 
             var normalizedToken = token.Trim();
-            var headerValue = BuildAuthorizationHeader(normalizedToken);
 
-            // Primary official header used by jellyfin-web/@jellyfin/sdk.
-            _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
-            // Compatibility for older/third-party servers/clients.
-            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", headerValue);
-            _http.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", normalizedToken);
+            if (IsEmby)
+            {
+                var headerValue = BuildAuthorizationHeader(null);
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Token", normalizedToken);
+            }
+            else
+            {
+                var headerValue = BuildAuthorizationHeader(normalizedToken);
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", headerValue);
+                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", normalizedToken);
+            }
         }
 
         public string BuildAuthorizationHeader(string token)
@@ -658,14 +702,19 @@ namespace JellyfinTizen.Core
             var normalizedDeviceId = string.IsNullOrWhiteSpace(DeviceId)
                 ? DefaultDeviceId
                 : DeviceId.Trim();
-            var normalizedToken = token ?? string.Empty;
+            var scheme = IsEmby ? "Emby" : "MediaBrowser";
 
-            return
-                $"MediaBrowser Client=\"{Uri.EscapeDataString(ClientName)}\", " +
-                $"Device=\"{Uri.EscapeDataString(DeviceName)}\", " +
-                $"DeviceId=\"{Uri.EscapeDataString(normalizedDeviceId)}\", " +
-                $"Version=\"{Uri.EscapeDataString(ClientVersion)}\", " +
-                $"Token=\"{Uri.EscapeDataString(normalizedToken)}\"";
+            var header = scheme + " Client=\"" + Uri.EscapeDataString(ClientName) + "\", " +
+                         "Device=\"" + Uri.EscapeDataString(DeviceName) + "\", " +
+                         "DeviceId=\"" + Uri.EscapeDataString(normalizedDeviceId) + "\", " +
+                         "Version=\"" + Uri.EscapeDataString(ClientVersion) + "\"";
+
+            if (!IsEmby && !string.IsNullOrEmpty(token))
+            {
+                header += ", Token=\"" + Uri.EscapeDataString(token) + "\"";
+            }
+
+            return header;
         }
 
         private static string SerializeJson(object body, bool useCamelCase)

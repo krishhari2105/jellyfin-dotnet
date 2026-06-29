@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 using Tizen.Applications;
+using Tizen.Common;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using NColor = Tizen.NUI.Color;
 using JellyfinTizen.Screens;
 using JellyfinTizen.UI;
 
@@ -11,6 +14,29 @@ namespace JellyfinTizen.Core
 {
     public static class NavigationService
     {
+        // P/Invoke signatures for native key grabbing via EFL extension
+        [DllImport("libefl-extension.so.0", EntryPoint = "eext_win_keygrab_set")]
+        private static extern bool eext_win_keygrab_set(IntPtr window, string key);
+
+        [DllImport("libefl-extension.so.0", EntryPoint = "eext_win_keygrab_unset")]
+        private static extern bool eext_win_keygrab_unset(IntPtr window, string key);
+
+
+        public static readonly Dictionary<string, bool> GrabbedKeys = new();
+        public static readonly List<string> KeyDebugLogs = new();
+
+        public static void DebugLog(string message)
+        {
+            string msg = $"{DateTime.Now:HH:mm:ss} | {message}";
+            Tizen.Log.Info("Jellyfin", msg);
+            lock (KeyDebugLogs)
+            {
+                KeyDebugLogs.Add(msg);
+                if (KeyDebugLogs.Count > 40)
+                    KeyDebugLogs.RemoveAt(0);
+            }
+        }
+
         private const int ExitPopupWidth = 660;
         private const int ExitPopupButtonHeight = 64;
 
@@ -30,6 +56,8 @@ namespace JellyfinTizen.Core
             _window = window;
             // standard NUI event - this works!
             _window.KeyEvent += OnKeyEvent; 
+            // Intercept media key events to suppress "Not Available" system toast
+            _window.InterceptKeyEvent += OnInterceptKeyEvent; 
 
             // Remove the default blue focus border globally
             FocusManager.Instance.FocusIndicator = null;
@@ -40,8 +68,31 @@ namespace JellyfinTizen.Core
             if (e.Key.State != Key.StateType.Down)
                 return;
 
-            // 2. Map the Key
-            var key = e.Key.KeyPressedName switch
+            string keyName = e.Key.KeyPressedName;
+
+            // Skip media keys here because they are handled in InterceptKeyEvent
+            bool isMediaOrGrabbedKey = keyName switch
+            {
+                "XF86PlayBack" or "MediaPlayPause" or
+                "XF86AudioPlay" or "MediaPlay" or
+                "XF86AudioPause" or "MediaPause" or
+                "XF86AudioStop" or "MediaStop" or
+                "XF86AudioNext" or "MediaNext" or
+                "XF86AudioPrev" or "MediaPrevious" or
+                "XF86AudioRewind" or "MediaRewind" or
+                "XF86AudioForward" or "MediaFastForward" or
+                "XF86Red" or "ColorF0Red" => true,
+                _ => false
+            };
+
+            int keyDec = e.Key.KeyCode;
+            DebugLog($"OnKeyEvent received: {keyName}, KeyCode: {keyDec} (isMedia={isMediaOrGrabbedKey})");
+
+            if (isMediaOrGrabbedKey)
+                return;
+
+            // 2. Map the standard navigation Key
+            var key = keyName switch
             {
                 // Standard Nav
                 "Up" => AppKey.Up,
@@ -56,8 +107,53 @@ namespace JellyfinTizen.Core
                 "Escape" => AppKey.Back,
                 "XF86Back" => AppKey.Back,
                 "XF86Exit" => AppKey.Back,
+                _ => AppKey.Unknown
+            };
 
-                // --- MEDIA KEYS (These WILL trigger actions despite the toast) ---
+            if (key == AppKey.Unknown)
+                return;
+
+            if (HandleExitConfirmationKey(key))
+                return;
+
+            if (!(_currentScreen is IKeyHandler handler))
+                return;
+
+            // 3. Execute Logic
+            DebugLog($"Standard key pressed: {keyName}");
+            handler.HandleKey(key);
+        }
+
+        private static bool OnInterceptKeyEvent(object source, Window.KeyEventArgs e)
+        {
+            if (e.Key.State != Key.StateType.Down)
+                return false;
+
+            string keyName = e.Key.KeyPressedName;
+            int keyDec = e.Key.KeyCode;
+            DebugLog($"OnInterceptKeyEvent received: {keyName}, KeyCode: {keyDec}");
+
+            // Check if it is a media key or red key that we grabbed
+            bool isMediaOrGrabbedKey = keyName switch
+            {
+                "XF86PlayBack" or "MediaPlayPause" or
+                "XF86AudioPlay" or "MediaPlay" or
+                "XF86AudioPause" or "MediaPause" or
+                "XF86AudioStop" or "MediaStop" or
+                "XF86AudioNext" or "MediaNext" or
+                "XF86AudioPrev" or "MediaPrevious" or
+                "XF86AudioRewind" or "MediaRewind" or
+                "XF86AudioForward" or "MediaFastForward" or
+                "XF86Red" or "ColorF0Red" => true,
+                _ => false
+            };
+
+            if (!isMediaOrGrabbedKey)
+                return false; // Let standard keys propagate to KeyEvent / standard handlers
+
+            // Map the media key
+            var key = keyName switch
+            {
                 "XF86PlayBack" => AppKey.MediaPlayPause, 
                 "MediaPlayPause" => AppKey.MediaPlayPause,
                 "XF86AudioPlay" => AppKey.MediaPlay,
@@ -76,20 +172,40 @@ namespace JellyfinTizen.Core
                 "MediaFastForward" => AppKey.MediaFastForward,
                 "XF86Red" => AppKey.Red,
                 "ColorF0Red" => AppKey.Red,
-                // -------------------------------------------------------------
-
                 _ => AppKey.Unknown
             };
 
-            if (HandleExitConfirmationKey(key))
-                return;
+            DebugLog($"OnInterceptKeyEvent mapped {keyName} -> {key}, currentScreen: {(_currentScreen == null ? "null" : _currentScreen.GetType().Name)}");
 
-            if (!(_currentScreen is IKeyHandler handler))
-                return;
+            if (key == AppKey.Unknown)
+                return false;
 
-            // 3. Execute Logic
-            handler.HandleKey(key);
+            bool isExitActive = HandleExitConfirmationKey(key);
+            DebugLog($"HandleExitConfirmationKey returned: {isExitActive}");
+            if (isExitActive)
+                return true;
+
+            if (_currentScreen is IKeyHandler handler)
+            {
+                try
+                {
+                    handler.HandleKey(key);
+                    DebugLog($"Media key {key} handled by screen, allowing system toast (returning false)");
+                }
+                catch (Exception ex)
+                {
+                    DebugLog($"ERROR inside handler.HandleKey for {key}: {ex.Message}");
+                }
+            }
+            else
+            {
+                DebugLog($"currentScreen is NOT IKeyHandler!");
+            }
+
+            return false;
         }
+
+
 
         public static void Navigate(ScreenBase screen, bool addToStack = true)
         {
@@ -189,6 +305,10 @@ namespace JellyfinTizen.Core
         {
             try
             {
+                if (_window != null)
+                {
+                    _window.InterceptKeyEvent -= OnInterceptKeyEvent;
+                }
                 _currentScreen?.OnHide();
             }
             catch { }
@@ -241,13 +361,13 @@ namespace JellyfinTizen.Core
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = Color.Transparent
+                BackgroundColor = NColor.Transparent
             };
 
             _exitConfirmationPanel = MonochromeAuthFactory.CreatePanel(width: ExitPopupWidth, yOffset: 0);
             _exitConfirmationPanel.Padding = new Extents(42, 42, 34, 34);
-            _exitConfirmationPanel.BackgroundColor = new Color(7f / 255f, 13f / 255f, 28f / 255f, 1.0f);
-            _exitConfirmationPanel.BorderlineColor = new Color(1f, 1f, 1f, 0.28f);
+            _exitConfirmationPanel.BackgroundColor = new NColor(7f / 255f, 13f / 255f, 28f / 255f, 1.0f);
+            _exitConfirmationPanel.BorderlineColor = new NColor(1f, 1f, 1f, 0.28f);
             if (_exitConfirmationPanel.Layout is LinearLayout panelLayout)
                 panelLayout.CellPadding = new Size2D(0, 14);
 
@@ -255,7 +375,7 @@ namespace JellyfinTizen.Core
             title.PointSize = 36f;
             var subtitle = MonochromeAuthFactory.CreateSubtitle("Do you want to close the app?");
             subtitle.PointSize = 21f;
-            subtitle.TextColor = new Color(1f, 1f, 1f, 0.72f);
+            subtitle.TextColor = new NColor(1f, 1f, 1f, 0.72f);
 
             var buttonRow = new View
             {
@@ -310,7 +430,7 @@ namespace JellyfinTizen.Core
                 WidthResizePolicy = ResizePolicyType.FitToChildren,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
                 PointSize = 25f,
-                TextColor = Color.White,
+                TextColor = NColor.White,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };

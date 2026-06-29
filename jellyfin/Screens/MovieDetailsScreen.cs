@@ -258,10 +258,8 @@ namespace JellyfinTizen.Screens
             }
             else
             {
-                if (!_subtitleStreamsLoaded)
-                    _ = LoadSubtitleStreamsAsync();
-                if (!_mediaSourcesLoaded)
-                    _ = LoadMediaSourcesAsync();
+                if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
+                    _ = LoadMediaSourcesAndSubtitlesAsync();
                 if (_buttons.Count > 0)
                     FocusButton(0);
                 RunOnUiThread(RefreshOverviewScrollBounds);
@@ -408,27 +406,9 @@ namespace JellyfinTizen.Screens
             FocusEpisode(0);
         }
 
-        private async Task LoadSubtitleStreamsAsync()
+        private async Task LoadMediaSourcesAndSubtitlesAsync()
         {
-            if (_subtitleStreamsLoaded)
-                return;
-
-            try
-            {
-                _subtitleStreams = await AppState.Jellyfin.GetSubtitleStreamsAsync(_mediaItem.Id);
-            }
-            catch
-            {
-                // Ignore errors, just no subs
-            }
-
-            _subtitleStreamsLoaded = true;
-            NormalizeSelectionStateForCurrentMediaSource();
-        }
-
-        private async Task LoadMediaSourcesAsync()
-        {
-            if (_mediaSourcesLoaded)
+            if (_mediaSourcesLoaded && _subtitleStreamsLoaded)
                 return;
 
             try
@@ -452,6 +432,14 @@ namespace JellyfinTizen.Screens
 
             _mediaSourcesLoaded = true;
             _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
+
+            // Extract subtitle streams from selected media source to avoid redundant API call
+            var currentSource = _mediaSources[_selectedMediaSourceIndex];
+            _subtitleStreams = currentSource?.MediaStreams?
+                .Where(s => s.Type == "Subtitle")
+                .ToList() ?? new List<MediaStream>();
+            _subtitleStreamsLoaded = true;
+
             NormalizeSelectionStateForCurrentMediaSource();
             RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
             UpdateVersionButtonText();

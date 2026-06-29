@@ -37,7 +37,6 @@ namespace JellyfinTizen.Screens
 
             try
             {
-                var subtitleTask = AppState.Jellyfin.GetSubtitleStreamsAsync(_episode.Id);
                 var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
                 var itemTask = AppState.Jellyfin.GetItemAsync(_episode.Id);
 
@@ -52,20 +51,28 @@ namespace JellyfinTizen.Screens
 
                 try
                 {
-                    subtitleStreams = await subtitleTask ?? new List<MediaStream>();
-                }
-                catch
-                {
-                    subtitleStreams = new List<MediaStream>();
-                }
-
-                try
-                {
                     mediaSources = (await playbackTask)?.MediaSources ?? new List<MediaSourceInfo>();
                 }
                 catch
                 {
                     mediaSources = new List<MediaSourceInfo>();
+                }
+
+                // Extract subtitle streams from the primary media source to prevent redundant requests
+                subtitleStreams = new List<MediaStream>();
+                if (mediaSources.Count > 0)
+                {
+                    var primarySource = mediaSources[0];
+                    if (primarySource?.MediaStreams != null)
+                    {
+                        foreach (var stream in primarySource.MediaStreams)
+                        {
+                            if (stream != null && string.Equals(stream.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                            {
+                                subtitleStreams.Add(stream);
+                            }
+                        }
+                    }
                 }
 
                 if (serverEpisode == null)
