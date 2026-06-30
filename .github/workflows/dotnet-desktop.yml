@@ -111,7 +111,6 @@ jobs:
           body: |
             ## Jellyfin Tizen Client
 
-            **Build:** #${{ github.run_number }}
             **Configuration:** ${{ github.event.inputs.configuration }}
             **Date:** ${{ steps.date.outputs.date }}
             **Commit:** ${{ github.sha }}
