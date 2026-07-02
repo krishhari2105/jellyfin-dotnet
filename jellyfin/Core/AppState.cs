@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
 using System.Text.Json;
 using JellyfinTizen.Screens;
 
@@ -31,6 +33,9 @@ namespace JellyfinTizen.Core
         public static bool ForceTsTranscoding { get; set; }
 
         public static JellyfinService Jellyfin { get; private set; }
+        public static TailscaleService Tailscale { get; private set; }
+        public static TailscaleProxyService TailscaleProxy { get; private set; }
+        public static HttpClient HttpClient { get; private set; }
         public static int MaxStoredServers => MaxStoredServersCount;
 
         public sealed class StoredServer
@@ -58,11 +63,45 @@ namespace JellyfinTizen.Core
 
         public static void Init()
         {
-            Jellyfin = new JellyfinService();
+            HttpClient = CreateHttpClient();
+            Jellyfin = new JellyfinService(HttpClient);
             DeviceId = GetOrCreateDeviceId();
             Jellyfin.DeviceId = DeviceId;
             BurnInSubtitles = false;
             ForceTsTranscoding = false;
+
+            // Create Tailscale service instance (UI will show it if binary is present)
+            Tailscale = new TailscaleService();
+            
+            // Start tailscaled in background - don't block app initialization
+            // If it fails, the UI will show the error state
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                try
+                {
+                    Tailscale.StageAndStart();
+                    
+                    bool reachable = Tailscale.IsRunning || Tailscale.IsSocketReachable;
+                    if (reachable)
+                    {
+                        try
+                        {
+                            TailscaleProxy = new TailscaleProxyService(HttpClient);
+                            TailscaleProxy.Start();
+                        }
+                        catch (Exception ex)
+                        {
+                            Tizen.Log.Warn("AppState", $"Failed to start Tailscale proxy: {ex.Message}");
+                            TailscaleProxy = null;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Tizen.Log.Warn("AppState", $"Tailscale not available: {ex.Message}");
+                }
+            });
+
             EnsureServersLoaded();
 
             Jellyfin.UnauthorizedDetected += (s, e) =>
@@ -756,6 +795,64 @@ namespace JellyfinTizen.Core
             return generated;
         }
 
+        public static bool IsTailscaleConnected()
+        {
+            try
+            {
+                if (Tailscale == null || !Tailscale.IsRunning)
+                    return false;
+
+                // Quick sync check - if we can get status and Online is true
+                var status = Tailscale.GetStatusAsync().GetAwaiter().GetResult();
+                return status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static string RewriteServerUrlForTailscale(string serverUrl)
+        {
+            // Now handled transparently by TailscaleWebProxy on the HttpClient
+            return serverUrl;
+        }
+
+        public static string RewriteImageUrlForTailscale(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return url;
+
+            if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            {
+                return url;
+            }
+
+            try
+            {
+                var uri = new Uri(url);
+                string host = uri.Host;
+                bool isTailscale = host.StartsWith("100.") ||
+                                   host.StartsWith("127.0.") ||
+                                   host.StartsWith("fd") ||
+                                   host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+
+                if (isTailscale && TailscaleProxy != null)
+                {
+                    string proxied = $"{TailscaleProxyService.LocalProxyUrl}/proxy?url={Uri.EscapeDataString(url)}";
+                    TailscaleDebugLog.Add($"Rewrote image URL for Tailscale: {url} -> {proxied}");
+                    return proxied;
+                }
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Warn("AppState", $"Failed to rewrite image URL: {ex.Message}");
+            }
+
+            return url;
+        }
+
         public static bool? TryGetAspectMode(string itemId, string mediaSourceId)
         {
             if (string.IsNullOrWhiteSpace(itemId))
@@ -816,6 +913,21 @@ namespace JellyfinTizen.Core
             return
                 $"{ServerUrl.TrimEnd('/')}/Items/{itemId}/Images/Logo/0" +
                 $"?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
+        }
+
+        private static HttpClient CreateHttpClient()
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy = new TailscaleWebProxy(),
+                UseProxy = true
+            };
+            var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(10)
+            };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinTizen/2.0");
+            return client;
         }
     }
 }

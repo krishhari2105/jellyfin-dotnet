@@ -172,11 +172,17 @@ namespace JellyfinTizen.Screens
 
         private static ScreenBase CreateServerEntryScreen()
         {
+            // Show Tailscale auth screen if daemon is running OR socket is reachable from a prior run
+            if (AppState.Tailscale != null &&
+                (AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable))
+            {
+                return new TailscaleAuthScreen();
+            }
+            
             return AppState.HasStoredServers()
                 ? new ServerPickerScreen()
                 : new ServerSetupScreen();
         }
-
         private async Task<bool> TryResumeSavedTokenSessionAsync()
         {
             try

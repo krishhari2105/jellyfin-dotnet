@@ -40,6 +40,7 @@ namespace JellyfinTizen.Screens
         private View _cardsRow;
         private View _addButton;
         private View _removeButton;
+        private View _tailscaleButton;
         private TextLabel _errorLabel;
         private int _cardsContentWidth;
         private int _selectedCardIndex;
@@ -128,6 +129,14 @@ namespace JellyfinTizen.Screens
             _actionButtons.Add(_removeButton);
             actionRow.Add(_addButton);
             actionRow.Add(_removeButton);
+
+            if (AppState.Tailscale != null)
+            {
+                _tailscaleButton = MonochromeAuthFactory.CreateButton("Tailscale Settings", out _);
+                _actionButtons.Add(_tailscaleButton);
+                actionRow.Add(_tailscaleButton);
+            }
+
             panel.Add(actionRow);
 
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
@@ -139,6 +148,9 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            base.OnShow();
+            ShowDebugOverlay();
+            Core.TailscaleDebugLog.Add("=== ServerPickerScreen shown ===");
             _busy = false;
             _selectedCardIndex = Math.Max(0, _servers.FindIndex(s => s.IsActive));
             if (_selectedCardIndex < 0)
@@ -166,6 +178,7 @@ namespace JellyfinTizen.Screens
         {
             _busy = false;
             DisposeTimer(ref _errorTimer);
+            base.OnHide(); // calls HideDebugOverlay()
         }
 
         public void HandleKey(AppKey key)
@@ -329,7 +342,12 @@ namespace JellyfinTizen.Screens
         private void EnsureActionSelectionValid()
         {
             if (_cards.Count == 0 && _selectedActionIndex == 1)
-                _selectedActionIndex = 0;
+            {
+                if (_actionButtons.Count > 2)
+                    _selectedActionIndex = 2;
+                else
+                    _selectedActionIndex = 0;
+            }
         }
 
         private void UpdateVisualState()
@@ -345,8 +363,13 @@ namespace JellyfinTizen.Screens
 
             var addFocused = !_cardsFocused && _selectedActionIndex == 0;
             var removeFocused = !_cardsFocused && _selectedActionIndex == 1;
+            var tailscaleFocused = !_cardsFocused && _selectedActionIndex == 2;
             MonochromeAuthFactory.SetButtonFocusState(_addButton, focused: addFocused);
             MonochromeAuthFactory.SetButtonFocusState(_removeButton, focused: removeFocused);
+            if (_tailscaleButton != null)
+            {
+                MonochromeAuthFactory.SetButtonFocusState(_tailscaleButton, focused: tailscaleFocused);
+            }
             _removeButton.Opacity = _cards.Count > 0 ? 1.0f : 0.45f;
         }
 
@@ -440,6 +463,12 @@ namespace JellyfinTizen.Screens
             if (_selectedActionIndex == 1)
             {
                 RemoveSelectedServer();
+                return;
+            }
+
+            if (_selectedActionIndex == 2 && _tailscaleButton != null)
+            {
+                NavigationService.Navigate(new TailscaleScreen());
                 return;
             }
         }

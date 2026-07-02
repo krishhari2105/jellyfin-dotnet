@@ -607,6 +607,8 @@ namespace JellyfinTizen.Screens
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEntry(streamUrl, mediaSource, requiresServerManagedStream, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"route={_playMethod},reported={reportedPlayMethod},burnInActive={burnInActive}");
 
+                streamUrl = RewriteStreamUrlForTailscale(streamUrl);
+
                 var source = new MediaUriSource(streamUrl);
                 SetReportingContext(playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod);
                 _player.SetSource(source);
@@ -743,6 +745,40 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private string RewriteStreamUrlForTailscale(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+                return url;
+
+            try
+            {
+                if (!Core.AppState.Tailscale.IsRunning)
+                    return url;
+
+                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    return url;
+
+                string host = uri.Host;
+                if (string.IsNullOrWhiteSpace(host))
+                    return url;
+
+                // If the host is a Tailscale IP (100.x.y.z or 127.0.y.z or fd..), route through local proxy
+                if (host.StartsWith("100.") || host.StartsWith("127.") || host.StartsWith("fd", StringComparison.OrdinalIgnoreCase))
+                {
+                    string proxyUrl = Core.TailscaleProxyService.LocalProxyUrl;
+                    string encodedUrl = Uri.EscapeDataString(url);
+                    string rewritten = $"{proxyUrl}/proxy?url={encodedUrl}";
+                    return rewritten;
+                }
+
+                return url;
+            }
+            catch
+            {
+                return url;
+            }
+        }
+
         private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, MediaStream subtitleStream)
         {
             try
@@ -798,23 +834,22 @@ namespace JellyfinTizen.Screens
                         $"source={source},resolvedExt={ext},resolvedUrl={resolvedUrl}");
                 }
                 var localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{ext}");
+                var client = AppState.HttpClient;
+
+                using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
                 string authHeader = AppState.Jellyfin?.BuildAuthorizationHeader(apiKey);
-
-                using (var client = new HttpClient())
+                if (!string.IsNullOrWhiteSpace(authHeader))
                 {
-                    if (!string.IsNullOrWhiteSpace(authHeader))
-                    {
-                        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", authHeader);
-                        client.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
-                    }
-                    if (!string.IsNullOrWhiteSpace(apiKey))
-                        client.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
-
-                    using var response = await client.GetAsync(downloadUrl);
-                    response.EnsureSuccessStatusCode();
-                    var data = await response.Content.ReadAsByteArrayAsync();
-                    await File.WriteAllBytesAsync(localPath, data);
+                    request.Headers.TryAddWithoutValidation("Authorization", authHeader);
+                    request.Headers.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
                 }
+                if (!string.IsNullOrWhiteSpace(apiKey))
+                    request.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
+
+                using var response = await client.SendAsync(request);
+                response.EnsureSuccessStatusCode();
+                var data = await response.Content.ReadAsByteArrayAsync();
+                await File.WriteAllBytesAsync(localPath, data);
                 _externalSubtitlePath = localPath;
 
                 // Prefer app-rendered external subtitles to avoid sidecar/native switch glitches on Tizen.
@@ -4334,8 +4369,8 @@ namespace JellyfinTizen.Screens
                 if (!string.IsNullOrWhiteSpace(_currentMediaSource?.Id))
                     url += $"&MediaSourceId={Uri.EscapeDataString(_currentMediaSource.Id)}";
 
-                _trickplayHttpClient ??= new HttpClient();
-                var bytes = await _trickplayHttpClient.GetByteArrayAsync(url);
+                var trickplayClient = AppState.HttpClient;
+                var bytes = await trickplayClient.GetByteArrayAsync(url);
                 if (bytes == null || bytes.Length < 64)
                     return null;
 

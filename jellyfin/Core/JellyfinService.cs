@@ -22,8 +22,13 @@ namespace JellyfinTizen.Core
         private const string AuthenticateAcceptHeader =
             "application/json,application/json; profile=CamelCase,application/json; profile=PascalCase,text/html";
 
-        private HttpClient _http;
+        private readonly HttpClient _http;
         private string _connectedServerUrl;
+
+        public JellyfinService(HttpClient httpClient)
+        {
+            _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
 
         public string ServerUrl { get; private set; }
         public string AccessToken { get; private set; }
@@ -38,30 +43,17 @@ namespace JellyfinTizen.Core
 
         public void Connect(string serverUrl)
         {
-            var normalizedUrl = serverUrl?.TrimEnd('/');
+            // Rewrite Tailscale IPs to use local proxy before connecting
+            var rewrittenUrl = AppState.RewriteServerUrlForTailscale(serverUrl?.TrimEnd('/'));
+            var normalizedUrl = rewrittenUrl?.TrimEnd('/');
+            
             if (string.IsNullOrWhiteSpace(normalizedUrl))
                 throw new ArgumentException("Server URL is required.", nameof(serverUrl));
 
             ServerUrl = normalizedUrl;
 
-            // Reuse existing client when reconnecting to the same server.
-            if (_http != null &&
-                string.Equals(_connectedServerUrl, normalizedUrl, StringComparison.OrdinalIgnoreCase))
-            {
-                // Ensure reused client header is refreshed (prevents stale token reuse).
-                SetAuthorizationHeader(AccessToken);
-                return;
-            }
-
-            _http?.Dispose();
-            _http = new HttpClient
-            {
-                Timeout = System.TimeSpan.FromSeconds(10)
-            };
-            _http.DefaultRequestHeaders.UserAgent.ParseAdd($"JellyfinTizen/{ClientVersion}");
-
             _connectedServerUrl = normalizedUrl;
-            SetAuthorizationHeader(null);
+            SetAuthorizationHeader(AccessToken);
         }
 
         public void SetAuthToken(string token)
