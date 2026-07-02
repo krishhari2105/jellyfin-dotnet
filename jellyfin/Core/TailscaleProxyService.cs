@@ -24,8 +24,6 @@ namespace JellyfinTizen.Core
 
         public TailscaleProxyService(HttpClient httpClient)
         {
-            // Create a dedicated inner client with TailscaleWebProxy for forwarding,
-            // so requests to Tailscale IPs go through tailscaled.
             var baseHandler = new HttpClientHandler
             {
                 Proxy = new TailscaleWebProxy(),
@@ -62,7 +60,6 @@ namespace JellyfinTizen.Core
             }
             catch
             {
-                // Ignore cleanup errors
             }
 
             try
@@ -72,7 +69,6 @@ namespace JellyfinTizen.Core
             }
             catch
             {
-                // Ignore wait errors
             }
 
             _cts?.Dispose();
@@ -149,10 +145,59 @@ namespace JellyfinTizen.Core
                 response.StatusCode = (int)proxyResponse.StatusCode;
                 response.ContentType = proxyResponse.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
 
-                if (proxyResponse.Content.Headers.ContentLength.HasValue)
-                    response.ContentLength64 = proxyResponse.Content.Headers.ContentLength.Value;
+                // Forward Content-Range for 206 Partial Content
+                if (proxyResponse.StatusCode == (HttpStatusCode)206 &&
+                    proxyResponse.Content.Headers.ContentRange != null)
+                {
+                    response.AddHeader("Content-Range", proxyResponse.Content.Headers.ContentRange.ToString());
+                }
 
-                await proxyResponse.Content.CopyToAsync(response.OutputStream, cancellationToken);
+                try
+                {
+                    // Check if this is an image or video based on content type
+                    string contentType = proxyResponse.Content.Headers.ContentType?.MediaType?.ToLowerInvariant() ?? "";
+                    bool isImageContent = contentType.Contains("image/");
+
+                    if (isImageContent)
+                    {
+                        // Buffer images fully to survive Tizen ImageView's early connection close
+                        using var memoryStream = new MemoryStream();
+                        await proxyResponse.Content.CopyToAsync(memoryStream, cancellationToken);
+                        response.ContentLength64 = memoryStream.Length;
+                        memoryStream.Seek(0, SeekOrigin.Begin);
+                        await memoryStream.CopyToAsync(response.OutputStream, cancellationToken);
+                        await response.OutputStream.FlushAsync(cancellationToken);
+                    }
+                    else
+                    {
+                        // Stream video/audio directly - player keeps connection open
+                        // Use chunked encoding so we don't need to know content length in advance
+                        response.SendChunked = true;
+                        using var sourceStream = await proxyResponse.Content.ReadAsStreamAsync();
+                        var buffer = new byte[65536];
+                        int bytesRead;
+                        while ((bytesRead = await sourceStream.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
+                        {
+                            try
+                            {
+                                await response.OutputStream.WriteAsync(buffer, 0, bytesRead, cancellationToken);
+                            }
+                            catch (HttpListenerException)
+                            {
+                                // Client disconnected during seek/stop - clean abort
+                                break;
+                            }
+                        }
+                    }
+                }
+                catch (HttpListenerException)
+                {
+                    TailscaleDebugLog.Add("Proxy: Client disconnected");
+                }
+                catch (OperationCanceledException)
+                {
+                    TailscaleDebugLog.Add("Proxy: Request was cancelled");
+                }
             }
             catch (OperationCanceledException)
             {

@@ -135,6 +135,7 @@ namespace JellyfinTizen.Screens
                         : _episode.HasBackdrop
                             ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=90&api_key={apiKey}"
                             : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
+            thumbUrl = AppState.RewriteImageUrlForTailscale(thumbUrl);
             
             var thumbFrame = new View
             {
@@ -157,16 +158,46 @@ namespace JellyfinTizen.Screens
             _infoColumn = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 26)
+                }
             };
-
+            
+            var seriesTitleText = _episode.SeriesName;
+            var episodeTitleText = BuildEpisodeTitle(_episode);
+            var seriesTitle = new TextLabel(seriesTitleText)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = SeriesTitlePointSize,
+                TextColor = new Color(1f, 1f, 1f, 0.72f),
+                MultiLine = false,
+                Ellipsis = true
+            };
+            var episodeTitle = new TextLabel(episodeTitleText)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
+                PointSize = 56,
+                TextColor = Color.White,
+                MultiLine = true,
+                LineWrapMode = LineWrapMode.Word,
+                Ellipsis = false,
+                VerticalAlignment = VerticalAlignment.Top
+            };
+            _metadataContainer = CreateMetadataView();
+            var overviewText = string.IsNullOrEmpty(_episode.Overview)
+                ? "No overview available."
+                : _episode.Overview;
             var topContentViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = FixedTopContentHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
-
             var topContent = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -177,104 +208,63 @@ namespace JellyfinTizen.Screens
                     CellPadding = new Size2D(0, 26)
                 }
             };
-            var seriesTitleText = BuildSeriesTitle(_episode);
-            TextLabel seriesTitle = null;
-            if (!string.IsNullOrWhiteSpace(seriesTitleText))
-            {
-                seriesTitle = new TextLabel(seriesTitleText)
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FitToChildren,
-                    PointSize = SeriesTitlePointSize,
-                    TextColor = new Color(1f, 1f, 1f, 0.74f),
-                    MultiLine = false,
-                    Ellipsis = true,
-                    VerticalAlignment = VerticalAlignment.Top
-                };
-            }
-
-            var titleText = BuildEpisodeTitle(_episode);
-            var titlePointSize = GetAdaptiveTitlePointSize(titleText);
-            var title = new TextLabel(titleText)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = titlePointSize,
-                TextColor = Color.White,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word,
-                Ellipsis = false,
-                VerticalAlignment = VerticalAlignment.Top
-            };
-
-            _metadataContainer = CreateMetadataView();
-            var overviewText = string.IsNullOrEmpty(_episode.Overview)
-                ? "No overview available."
-                : _episode.Overview;
-            var overviewPointSize = 31f;
             _overviewViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = FixedOverviewViewportHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
-
             _overviewLabel = new TextLabel(overviewText)
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = overviewPointSize,
+                PointSize = 31,
                 TextColor = UiTheme.DetailsOverviewText,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
                 Ellipsis = false,
                 VerticalAlignment = VerticalAlignment.Top
             };
-
             _overviewViewport.Add(_overviewLabel);
-            if (seriesTitle != null)
-                topContent.Add(seriesTitle);
-            topContent.Add(title);
+            topContent.Add(seriesTitle);
+            topContent.Add(episodeTitle);
             topContent.Add(_metadataContainer);
             topContent.Add(_overviewViewport);
             topContentViewport.Add(topContent);
             _infoColumn.Add(topContentViewport);
             UpdateMetadataView();
-            _buttonGroup = new View
+            if (_episode.IsPlayableVideo)
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                Layout = new LinearLayout
+                _buttonGroup = new View
                 {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 14)
-                },
-                Margin = new Extents(0, 0, 26, 0),
-                PositionY = 560
-            };
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FitToChildren,
+                    Layout = new LinearLayout
+                    {
+                        LinearOrientation = LinearLayout.Orientation.Vertical,
+                        CellPadding = new Size2D(0, 14)
+                    },
+                    Margin = new Extents(0, 0, 34, 0)
+                };
 
-            _buttonRowTop = CreateButtonRow();
-            _buttonRowBottom = CreateButtonRow();
-            _buttonGroup.Add(_buttonRowTop);
-            _buttonGroup.Add(_buttonRowBottom);
+                _buttonRowTop = CreateButtonRow();
+                _buttonRowBottom = CreateButtonRow();
+                _buttonGroup.Add(_buttonRowTop);
+                _buttonGroup.Add(_buttonRowBottom);
 
-            _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: PlayActionButtonWidth, iconSize: PlayActionButtonIconSize);
+                _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: PlayActionButtonWidth, iconSize: PlayActionButtonIconSize);
 
-            if (_resumeAvailable)
-            {
-                _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: PlayActionButtonIconSize);
+                if (_resumeAvailable)
+                {
+                    _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: PlayActionButtonIconSize);
+                }
+
+                _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: IconActionButtonWidth, iconSize: AudioActionButtonIconSize);
+                _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: IconActionButtonWidth, iconSize: SubtitleActionButtonIconSize);
+                _versionButton = CreateActionButton("Default", isPrimary: false);
+                RebuildActionButtons(includeVersionButton: false);
+                _infoColumn.Add(_buttonGroup);
             }
-
-            _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: IconActionButtonWidth, iconSize: AudioActionButtonIconSize);
-            _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: IconActionButtonWidth, iconSize: SubtitleActionButtonIconSize);
-
-            _versionButton = CreateActionButton("Default", isPrimary: false);
-            RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
-            UpdateVersionButtonText();
-            NormalizeSelectionStateForCurrentMediaSource();
-            UpdateMetadataView();
-
-            _infoColumn.Add(_buttonGroup);
             content.Add(thumbFrame);
             content.Add(_infoColumn);
             root.Add(backdrop);
@@ -282,72 +272,37 @@ namespace JellyfinTizen.Screens
             root.Add(content);
             Add(root);
             _selectionPanel = new DetailsSelectionPanel(this);
+            NormalizeSelectionStateForCurrentMediaSource();
         }
-
-        private static float GetAdaptiveTitlePointSize(string titleText)
+        public override void OnShow()
         {
-            int length = string.IsNullOrWhiteSpace(titleText) ? 0 : titleText.Length;
-            if (length > 90) return 46f;
-            if (length > 65) return 50f;
-            return 56f;
+            if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
+                _ = LoadMediaSourcesAndSubtitlesAsync();
+            if (_buttons.Count > 0)
+                FocusButton(0);
+            RunOnUiThread(RefreshOverviewScrollBounds);
+            ScheduleActionButtonReflow();
         }
 
-        private static string BuildSeriesTitle(JellyfinMovie episode)
-        {
-            if (episode == null)
-                return string.Empty;
-            if (!episode.IsEpisode)
-                return string.Empty;
-
-            return string.IsNullOrWhiteSpace(episode.SeriesName)
-                ? string.Empty
-                : episode.SeriesName.Trim();
-        }
+		public override void OnHide()
+		{
+			UiAnimator.StopAndDisposeAll(_focusAnimations);
+			HideSelectionPanel();
+		}
 
         private static string BuildEpisodeTitle(JellyfinMovie episode)
         {
             if (episode == null)
                 return string.Empty;
 
-            var episodeCode = GetEpisodeCode(episode);
-            if (string.IsNullOrWhiteSpace(episodeCode))
-                return episode.Name ?? string.Empty;
-
-            if (string.IsNullOrWhiteSpace(episode.Name))
-                return episodeCode;
-
-            return $"{episodeCode} - {episode.Name}";
-        }
-
-        private static string GetEpisodeCode(JellyfinMovie episode)
-        {
-            if (episode == null)
-                return string.Empty;
-
             if (episode.ParentIndexNumber > 0 && episode.IndexNumber > 0)
-                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber}";
+                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber} - {episode.Name}";
 
             if (episode.IndexNumber > 0)
-                return $"E{episode.IndexNumber}";
+                return $"E{episode.IndexNumber} - {episode.Name}";
 
-            return string.Empty;
+            return episode.Name ?? string.Empty;
         }
-
-        public override void OnShow()
-        {
-            if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
-                _ = LoadMediaSourcesAndSubtitlesAsync();
-            FocusButton(0);
-            RunOnUiThread(RefreshOverviewScrollBounds);
-            ScheduleActionButtonReflow();
-        }
-
-        public override void OnHide()
-        {
-            UiAnimator.StopAndDisposeAll(_focusAnimations);
-            HideSelectionPanel();
-        }
-
         private async Task LoadMediaSourcesAndSubtitlesAsync()
         {
             if (_mediaSourcesLoaded && _subtitleStreamsLoaded)
@@ -375,7 +330,6 @@ namespace JellyfinTizen.Screens
             _mediaSourcesLoaded = true;
             _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
 
-            // Extract subtitle streams from selected media source to avoid redundant API call
             var currentSource = _mediaSources[_selectedMediaSourceIndex];
             _subtitleStreams = currentSource?.MediaStreams?
                 .Where(s => s.Type == "Subtitle")
@@ -420,17 +374,14 @@ namespace JellyfinTizen.Screens
 
             switch (key)
             {
-                case AppKey.Up:
-                    ScrollOverview(-OverviewScrollStepPx);
-                    break;
-                case AppKey.Down:
-                    ScrollOverview(OverviewScrollStepPx);
-                    break;
                 case AppKey.Left:
                     MoveFocus(-1);
                     break;
                 case AppKey.Right:
                     MoveFocus(1);
+                    break;
+                case AppKey.Up:
+                    ScrollOverview(-OverviewScrollStepPx);
                     break;
                 case AppKey.Enter:
                     ActivateFocusedButton();
@@ -438,8 +389,72 @@ namespace JellyfinTizen.Screens
                 case AppKey.Back:
                     NavigationService.NavigateBack();
                     break;
+                case AppKey.Down:
+                    ScrollOverview(OverviewScrollStepPx);
+                    break;
             }
         }
+
+        private void RefreshOverviewScrollBounds()
+        {
+            if (_overviewViewport == null || _overviewLabel == null)
+                return;
+
+            int viewportHeight = (int)Math.Round(_overviewViewport.SizeHeight);
+            if (viewportHeight <= 0)
+                viewportHeight = FixedOverviewViewportHeight;
+
+            int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
+            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
+            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
+            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
+
+            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
+            _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private void ScrollOverview(int delta)
+        {
+            if (_overviewLabel == null)
+                return;
+
+            RefreshOverviewScrollBounds();
+
+            int nextOffset = Math.Clamp(_overviewScrollOffset + delta, 0, _overviewMaxScroll);
+            if (nextOffset == _overviewScrollOffset)
+                return;
+
+            _overviewScrollOffset = nextOffset;
+            _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        private int EstimateOverviewContentHeight(int viewportWidth)
+        {
+            string text = _overviewLabel?.Text ?? string.Empty;
+            if (string.IsNullOrEmpty(text))
+                return 0;
+
+            float pointSize = _overviewLabel.PointSize > 0 ? _overviewLabel.PointSize : 31f;
+            int safeWidth = viewportWidth > 0 ? viewportWidth : 960;
+            int charsPerLine = Math.Max(12, (int)Math.Floor(safeWidth / Math.Max(1f, pointSize * 0.56f)));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (paragraph.Length == 0)
+                {
+                    lineCount += 1;
+                    continue;
+                }
+
+                lineCount += (int)Math.Ceiling(paragraph.Length / (double)charsPerLine);
+            }
+
+            int lineHeight = (int)Math.Ceiling(pointSize * 1.55f);
+            return Math.Max(0, lineCount * lineHeight);
+        }
+
         private View CreateActionButton(string text, bool isPrimary, string iconFile = null, int? width = SecondaryActionButtonWidth, int iconSize = 30)
         {
             var button = new View
@@ -469,6 +484,7 @@ namespace JellyfinTizen.Screens
             {
                 button.WidthSpecification = width.Value;
             }
+
             if (!string.IsNullOrWhiteSpace(iconFile))
             {
                 var icon = new ImageView
@@ -484,7 +500,6 @@ namespace JellyfinTizen.Screens
                     PivotPoint = Tizen.NUI.PivotPoint.Center,
                     PositionUsesPivotPoint = true
                 };
-
                 if (!string.IsNullOrWhiteSpace(text))
                 {
                     var content = new View
@@ -549,6 +564,7 @@ namespace JellyfinTizen.Screens
                 };
                 button.Add(label);
             }
+
             ApplyActionButtonVisual(button, focused: false);
             return button;
         }
@@ -591,46 +607,7 @@ namespace JellyfinTizen.Screens
                 return sourcePath;
             }
 
-            string versionToken;
-            try
-            {
-                versionToken = File.GetLastWriteTimeUtc(sourcePath)
-                    .Ticks
-                    .ToString(CultureInfo.InvariantCulture);
-            }
-            catch
-            {
-                versionToken = "0";
-            }
-
-            string cacheKey = $"{sourcePath}|{versionToken}";
-            if (_darkButtonIconPathCache.TryGetValue(cacheKey, out var cachedPath) && File.Exists(cachedPath))
-                return cachedPath;
-
-            try
-            {
-                string svg = File.ReadAllText(sourcePath);
-                string darkSvg = svg
-                    .Replace("#FFFFFF", "#000000", StringComparison.OrdinalIgnoreCase)
-                    .Replace("fill=\"white\"", "fill=\"#000000\"", StringComparison.OrdinalIgnoreCase)
-                    .Replace("stroke=\"#FFFFFF\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase)
-                    .Replace("stroke=\"white\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase);
-
-                string cacheDir = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.Data, "icon-cache");
-                Directory.CreateDirectory(cacheDir);
-
-                string baseName = System.IO.Path.GetFileNameWithoutExtension(iconFile);
-                string darkPath = System.IO.Path.Combine(cacheDir, $"{baseName}_dark_{versionToken}.svg");
-                if (!File.Exists(darkPath))
-                    File.WriteAllText(darkPath, darkSvg);
-
-                _darkButtonIconPathCache[cacheKey] = darkPath;
-                return darkPath;
-            }
-            catch
-            {
-                return sourcePath;
-            }
+            return sourcePath;
         }
 
         private static View CreateButtonRow()
@@ -774,67 +751,6 @@ namespace JellyfinTizen.Screens
             }
 
             return false;
-        }
-
-        private void RefreshOverviewScrollBounds()
-        {
-            if (_overviewViewport == null || _overviewLabel == null)
-                return;
-
-            int viewportHeight = (int)Math.Round(_overviewViewport.SizeHeight);
-            if (viewportHeight <= 0)
-                viewportHeight = FixedOverviewViewportHeight;
-
-            int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
-            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
-            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
-            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
-
-            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
-            _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
-            _overviewLabel.PositionY = -_overviewScrollOffset;
-        }
-
-        private void ScrollOverview(int delta)
-        {
-            if (_overviewLabel == null)
-                return;
-
-            // Recompute on each input so late layout updates can expand the reachable range.
-            RefreshOverviewScrollBounds();
-
-            int nextOffset = Math.Clamp(_overviewScrollOffset + delta, 0, _overviewMaxScroll);
-            if (nextOffset == _overviewScrollOffset)
-                return;
-
-            _overviewScrollOffset = nextOffset;
-            _overviewLabel.PositionY = -_overviewScrollOffset;
-        }
-
-        private int EstimateOverviewContentHeight(int viewportWidth)
-        {
-            string text = _overviewLabel?.Text ?? string.Empty;
-            if (string.IsNullOrEmpty(text))
-                return 0;
-
-            float pointSize = _overviewLabel.PointSize > 0 ? _overviewLabel.PointSize : 31f;
-            int safeWidth = viewportWidth > 0 ? viewportWidth : 960;
-            int charsPerLine = Math.Max(12, (int)Math.Floor(safeWidth / Math.Max(1f, pointSize * 0.56f)));
-            int lineCount = 0;
-
-            foreach (var paragraph in text.Split('\n'))
-            {
-                if (paragraph.Length == 0)
-                {
-                    lineCount += 1;
-                    continue;
-                }
-
-                lineCount += (int)Math.Ceiling(paragraph.Length / (double)charsPerLine);
-            }
-
-            int lineHeight = (int)Math.Ceiling(pointSize * 1.55f);
-            return Math.Max(0, lineCount * lineHeight);
         }
 
         private static void ClearRowChildren(View row)
@@ -1567,14 +1483,6 @@ namespace JellyfinTizen.Screens
             if (width >= 1900 || height >= 1000)
                 return "1080p";
             if (width >= 1200 || height >= 700)
-                return "HD";
-
-            var description = GetStreamSearchText(stream);
-            if (description.Contains("2160"))
-                return "4K";
-            if (description.Contains("1080"))
-                return "1080p";
-            if (description.Contains("720"))
                 return "HD";
 
             return null;

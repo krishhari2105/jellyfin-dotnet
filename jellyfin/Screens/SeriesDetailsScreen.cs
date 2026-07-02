@@ -51,7 +51,6 @@ namespace JellyfinTizen.Screens
                 apiKey,
                 maxWidth: 1920);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
-
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -59,14 +58,12 @@ namespace JellyfinTizen.Screens
                 ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
-
             var dimOverlay = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
             };
-
             var content = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -82,6 +79,7 @@ namespace JellyfinTizen.Screens
             var posterUrl =
                 $"{serverUrl}/Items/{_series.Id}/Images/Primary/0" +
                 $"?maxWidth={PosterWidth}&quality=95&api_key={apiKey}";
+            posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
             {
@@ -112,8 +110,17 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            var title = CreateDetailsTitleView(_series.Name);
+            var title = _series.HasLogo
+                ? CreateLogoTitle(_series)
+                : CreateTextTitle(_series.Name);
 
+            var metadata = BuildMetadataRow(_series);
+            var overviewViewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 260,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
             var overview = new TextLabel(
                 string.IsNullOrEmpty(_series.Overview)
                     ? "No overview available."
@@ -121,15 +128,17 @@ namespace JellyfinTizen.Screens
             )
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 260,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
                 PointSize = 32,
                 TextColor = UiTheme.DetailsOverviewText,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word
             };
+            overviewViewport.Add(overview);
 
             _infoColumn.Add(title);
-            _infoColumn.Add(overview);
+            _infoColumn.Add(metadata);
+            _infoColumn.Add(overviewViewport);
 
             content.Add(posterFrame);
             content.Add(_infoColumn);
@@ -141,14 +150,11 @@ namespace JellyfinTizen.Screens
             Add(root);
         }
 
-        private View CreateDetailsTitleView(string fallbackText)
+        private View CreateLogoTitle(JellyfinMovie series)
         {
-            if (!_series.HasLogo)
-                return CreateDetailsTitleLabel(fallbackText);
-
-            var logoUrl = AppState.GetItemLogoUrl(_series.Id, TitleLogoMaxWidth, TitleLogoQuality);
+            var logoUrl = AppState.GetItemLogoUrl(series.Id, TitleLogoMaxWidth, TitleLogoQuality);
             if (string.IsNullOrWhiteSpace(logoUrl))
-                return CreateDetailsTitleLabel(fallbackText);
+                return CreateTextTitle(series.Name);
 
             var logoContainer = new View
             {
@@ -176,7 +182,7 @@ namespace JellyfinTizen.Screens
             return logoContainer;
         }
 
-        private static TextLabel CreateDetailsTitleLabel(string text)
+        private static TextLabel CreateTextTitle(string text)
         {
             return new TextLabel(text)
             {
@@ -188,53 +194,115 @@ namespace JellyfinTizen.Screens
             };
         }
 
+        private static View BuildMetadataRow(JellyfinMovie media)
+        {
+            var row = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 40,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(18, 0)
+                }
+            };
+
+            var parts = new List<string>();
+            if (media.ProductionYear > 0)
+                parts.Add(media.ProductionYear.ToString());
+            var runtime = FormatRuntime(media.RunTimeTicks);
+            if (!string.IsNullOrWhiteSpace(runtime))
+                parts.Add(runtime);
+            if (!string.IsNullOrWhiteSpace(media.OfficialRating))
+                parts.Add(media.OfficialRating.Trim());
+
+            var label = new TextLabel(string.Join("  ", parts))
+            {
+                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
+                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
+                PointSize = 28,
+                TextColor = new Color(0.88f, 0.88f, 0.88f, 1f),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            row.Add(label);
+            return row;
+        }
+
+        private static string FormatRuntime(long ticks)
+        {
+            if (ticks <= 0) return null;
+            var totalMinutes = (int)(TimeSpan.FromTicks(ticks).TotalMinutes);
+            if (totalMinutes <= 0) return null;
+            var hours = totalMinutes / 60;
+            var minutes = totalMinutes % 60;
+            if (hours <= 0) return $"{totalMinutes}m";
+            if (minutes == 0) return $"{hours}h";
+            return $"{hours}h {minutes}m";
+        }
+
         public override void OnShow()
         {
-            if (_seasons == null)
-            {
+            if (_seasons == null || _seasons.Count == 0)
                 _ = LoadSeasonsAsync();
-            }
-            else if (_seasonViews.Count > 0)
-            {
-                _isSeasonViewFocused = true;
-
-                // FIX: Restore the PREVIOUS index instead of forcing 0.
-                // If _seasonIndex is -1 (first run), it defaults to 0.
-                int targetIndex = (_seasonIndex >= 0 && _seasonIndex < _seasonViews.Count)
-                    ? _seasonIndex
-                    : 0;
-
-                FocusSeason(targetIndex);
-            }
         }
 
         private async Task LoadSeasonsAsync()
         {
-            var loading = new TextLabel("Loading seasons...")
+            try
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = 32,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-            _infoColumn.Add(loading);
+                var seasonList = await AppState.Jellyfin.GetSeasonsAsync(_series.Id);
+                _seasons = seasonList ?? new List<JellyfinMovie>();
+                _seasonCardTextHeight = CalculateSeasonCardTextHeight(_seasons);
+                BuildSeasonRow();
+                if (_seasonViews.Count > 0)
+                {
+                    _isSeasonViewFocused = true;
+                    FocusSeason(0);
+                }
+            }
+            catch
+            {
+                _seasons = new List<JellyfinMovie>();
+            }
+        }
 
-            _seasons = await AppState.Jellyfin.GetSeasonsAsync(_series.Id);
-            _seasonCardTextHeight = CalculateSeasonCardTextHeight(_seasons);
-            _infoColumn.Remove(loading);
+        private int CalculateSeasonCardTextHeight(List<JellyfinMovie> seasons)
+        {
+            if (seasons == null || seasons.Count == 0)
+                return PreferredSeasonCardTextHeight;
 
-            var seasonsTitle = new TextLabel("Seasons")
+            int maxTextHeight = PreferredSeasonCardTextHeight;
+            foreach (var season in seasons)
+            {
+                if (season == null) continue;
+                maxTextHeight = Math.Max(
+                    maxTextHeight,
+                    MediaCardFactory.GetRecommendedTextHeight(
+                        SeasonCardWidth,
+                        PreferredSeasonCardTextHeight,
+                        season.Name,
+                        null,
+                        (int)UiTheme.MediaCardTitle,
+                        (int)UiTheme.MediaCardSubtitle));
+            }
+            return maxTextHeight;
+        }
+
+        private void BuildSeasonRow()
+        {
+            if (_seasons == null || _seasons.Count == 0) return;
+
+            var cardHeight = SeasonCardHeight + _seasonCardTextHeight;
+
+            var title = new TextLabel("Seasons")
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
                 Margin = new Extents((ushort)FocusPad, 0, 0, 0),
                 PointSize = 32,
                 TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Begin,
-                Ellipsis = false
+                HorizontalAlignment = HorizontalAlignment.Begin
             };
-
-            var cardHeight = SeasonCardHeight + _seasonCardTextHeight;
 
             _seasonViewport = new View
             {
@@ -254,8 +322,6 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            _seasonViews.Clear();
-
             foreach (var season in _seasons)
             {
                 var card = CreateSeasonCard(season);
@@ -264,35 +330,29 @@ namespace JellyfinTizen.Screens
             }
 
             _seasonViewport.Add(_seasonRowContainer);
-            _infoColumn.Add(seasonsTitle);
+            _infoColumn.Add(title);
             _infoColumn.Add(_seasonViewport);
-            _isSeasonViewFocused = true;
-            FocusSeason(0);
         }
 
         private View CreateSeasonCard(JellyfinMovie season)
         {
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
-            string posterUrl = null;
+            string imageUrl = null;
 
-            if (season.HasPrimary)
+            if (season.HasThumb)
             {
-                posterUrl =
-                    $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
-            }
-            else if (season.HasThumb)
-            {
-                posterUrl =
+                imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
                     $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
-            else if (season.HasBackdrop)
+            else if (season.HasPrimary)
             {
-                posterUrl =
-                    $"{serverUrl}/Items/{season.Id}/Images/Backdrop/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=85&api_key={apiKey}";
+                imageUrl =
+                    $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
+                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 
             return MediaCardFactory.CreateImageCard(
@@ -301,37 +361,12 @@ namespace JellyfinTizen.Screens
                 _seasonCardTextHeight,
                 season.Name,
                 subtitle: null,
-                imageUrl: posterUrl,
+                imageUrl: imageUrl,
                 out _,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
                 subtitlePoint: (int)UiTheme.MediaCardSubtitle
             );
-        }
-
-        private int CalculateSeasonCardTextHeight(List<JellyfinMovie> seasons)
-        {
-            if (seasons == null || seasons.Count == 0)
-                return PreferredSeasonCardTextHeight;
-
-            int maxTextHeight = PreferredSeasonCardTextHeight;
-            foreach (var season in seasons)
-            {
-                if (season == null)
-                    continue;
-
-                maxTextHeight = Math.Max(
-                    maxTextHeight,
-                    MediaCardFactory.GetRecommendedTextHeight(
-                        SeasonCardWidth,
-                        PreferredSeasonCardTextHeight,
-                        season.Name,
-                        null,
-                        (int)UiTheme.MediaCardTitle,
-                        (int)UiTheme.MediaCardSubtitle));
-            }
-
-            return maxTextHeight;
         }
 
         public void HandleKey(AppKey key)
@@ -342,19 +377,15 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            switch (key)
+            if (key == AppKey.Down && _seasonViews.Count > 0)
             {
-                case AppKey.Down:
-                    if (_seasons != null)
-                    {
-                        _isSeasonViewFocused = true;
-                        FocusSeason(0);
-                    }
-                    break;
-                case AppKey.Back:
-                    NavigationService.NavigateBack();
-                    break;
+                _isSeasonViewFocused = true;
+                FocusSeason(0);
+                return;
             }
+
+            if (key == AppKey.Back)
+                NavigationService.NavigateBack();
         }
 
         private void HandleSeasonKey(AppKey key)
@@ -368,12 +399,14 @@ namespace JellyfinTizen.Screens
                     MoveSeasonFocus(1);
                     break;
                 case AppKey.Enter:
-                    NavigationService.NavigateWithLoading(
-                        () => new SeasonDetailsScreen(_seasons[_seasonIndex]),
-                        "Loading season..."
-                    );
+                    if (_seasonIndex >= 0 && _seasonIndex < _seasons.Count)
+                        NavigationService.NavigateWithLoading(
+                            () => new SeasonDetailsScreen(_seasons[_seasonIndex]),
+                            "Loading season..."
+                        );
                     break;
                 case AppKey.Back:
+                    _isSeasonViewFocused = false;
                     NavigationService.NavigateBack();
                     break;
             }
@@ -396,14 +429,9 @@ namespace JellyfinTizen.Screens
             _seasonIndex = Math.Clamp(index, 0, _seasonViews.Count - 1);
             ApplySeasonFocus(_seasonViews[_seasonIndex], true);
             ScrollSeasonsIfNeeded();
-
-            Tizen.Applications.CoreApplication.Post(() =>
-            {
-                FocusManager.Instance.SetCurrentFocusView(_seasonViews[_seasonIndex]);
-            });
         }
 
-        private void ApplySeasonFocus(View card, bool focused)
+        private static void ApplySeasonFocus(View card, bool focused)
         {
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
@@ -431,7 +459,7 @@ namespace JellyfinTizen.Screens
 
             if (_seasonIndex == 0)
             {
-                AnimateSeasonRowTo(FocusPad);
+                _seasonRowContainer.PositionX = FocusPad;
                 return;
             }
 
@@ -451,23 +479,7 @@ namespace JellyfinTizen.Screens
             else if (left < visibleLeft)
                 targetX += (visibleLeft - left + SeasonCardSpacing);
 
-            AnimateSeasonRowTo(targetX);
-        }
-
-        private void AnimateSeasonRowTo(float targetX)
-        {
-            if (_seasonRowContainer == null)
-            {
-                return;
-            }
-
-            if (Math.Abs(targetX - _seasonRowContainer.PositionX) < 0.5f)
-            {
-                return;
-            }
-
             _seasonRowContainer.PositionX = targetX;
         }
-
     }
 }

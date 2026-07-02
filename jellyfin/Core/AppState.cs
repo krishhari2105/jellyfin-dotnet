@@ -838,11 +838,19 @@ namespace JellyfinTizen.Core
                                    host.StartsWith("fd") ||
                                    host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
 
-                if (isTailscale && TailscaleProxy != null)
+                if (isTailscale)
                 {
-                    string proxied = $"{TailscaleProxyService.LocalProxyUrl}/proxy?url={Uri.EscapeDataString(url)}";
-                    TailscaleDebugLog.Add($"Rewrote image URL for Tailscale: {url} -> {proxied}");
-                    return proxied;
+                    // Rewrite if proxy exists OR if Tailscale is running (proxy may still be initializing).
+                    // This avoids race conditions where images load before the proxy is fully ready.
+                    bool canProxy = TailscaleProxy != null ||
+                                    (Tailscale != null && (Tailscale.IsRunning || Tailscale.IsSocketReachable));
+
+                    if (canProxy)
+                    {
+                        string proxied = $"{TailscaleProxyService.LocalProxyUrl}/proxy?url={Uri.EscapeDataString(url)}";
+                        TailscaleDebugLog.Add($"Rewrote image URL for Tailscale: {url} -> {proxied}");
+                        return proxied;
+                    }
                 }
             }
             catch (Exception ex)
@@ -888,10 +896,12 @@ namespace JellyfinTizen.Core
             }
 
             var apiKey = Uri.EscapeDataString(AccessToken);
-            return
+            var url =
                 $"{ServerUrl.TrimEnd('/')}/Users/{UserId}/Images/Primary" +
                 $"?width={size}&height={size}" +
                 $"&quality=95&v=2&api_key={apiKey}";
+
+            return RewriteImageUrlForTailscale(url);
         }
 
         public static string GetItemLogoUrl(string itemId, int maxWidth = 900, int quality = 90)
@@ -910,9 +920,11 @@ namespace JellyfinTizen.Core
             }
 
             var apiKey = Uri.EscapeDataString(AccessToken);
-            return
+            var url =
                 $"{ServerUrl.TrimEnd('/')}/Items/{itemId}/Images/Logo/0" +
                 $"?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
+
+            return RewriteImageUrlForTailscale(url);
         }
 
         private static HttpClient CreateHttpClient()
