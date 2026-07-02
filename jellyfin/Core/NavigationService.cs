@@ -27,6 +27,9 @@ namespace JellyfinTizen.Core
 
         public static void DebugLog(string message)
         {
+            if (!DebugSwitches.EnableVerboseDebugLogging)
+                return;
+
             string msg = $"{DateTime.Now:HH:mm:ss} | {message}";
             Tizen.Log.Info("Jellyfin", msg);
             lock (KeyDebugLogs)

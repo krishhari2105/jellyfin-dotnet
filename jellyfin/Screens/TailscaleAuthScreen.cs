@@ -117,6 +117,7 @@ namespace JellyfinTizen.Screens
         {
             base.OnShow();
             ShowDebugOverlay();
+            SubscribeAuthUrlEvents();
             TailscaleDebugLog.Add("=== TailscaleAuthScreen shown ===");
             _loginButton.Opacity = 0.4f;
             _loginButton.Focusable = false;
@@ -129,6 +130,7 @@ namespace JellyfinTizen.Screens
         public override void OnHide()
         {
             _busCts?.Cancel();
+            UnsubscribeAuthUrlEvents();
             base.OnHide(); // calls HideDebugOverlay()
         }
 
@@ -164,7 +166,9 @@ namespace JellyfinTizen.Screens
 
                 var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
                 var online = status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
-                var authUrl = status?["AuthURL"]?.ToString();
+                var authUrl = AppState.Tailscale?.LastAuthUrl;
+                if (string.IsNullOrWhiteSpace(authUrl))
+                    authUrl = ExtractAuthUrl(status);
                 TailscaleDebugLog.Add($"BackendState={backendState}, Online={online}, AuthURL={(!string.IsNullOrEmpty(authUrl) ? "present" : "none")}");
 
                 if (online)
@@ -180,7 +184,7 @@ namespace JellyfinTizen.Screens
                 {
                     // Auth URL already available - show it immediately
                     TailscaleDebugLog.Add($"AuthURL already available: {authUrl}");
-                    _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
+                    ShowAuthUrl(authUrl);
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
                     // Watch for completion
@@ -188,6 +192,7 @@ namespace JellyfinTizen.Screens
                     _busCts = new CancellationTokenSource();
                     var enumerator = AppState.Tailscale.WatchIPNBus(mask: 7, _busCts.Token).GetAsyncEnumerator(_busCts.Token);
                     _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, enumerator.MoveNextAsync());
+                    _ = WatchForAuthenticationCompletionAsync(_busCts.Token);
                 }
                 else
                 {
@@ -230,9 +235,19 @@ namespace JellyfinTizen.Screens
                 TailscaleDebugLog.Add("LoginAsync: calling StartLoginInteractiveAsync");
                 await AppState.Tailscale.StartLoginInteractiveAsync();
                 TailscaleDebugLog.Add("LoginAsync: API call succeeded, watching bus for URL");
-                _statusLabel.Text = "Waiting for login URL...\n\nCheck the log below for the URL.";
+
+                var authUrl = await TryGetCurrentAuthUrlAsync();
+                if (!string.IsNullOrWhiteSpace(authUrl))
+                {
+                    ShowAuthUrl(authUrl);
+                }
+                else
+                {
+                    _statusLabel.Text = "Waiting for login URL...";
+                }
 
                 _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, firstMoveTask);
+                _ = WatchForAuthenticationCompletionAsync(_busCts.Token);
             }
             catch (Exception ex)
             {
@@ -259,49 +274,22 @@ namespace JellyfinTizen.Screens
                     string json = notify?.ToJsonString() ?? "";
                     TailscaleDebugLog.Add($"Bus event: {json.Substring(0, Math.Min(150, json.Length))}");
 
-                    // Check for login URL in BrowseToURL
-                    string browseUrl = notify?["BrowseToURL"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(browseUrl))
+                    string authUrl = ExtractAuthUrl(notify);
+                    if (!string.IsNullOrEmpty(authUrl))
                     {
-                        TailscaleDebugLog.Add($"Got BrowseToURL: {browseUrl}");
+                        TailscaleDebugLog.Add($"Got auth URL: {authUrl}");
                         RunOnUiThread(() =>
                         {
-                            _statusLabel.Text = $"Open this URL to authenticate:\n\n{browseUrl}\n\nWaiting for authentication...";
+                            ShowAuthUrl(authUrl);
                         });
                     }
 
-                    // Also check AuthURL inside the Status sub-object
-                    string authUrl = notify?["Status"]?["AuthURL"]?.GetValue<string>()
-                                  ?? notify?["AuthURL"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(authUrl) && string.IsNullOrEmpty(browseUrl))
+                    if (IsConnectedStatus(notify))
                     {
-                        TailscaleDebugLog.Add($"Got AuthURL: {authUrl}");
-                        RunOnUiThread(() =>
-                        {
-                            _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
-                        });
-                    }
-
-                    var self = notify?["Self"];
-                    if (self is JsonNode selfNode)
-                    {
-                        bool online = selfNode["Online"]?.GetValue<bool>() ?? false;
-                        if (online)
-                        {
-                            TailscaleDebugLog.Add("Authentication successful!");
-                            RunOnUiThread(() =>
-                            {
-                                _statusLabel.Text = "Successfully connected to tailnet!";
-                                _loginButton.Opacity = 0.4f;
-                                _loginButton.Focusable = false;
-                                _skipLabel.Text = "Continue to Server Setup";
-                                _skipButton.Focusable = true;
-                                FocusManager.Instance.SetCurrentFocusView(_skipButton);
-                            });
-                            _isLoading = false;
-                            _busCts.Cancel();
-                            return;
-                        }
+                        TailscaleDebugLog.Add("Authentication successful!");
+                        RunOnUiThread(ShowConnected);
+                        _busCts.Cancel();
+                        return;
                     }
 
                     hasNext = await enumerator.MoveNextAsync();
@@ -326,6 +314,137 @@ namespace JellyfinTizen.Screens
             {
                 await enumerator.DisposeAsync();
             }
+        }
+
+        private async Task WatchForAuthenticationCompletionAsync(CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, token);
+
+                    JsonNode status = null;
+                    try
+                    {
+                        status = await AppState.Tailscale.GetStatusAsync(token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"Auth completion status check failed: {ex.GetType().Name}: {ex.Message}");
+                        continue;
+                    }
+
+                    var authUrl = ExtractAuthUrl(status);
+                    if (!string.IsNullOrWhiteSpace(authUrl))
+                        RunOnUiThread(() => ShowAuthUrl(authUrl));
+
+                    if (!IsConnectedStatus(status))
+                        continue;
+
+                    TailscaleDebugLog.Add("Authentication completed by status polling");
+                    RunOnUiThread(ShowConnected);
+                    _busCts?.Cancel();
+                    return;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
+
+        private async Task<string> TryGetCurrentAuthUrlAsync()
+        {
+            try
+            {
+                var cachedAuthUrl = AppState.Tailscale?.LastAuthUrl;
+                if (!string.IsNullOrWhiteSpace(cachedAuthUrl))
+                    return cachedAuthUrl;
+
+                var status = await AppState.Tailscale.GetStatusAsync();
+                return ExtractAuthUrl(status);
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"AuthURL status check failed: {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string ExtractAuthUrl(JsonNode node)
+        {
+            return node?["BrowseToURL"]?.ToString()
+                ?? node?["Status"]?["AuthURL"]?.ToString()
+                ?? node?["AuthURL"]?.ToString();
+        }
+
+        private static bool IsConnectedStatus(JsonNode node)
+        {
+            if (node == null)
+                return false;
+
+            if (node["Self"]?["Online"]?.GetValue<bool>() == true)
+                return true;
+
+            if (node["Status"]?["Self"]?["Online"]?.GetValue<bool>() == true)
+                return true;
+
+            var backendState = node["BackendState"]?.ToString()
+                ?? node["Status"]?["BackendState"]?.ToString();
+
+            return string.Equals(backendState, "Running", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void ShowAuthUrl(string authUrl)
+        {
+            if (string.IsNullOrWhiteSpace(authUrl))
+                return;
+
+            _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
+            _loginButton.Opacity = 0.4f;
+            _loginButton.Focusable = false;
+            _skipButton.Opacity = 1.0f;
+            _skipButton.Focusable = true;
+            _isLoading = false;
+        }
+
+        private void ShowConnected()
+        {
+            _statusLabel.Text = "Successfully connected to tailnet!";
+            _loginButton.Opacity = 0.4f;
+            _loginButton.Focusable = false;
+            _skipLabel.Text = "Continue to Server Setup";
+            _skipButton.Opacity = 1.0f;
+            _skipButton.Focusable = true;
+            _isLoading = false;
+            FocusManager.Instance.SetCurrentFocusView(_skipButton);
+        }
+
+        private void SubscribeAuthUrlEvents()
+        {
+            if (AppState.Tailscale == null)
+                return;
+
+            AppState.Tailscale.AuthUrlReceived -= OnAuthUrlReceived;
+            AppState.Tailscale.AuthUrlReceived += OnAuthUrlReceived;
+
+            if (!string.IsNullOrWhiteSpace(AppState.Tailscale.LastAuthUrl))
+                ShowAuthUrl(AppState.Tailscale.LastAuthUrl);
+        }
+
+        private void UnsubscribeAuthUrlEvents()
+        {
+            if (AppState.Tailscale != null)
+                AppState.Tailscale.AuthUrlReceived -= OnAuthUrlReceived;
+        }
+
+        private void OnAuthUrlReceived(string authUrl)
+        {
+            RunOnUiThread(() => ShowAuthUrl(authUrl));
         }
 
         private void SkipAuthentication()
@@ -356,12 +475,11 @@ namespace JellyfinTizen.Screens
                     break;
 
                 case AppKey.Enter:
-                    if (_isLoading) return;
                     var focused = FocusManager.Instance.GetCurrentFocusView();
-                    if (focused == _loginButton && _loginButton.Opacity > 0.5f)
-                        FireAndForget(LoginAsync());
-                    else if (focused == _skipButton)
+                    if (focused == _skipButton)
                         SkipAuthentication();
+                    else if (!_isLoading && focused == _loginButton && _loginButton.Opacity > 0.5f)
+                        FireAndForget(LoginAsync());
                     break;
             }
         }

@@ -15,6 +15,9 @@ namespace JellyfinTizen.Core
 
         public static void Add(string message)
         {
+            if (!DebugSwitches.EnableVerboseDebugLogging)
+                return;
+
             try
             {
                 string timestamp = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);

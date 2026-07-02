@@ -93,6 +93,7 @@ namespace JellyfinTizen.Screens
         {
             base.OnShow();
             ShowDebugOverlay();
+            SubscribeAuthUrlEvents();
             TailscaleDebugLog.Add("=== TailscaleScreen shown ===");
             _ = RefreshStatusAsync();
             
@@ -105,6 +106,8 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
+            _busCts?.Cancel();
+            UnsubscribeAuthUrlEvents();
             base.OnHide(); // calls HideDebugOverlay()
         }
 
@@ -204,7 +207,9 @@ namespace JellyfinTizen.Screens
                 if (string.IsNullOrWhiteSpace(ipList))
                     ipList = "No Tailscale IPs";
 
-                var authUrl = status?["AuthURL"]?.ToString();
+                var authUrl = AppState.Tailscale?.LastAuthUrl;
+                if (string.IsNullOrWhiteSpace(authUrl))
+                    authUrl = ExtractAuthUrl(status);
                 string statusText;
                 if (online)
                 {
@@ -278,8 +283,17 @@ namespace JellyfinTizen.Screens
                 TailscaleDebugLog.Add("Calling StartLoginInteractiveAsync...");
                 await AppState.Tailscale.StartLoginInteractiveAsync();
                 TailscaleDebugLog.Add("Login API call succeeded");
-                
-                _statusLabel.Text = "Waiting for login URL...";
+
+                var authUrl = await TryGetCurrentAuthUrlAsync();
+                if (!string.IsNullOrWhiteSpace(authUrl))
+                {
+                    ShowAuthUrl(authUrl);
+                }
+                else
+                {
+                    _statusLabel.Text = "Waiting for login URL...";
+                }
+
                 _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, firstMoveTask);
             }
             catch (Exception ex)
@@ -303,15 +317,14 @@ namespace JellyfinTizen.Screens
                     var notify = enumerator.Current;
                     string json = notify?.ToJsonString() ?? "";
                     TailscaleDebugLog.Add($"Bus event: {json.Substring(0, Math.Min(120, json.Length))}");
-                    
-                    // Check for login URL
-                    string browseUrl = notify?["BrowseToURL"]?.GetValue<string>();
-                    if (!string.IsNullOrEmpty(browseUrl))
+
+                    string authUrl = ExtractAuthUrl(notify);
+                    if (!string.IsNullOrEmpty(authUrl))
                     {
-                        TailscaleDebugLog.Add($"Got BrowseToURL: {browseUrl}");
+                        TailscaleDebugLog.Add($"Got auth URL: {authUrl}");
                         RunOnUiThread(() =>
                         {
-                            _statusLabel.Text = $"Open this URL to authenticate:\n\n{browseUrl}";
+                            ShowAuthUrl(authUrl);
                         });
                     }
                     
@@ -372,6 +385,62 @@ namespace JellyfinTizen.Screens
             {
                 await enumerator.DisposeAsync();
             }
+        }
+
+        private async Task<string> TryGetCurrentAuthUrlAsync()
+        {
+            try
+            {
+                var cachedAuthUrl = AppState.Tailscale?.LastAuthUrl;
+                if (!string.IsNullOrWhiteSpace(cachedAuthUrl))
+                    return cachedAuthUrl;
+
+                var status = await AppState.Tailscale.GetStatusAsync();
+                return ExtractAuthUrl(status);
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"AuthURL status check failed: {ex.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string ExtractAuthUrl(JsonNode node)
+        {
+            return node?["BrowseToURL"]?.GetValue<string>()
+                ?? node?["Status"]?["AuthURL"]?.GetValue<string>()
+                ?? node?["AuthURL"]?.GetValue<string>();
+        }
+
+        private void ShowAuthUrl(string authUrl)
+        {
+            if (string.IsNullOrWhiteSpace(authUrl))
+                return;
+
+            _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
+        }
+
+        private void SubscribeAuthUrlEvents()
+        {
+            if (AppState.Tailscale == null)
+                return;
+
+            AppState.Tailscale.AuthUrlReceived -= OnAuthUrlReceived;
+            AppState.Tailscale.AuthUrlReceived += OnAuthUrlReceived;
+
+            if (!string.IsNullOrWhiteSpace(AppState.Tailscale.LastAuthUrl))
+                ShowAuthUrl(AppState.Tailscale.LastAuthUrl);
+        }
+
+        private void UnsubscribeAuthUrlEvents()
+        {
+            if (AppState.Tailscale != null)
+                AppState.Tailscale.AuthUrlReceived -= OnAuthUrlReceived;
+        }
+
+        private void OnAuthUrlReceived(string authUrl)
+        {
+            RunOnUiThread(() => ShowAuthUrl(authUrl));
         }
 
         public void HandleKey(AppKey key)

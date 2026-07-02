@@ -10,6 +10,7 @@ using System.Net;
 using System.Threading;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace JellyfinTizen.Core
 {
@@ -20,8 +21,15 @@ namespace JellyfinTizen.Core
         private string _socket;
         private string _tailscaledExe;
         private bool _disposed;
+        private string _lastAuthUrl;
+
+        private static readonly Regex AuthUrlRegex = new(
+            @"(?:AuthURL is|AuthURL=|BrowseToURL=)\s*(?<url>https?://\S+)|(?<url>https://login\.tailscale\.com/\S+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public bool IsRunning => _tailscaledProc != null && !_tailscaledProc.HasExited;
+        public string LastAuthUrl => _lastAuthUrl;
+        public event Action<string> AuthUrlReceived;
 
         /// <summary>True if the tailscaled Unix socket file exists, meaning the daemon is (or was) reachable.
         /// This stays true even if the Tizen app restarted but tailscaled kept running.</summary>
@@ -151,12 +159,12 @@ namespace JellyfinTizen.Core
             _tailscaledProc.OutputDataReceived += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Data))
-                    TailscaleDebugLog.Add("[tailscaled stdout] " + e.Data);
+                    HandleTailscaledOutput("[tailscaled stdout] " + e.Data);
             };
             _tailscaledProc.ErrorDataReceived += (s, e) =>
             {
                 if (!string.IsNullOrEmpty(e.Data))
-                    TailscaleDebugLog.Add("[tailscaled stderr] " + e.Data);
+                    HandleTailscaledOutput("[tailscaled stderr] " + e.Data);
             };
             _tailscaledProc.Exited += (s, e) =>
             {
@@ -184,6 +192,32 @@ namespace JellyfinTizen.Core
             {
                 TailscaleDebugLog.Add($"ERROR: tailscaled exited immediately with code: {_tailscaledProc.ExitCode}");
             }
+        }
+
+        private void HandleTailscaledOutput(string line)
+        {
+            CaptureAuthUrl(line);
+            TailscaleDebugLog.Add(line);
+        }
+
+        private void CaptureAuthUrl(string line)
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                return;
+
+            var match = AuthUrlRegex.Match(line);
+            if (!match.Success)
+                return;
+
+            var url = match.Groups["url"].Value.Trim().TrimEnd('.', ',', ';', ')', ']', '"', '\'');
+            if (string.IsNullOrWhiteSpace(url))
+                return;
+
+            if (string.Equals(_lastAuthUrl, url, StringComparison.Ordinal))
+                return;
+
+            _lastAuthUrl = url;
+            try { AuthUrlReceived?.Invoke(url); } catch { }
         }
 
         public async Task WaitForReadyAsync()
