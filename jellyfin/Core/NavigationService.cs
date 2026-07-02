@@ -332,6 +332,8 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
+            
+            try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
         }
 
         private static void NavigateBackImmediate()
@@ -350,6 +352,8 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
+            
+            try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
         }
 
         private static void EnsureExitConfirmationPopupCreated()

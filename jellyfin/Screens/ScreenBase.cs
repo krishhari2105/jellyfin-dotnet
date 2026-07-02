@@ -118,6 +118,11 @@ namespace JellyfinTizen.Screens
             RefreshDebugOverlay(autoScrollToBottom: true);
         }
 
+        public void ShowDebugOverlayPublic()
+        {
+            ShowDebugOverlay();
+        }
+
         protected void HideDebugOverlay()
         {
             if (_debugOverlayVisible)
