@@ -134,6 +134,7 @@ namespace JellyfinTizen.Core
                     return;
                 }
 
+                TailscaleDebugLog.Add($"Proxying request for: {targetUrl}");
                 using var proxyRequest = new HttpRequestMessage(HttpMethod.Get, uri);
                 foreach (string headerName in request.Headers)
                 {
@@ -144,6 +145,7 @@ namespace JellyfinTizen.Core
                 }
 
                 using var proxyResponse = await _forwardClient.SendAsync(proxyRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                TailscaleDebugLog.Add($"Proxy response: {(int)proxyResponse.StatusCode} {proxyResponse.StatusCode}");
                 response.StatusCode = (int)proxyResponse.StatusCode;
                 response.ContentType = proxyResponse.Content.Headers.ContentType?.ToString() ?? "application/octet-stream";
 
@@ -154,15 +156,22 @@ namespace JellyfinTizen.Core
             }
             catch (OperationCanceledException)
             {
+                TailscaleDebugLog.Add("Proxy request cancelled or timed out.");
                 response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
             }
             catch (HttpRequestException ex)
             {
+                TailscaleDebugLog.Add($"Proxy HTTP request failed: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    TailscaleDebugLog.Add($"Proxy HTTP inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                }
                 Tizen.Log.Error("TailscaleProxy", $"Proxy request failed: {ex.Message}");
                 response.StatusCode = (int)HttpStatusCode.BadGateway;
             }
             catch (Exception ex)
             {
+                TailscaleDebugLog.Add($"Proxy unexpected error: {ex.GetType().Name}: {ex.Message}");
                 Tizen.Log.Error("TailscaleProxy", $"Unexpected proxy error: {ex.Message}");
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
             }
