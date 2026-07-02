@@ -4,12 +4,15 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading.Tasks;
 using JellyfinTizen.Screens;
 
 namespace JellyfinTizen.Core
 {
     public static class AppState
     {
+        public static Task TailscaleReadyTask { get; private set; }
+
         private const string KeyServerUrl = "jf_server_url";
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
@@ -75,7 +78,7 @@ namespace JellyfinTizen.Core
             
             // Start tailscaled in background - don't block app initialization
             // If it fails, the UI will show the error state
-            System.Threading.Tasks.Task.Run(() =>
+            TailscaleReadyTask = System.Threading.Tasks.Task.Run(async () =>
             {
                 try
                 {
@@ -84,10 +87,16 @@ namespace JellyfinTizen.Core
                     bool reachable = Tailscale.IsRunning || Tailscale.IsSocketReachable;
                     if (reachable)
                     {
+                        // Wait for daemon to be ready to handle local API calls
+                        try { await Tailscale.WaitForReadyAsync(); } catch { }
+
                         try
                         {
                             TailscaleProxy = new TailscaleProxyService(HttpClient);
                             TailscaleProxy.Start();
+                            
+                            // Give the proxy a tiny bit of time to start its listener
+                            await Task.Delay(100);
                         }
                         catch (Exception ex)
                         {

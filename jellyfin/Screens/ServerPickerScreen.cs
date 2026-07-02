@@ -524,6 +524,33 @@ namespace JellyfinTizen.Screens
 
             _busy = true;
 
+            // Check if selected server uses Tailscale and wait if it's still initializing
+            if (Uri.TryCreate(server.Url, UriKind.Absolute, out var uri))
+            {
+                string host = uri.Host;
+                bool isTailscale = host.StartsWith("100.") ||
+                                   host.StartsWith("127.0.") ||
+                                   host.StartsWith("fd") ||
+                                   host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+
+                if (isTailscale && AppState.TailscaleReadyTask != null)
+                {
+                    RunOnUiThread(() =>
+                    {
+                        NavigationService.Navigate(
+                            new LoadingScreen("Initializing Tailscale..."),
+                            addToStack: false
+                        );
+                    });
+
+                    try
+                    {
+                        await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
+                    }
+                    catch { }
+                }
+            }
+
             RunOnUiThread(() =>
             {
                 NavigationService.Navigate(
