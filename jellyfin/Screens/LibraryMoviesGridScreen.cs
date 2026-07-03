@@ -387,8 +387,8 @@ namespace JellyfinTizen.Screens
                 return;
 
             int lowWidth = Math.Max(_useLandscapeCards ? 180 : 120, _cardWidth / 2);
-            lowUrl = $"{basePath}?maxWidth={lowWidth}&quality=52&api_key={apiKey}";
-            highUrl = $"{basePath}?maxWidth={_cardWidth}&quality={highQuality}&api_key={apiKey}";
+            lowUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={lowWidth}&quality=52&api_key={apiKey}");
+            highUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality={highQuality}&api_key={apiKey}");
         }
 
         private void StartBuildTimer()

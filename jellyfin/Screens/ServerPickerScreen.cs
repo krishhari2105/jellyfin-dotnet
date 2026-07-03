@@ -40,6 +40,7 @@ namespace JellyfinTizen.Screens
         private View _cardsRow;
         private View _addButton;
         private View _removeButton;
+        private View _tailscaleButton;
         private TextLabel _errorLabel;
         private int _cardsContentWidth;
         private int _selectedCardIndex;
@@ -128,6 +129,14 @@ namespace JellyfinTizen.Screens
             _actionButtons.Add(_removeButton);
             actionRow.Add(_addButton);
             actionRow.Add(_removeButton);
+
+            if (AppState.Tailscale != null)
+            {
+                _tailscaleButton = MonochromeAuthFactory.CreateButton("Tailscale Settings", out _);
+                _actionButtons.Add(_tailscaleButton);
+                actionRow.Add(_tailscaleButton);
+            }
+
             panel.Add(actionRow);
 
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
@@ -139,6 +148,9 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            base.OnShow();
+            ShowDebugOverlay();
+            Core.TailscaleDebugLog.Add("=== ServerPickerScreen shown ===");
             _busy = false;
             _selectedCardIndex = Math.Max(0, _servers.FindIndex(s => s.IsActive));
             if (_selectedCardIndex < 0)
@@ -166,6 +178,7 @@ namespace JellyfinTizen.Screens
         {
             _busy = false;
             DisposeTimer(ref _errorTimer);
+            base.OnHide(); // calls HideDebugOverlay()
         }
 
         public void HandleKey(AppKey key)
@@ -329,7 +342,12 @@ namespace JellyfinTizen.Screens
         private void EnsureActionSelectionValid()
         {
             if (_cards.Count == 0 && _selectedActionIndex == 1)
-                _selectedActionIndex = 0;
+            {
+                if (_actionButtons.Count > 2)
+                    _selectedActionIndex = 2;
+                else
+                    _selectedActionIndex = 0;
+            }
         }
 
         private void UpdateVisualState()
@@ -345,8 +363,13 @@ namespace JellyfinTizen.Screens
 
             var addFocused = !_cardsFocused && _selectedActionIndex == 0;
             var removeFocused = !_cardsFocused && _selectedActionIndex == 1;
+            var tailscaleFocused = !_cardsFocused && _selectedActionIndex == 2;
             MonochromeAuthFactory.SetButtonFocusState(_addButton, focused: addFocused);
             MonochromeAuthFactory.SetButtonFocusState(_removeButton, focused: removeFocused);
+            if (_tailscaleButton != null)
+            {
+                MonochromeAuthFactory.SetButtonFocusState(_tailscaleButton, focused: tailscaleFocused);
+            }
             _removeButton.Opacity = _cards.Count > 0 ? 1.0f : 0.45f;
         }
 
@@ -442,6 +465,12 @@ namespace JellyfinTizen.Screens
                 RemoveSelectedServer();
                 return;
             }
+
+            if (_selectedActionIndex == 2 && _tailscaleButton != null)
+            {
+                NavigationService.Navigate(new TailscaleScreen());
+                return;
+            }
         }
 
         private void AddServer()
@@ -494,6 +523,19 @@ namespace JellyfinTizen.Screens
             }
 
             _busy = true;
+            var isTailscale = AppState.IsTailscaleUrl(server.Url);
+            Core.TailscaleDebugLog.Add($"ServerPicker.Select: url={server.Url}, isTailscale={isTailscale}, hasSession={server.HasSavedSession}");
+
+            if (isTailscale)
+            {
+                var tailscaleReady = await EnsureTailscaleReadyForPickerAsync();
+                if (!tailscaleReady)
+                {
+                    NavigateToPickerWithError("Tailscale is not ready. Open Tailscale Settings and try again.");
+                    _busy = false;
+                    return;
+                }
+            }
 
             RunOnUiThread(() =>
             {
@@ -507,23 +549,39 @@ namespace JellyfinTizen.Screens
             {
                 if (!AppState.ActivateServer(server.Url, includeSession: true))
                 {
+                    Core.TailscaleDebugLog.Add("ServerPicker.Select: ActivateServer returned false");
                     NavigateToPickerWithError("Saved server was not found.");
                     return;
                 }
 
                 var hasTokenSession = !string.IsNullOrWhiteSpace(AppState.AccessToken) &&
                                       !string.IsNullOrWhiteSpace(AppState.UserId);
+                Core.TailscaleDebugLog.Add($"ServerPicker.Select: activated server={AppState.ServerUrl}, hasTokenSession={hasTokenSession}");
                 if (hasTokenSession && await TryResumeSavedSessionAsync())
                 {
+                    Core.TailscaleDebugLog.Add("ServerPicker.Select: saved session resumed");
                     NavigateToHome();
                     return;
                 }
 
+                if (hasTokenSession)
+                {
+                    Core.TailscaleDebugLog.Add("ServerPicker.Select: saved session resume failed, continuing without saved token");
+                    ClearRuntimeAuthForUserSelection();
+                }
+
+                Core.TailscaleDebugLog.Add("ServerPicker.Select: fetching public users");
                 var users = await WithTimeout(AppState.Jellyfin.GetPublicUsersAsync(), 12000);
+                Core.TailscaleDebugLog.Add($"ServerPicker.Select: public users fetched count={users?.Count ?? 0}");
                 NavigateToUserSelect(users);
             }
-            catch
+            catch (Exception ex)
             {
+                Core.TailscaleDebugLog.Add($"ServerPicker.Select failed: {ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Core.TailscaleDebugLog.Add($"ServerPicker.Select inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                }
                 NavigateToPickerWithError("Failed to connect. Please try again.");
             }
             finally
@@ -532,17 +590,83 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private async Task<bool> EnsureTailscaleReadyForPickerAsync()
+        {
+            try
+            {
+                var startupComplete = AppState.TailscaleReadyTask == null || AppState.TailscaleReadyTask.IsCompleted;
+                Core.TailscaleDebugLog.Add(
+                    $"ServerPicker.TailscaleReady: startupComplete={startupComplete}, taskStatus={AppState.TailscaleReadyTask?.Status.ToString() ?? "none"}");
+
+                if (!startupComplete)
+                {
+                    RunOnUiThread(() =>
+                    {
+                        NavigationService.Navigate(
+                            new LoadingScreen("Initializing Tailscale..."),
+                            addToStack: false
+                        );
+                    });
+
+                    await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
+                }
+
+                if (AppState.Tailscale == null)
+                {
+                    Core.TailscaleDebugLog.Add("ServerPicker.TailscaleReady: Tailscale service is null");
+                    return false;
+                }
+
+                var canReachDaemon = AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable;
+                Core.TailscaleDebugLog.Add(
+                    $"ServerPicker.TailscaleReady: canReachDaemon={canReachDaemon}, isRunning={AppState.Tailscale.IsRunning}, socket={AppState.Tailscale.IsSocketReachable}, proxy={TailscaleService.HttpProxyUrl}");
+
+                if (!canReachDaemon)
+                    return false;
+
+                var backendRunning = await AppState.Tailscale.WaitForBackendRunningAsync(3000);
+                Core.TailscaleDebugLog.Add($"ServerPicker.TailscaleReady: backendRunning={backendRunning}");
+                return backendRunning;
+            }
+            catch (Exception ex)
+            {
+                Core.TailscaleDebugLog.Add($"ServerPicker.TailscaleReady failed: {ex.GetType().Name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void ClearRuntimeAuthForUserSelection()
+        {
+            AppState.AccessToken = null;
+            AppState.UserId = null;
+            AppState.Username = null;
+            AppState.Jellyfin.ClearAuthToken();
+            AppState.Jellyfin.SetUserId(null);
+        }
+
         private async Task<bool> TryResumeSavedSessionAsync()
         {
             try
             {
-                var me = await WithTimeout(AppState.Jellyfin.GetCurrentUserAsync(), 9000);
-                var userId = string.IsNullOrWhiteSpace(AppState.UserId)
-                    ? me.userId
-                    : AppState.UserId;
-                var username = string.IsNullOrWhiteSpace(AppState.Username)
-                    ? me.username
-                    : AppState.Username;
+                var userId = AppState.UserId;
+                var username = AppState.Username;
+
+                if (string.IsNullOrWhiteSpace(userId) ||
+                    string.IsNullOrWhiteSpace(username))
+                {
+                    Core.TailscaleDebugLog.Add("ServerPicker.ResumeSession: saved identity incomplete, fetching /Users/Me");
+                    var me = await WithTimeout(AppState.Jellyfin.GetCurrentUserAsync(), 9000);
+                    userId = string.IsNullOrWhiteSpace(userId)
+                        ? me.userId
+                        : userId;
+                    username = string.IsNullOrWhiteSpace(username)
+                        ? me.username
+                        : username;
+                }
+                else
+                {
+                    Core.TailscaleDebugLog.Add("ServerPicker.ResumeSession: using stored user id and username");
+                }
 
                 if (string.IsNullOrWhiteSpace(userId))
                     return false;
@@ -558,7 +682,17 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex) when (IsUnauthorized(ex))
             {
+                Core.TailscaleDebugLog.Add($"ServerPicker.ResumeSession unauthorized: {ex.GetType().Name}: {ex.Message}");
                 AppState.ClearSession(clearServer: false);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Core.TailscaleDebugLog.Add($"ServerPicker.ResumeSession failed: {ex.GetType().Name}: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Core.TailscaleDebugLog.Add($"ServerPicker.ResumeSession inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+                }
                 return false;
             }
         }

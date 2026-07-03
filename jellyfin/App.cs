@@ -29,7 +29,7 @@ namespace JellyfinTizen
         {
             Window.Default.BackgroundColor = Color.Black;
 
-            // Init global services
+            // Init global services, including Tailscale launcher and local proxy
             AppState.Init();
             NavigationService.Init(Window.Default);
 

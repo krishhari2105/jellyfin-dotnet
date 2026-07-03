@@ -48,7 +48,8 @@ namespace JellyfinTizen.Utils
                 return null;
             }
 
-            return $"{serverUrl}/Items/{itemId}/Images/{imageType}/0?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
+            var url = $"{serverUrl}/Items/{itemId}/Images/{imageType}/0?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
+            return JellyfinTizen.Core.AppState.RewriteImageUrlForTailscale(url);
         }
     }
 }

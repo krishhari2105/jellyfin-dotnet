@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -55,6 +56,41 @@ namespace JellyfinTizen.Screens
                 }
 
                 _loadingVisual.Start();
+
+                // Detect if the active server uses Tailscale and wait for it to initialize
+                try
+                {
+                    var active = AppState.GetStoredServers().FirstOrDefault(s => s.IsActive);
+                    if (active != null && !string.IsNullOrWhiteSpace(active.Url))
+                    {
+                        if (Uri.TryCreate(active.Url, UriKind.Absolute, out var uri))
+                        {
+                            string host = uri.Host;
+                            bool isTailscaleServer = host.StartsWith("100.") ||
+                                                     host.StartsWith("127.0.") ||
+                                                     host.StartsWith("fd") ||
+                                                     host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+
+                            if (isTailscaleServer && AppState.TailscaleReadyTask != null)
+                            {
+                                _loadingVisual.SetMessage("Initializing Tailscale...");
+                                // Wait for Tailscale daemon and proxy to be ready
+                                await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
+
+                                // Wait for Tailscale backend connection to be Running (online)
+                                if (AppState.Tailscale != null)
+                                {
+                                    await AppState.Tailscale.WaitForBackendRunningAsync(10000);
+                                }
+                                _loadingVisual.SetMessage("Loading...");
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Tizen.Log.Warn("StartupScreen", $"Failed checking Tailscale status: {ex.Message}");
+                }
 
                 // Safety fallback if network calls hang for any reason.
                 _fallbackTimer = new ThreadingTimer(_ =>
@@ -172,11 +208,17 @@ namespace JellyfinTizen.Screens
 
         private static ScreenBase CreateServerEntryScreen()
         {
+            // Show Tailscale auth screen if daemon is running OR socket is reachable from a prior run
+            if (AppState.Tailscale != null &&
+                (AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable))
+            {
+                return new TailscaleAuthScreen();
+            }
+            
             return AppState.HasStoredServers()
                 ? new ServerPickerScreen()
                 : new ServerSetupScreen();
         }
-
         private async Task<bool> TryResumeSavedTokenSessionAsync()
         {
             try

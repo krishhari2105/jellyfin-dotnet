@@ -2,6 +2,8 @@ using System;
 using System.Reflection;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+// Alias the UI Timer to avoid ambiguity with System.Threading.Timer
+using Timer = Tizen.NUI.Timer;
 
 namespace JellyfinTizen.UI
 {

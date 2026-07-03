@@ -27,6 +27,9 @@ namespace JellyfinTizen.Core
 
         public static void DebugLog(string message)
         {
+            if (!DebugSwitches.EnableVerboseDebugLogging)
+                return;
+
             string msg = $"{DateTime.Now:HH:mm:ss} | {message}";
             Tizen.Log.Info("Jellyfin", msg);
             lock (KeyDebugLogs)
@@ -332,6 +335,8 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
+            
+            try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
         }
 
         private static void NavigateBackImmediate()
@@ -350,6 +355,8 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
+            
+            try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
         }
 
         private static void EnsureExitConfirmationPopupCreated()
