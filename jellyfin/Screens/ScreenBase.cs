@@ -4,6 +4,8 @@ using System.Threading.Tasks;
 using Tizen.Applications;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using Tizen.NUI.Constants;
+using JellyfinTizen.Core;
 
 using ThreadingTimer = System.Threading.Timer;
 
@@ -22,7 +24,7 @@ namespace JellyfinTizen.Screens
         public virtual void OnShow() { }
         public virtual void OnHide()
         {
-            // Debug overlay disabled in release builds
+            HideDebugOverlay();
         }
 
         protected View _debugOverlay;
@@ -32,37 +34,89 @@ namespace JellyfinTizen.Screens
 
         protected void CreateDebugOverlay()
         {
-            // Debug overlay disabled in release builds
+            if (_debugOverlay != null)
+                return;
+
+            _debugOverlay = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                BackgroundColor = new Color(0f, 0f, 0f, 0.7f),
+                PositionUsesPivotPoint = true,
+                ParentOrigin = ParentOrigin.Center,
+                PivotPoint = PivotPoint.Center,
+                // Z index is not directly assignable for View, rely on Add order or PositionZ if needed
+                Opacity = 0.0f,
+            };
+            Add(_debugOverlay);
+
+            _debugOverlayLabel = new TextLabel
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                Text = "Debug Log",
+                TextColor = Color.White,
+                PointSize = 12.0f,
+                MultiLine = true,
+                LineWrapMode = LineWrapMode.Word,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                HorizontalAlignment = Tizen.NUI.BaseComponents.HorizontalAlignment.Left,
+                Padding = new Extents(10, 10, 10, 10)
+            };
+            _debugOverlay.Add(_debugOverlayLabel);
+            TailscaleDebugLog.LogAdded += OnLogAdded;
         }
 
         protected void RefreshDebugOverlay(bool autoScrollToBottom = false)
         {
-            // Debug overlay disabled in release builds
+            if (!DebugSwitches.EnableVerboseDebugLogging || !DebugSwitches.EnablePlaybackDebugOverlay)
+                return;
+
+            if (_debugOverlay == null)
+                CreateDebugOverlay();
+
+            _debugOverlayLabel.Text = TailscaleDebugLog.GetRecentLines();
+
+            if (_debugOverlayVisible && _debugOverlay.Opacity < 0.9f)
+                _debugOverlay.Opacity = 1.0f;
         }
 
         protected bool TryScrollDebugOverlay(int direction)
         {
-            return false;
+            return false; // Scrolling is not implemented in this simplified version
         }
 
         protected void ShowDebugOverlay()
         {
-            // Debug overlay disabled in release builds
+            if (!DebugSwitches.EnableVerboseDebugLogging || !DebugSwitches.EnablePlaybackDebugOverlay)
+                return;
+
+            if (_debugOverlay == null)
+                CreateDebugOverlay();
+
+            _debugOverlayVisible = true;
+            _debugOverlay.Opacity = 1.0f;
+            RefreshDebugOverlay(autoScrollToBottom: true);
         }
 
         public void ShowDebugOverlayPublic()
         {
-            // Debug overlay disabled in release builds
+            ShowDebugOverlay();
         }
 
         protected void HideDebugOverlay()
         {
-            // Debug overlay disabled in release builds
+            if (_debugOverlay == null)
+                return;
+
+            _debugOverlayVisible = false;
+            _debugOverlay.Opacity = 0.0f;
+            TailscaleDebugLog.LogAdded -= OnLogAdded;
         }
 
         private void OnLogAdded()
         {
-            // Debug overlay disabled in release builds
+            RunOnUiThread(() => RefreshDebugOverlay());
         }
 
         protected void RunOnUiThread(Action action)
