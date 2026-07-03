@@ -5,7 +5,7 @@ namespace JellyfinTizen.Core
 {
     public class TailscaleWebProxy : IWebProxy
     {
-        private readonly Uri _proxyUri = new Uri("http://127.0.0.1:3128");
+        private readonly Uri _proxyUri = new Uri(TailscaleService.HttpProxyUrl);
 
         public ICredentials Credentials { get; set; }
 
@@ -41,11 +41,7 @@ namespace JellyfinTizen.Core
             if (!canProxy)
                 return false;
 
-            string host = uri.Host;
-            return host.StartsWith("100.") ||
-                   host.StartsWith("127.0.") ||
-                   host.StartsWith("fd") ||
-                   host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+            return AppState.IsTailscaleUrl(uri.AbsoluteUri);
         }
     }
 }

@@ -14,7 +14,7 @@ namespace JellyfinTizen.Core
 {
     public class JellyfinService
     {
-        private const string DefaultDeviceId = "tizen-tv";
+        private const string DefaultDeviceId = "00000000000000000000000000000000";
         private const string ClientName = "Jellyfin for Tizen";
         private const string ClientVersion = "2.0";
         private const string DeviceName = "Samsung Smart TV";
@@ -85,8 +85,21 @@ namespace JellyfinTizen.Core
             {
                 UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
             }
-            response.EnsureSuccessStatusCode();
-            return await response.Content.ReadAsStringAsync();
+
+            var responseContent = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                TailscaleDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
+                var httpEx = new HttpRequestException(
+                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                    null,
+                    response.StatusCode);
+                httpEx.Data["ResponseContent"] = responseContent;
+                httpEx.Data["RequestPath"] = path;
+                throw httpEx;
+            }
+
+            return responseContent;
         }
 
         public async Task<string> PostAsync(string path, object body)
@@ -118,8 +131,10 @@ namespace JellyfinTizen.Core
 
         public async Task<List<JellyfinUser>> GetPublicUsersAsync()
         {
+            EnsureConnected();
+
             return await CacheHelper.GetOrAddAsync(
-                "PublicUsers",
+                $"PublicUsers_{ServerUrl}",
                 async () =>
                 {
                     var json = await GetAsync("/Users/Public");
@@ -130,7 +145,9 @@ namespace JellyfinTizen.Core
 
         public async Task<(string userId, string username)> GetCurrentUserAsync()
         {
-            var cacheKey = $"CurrentUser_{UserId}";
+            EnsureConnected();
+
+            var cacheKey = $"CurrentUser_{ServerUrl}_{UserId}";
             return await CacheHelper.GetOrAddAsync(
                 cacheKey,
                 async () =>
@@ -1271,6 +1288,18 @@ namespace JellyfinTizen.Core
             }
 
             return null;
+        }
+
+        private static string TrimForDebug(string value, int maxLength)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "-";
+
+            value = value.Replace("\r", " ").Replace("\n", " ").Trim();
+            if (value.Length <= maxLength)
+                return value;
+
+            return value.Substring(0, maxLength) + "...";
         }
 
     }

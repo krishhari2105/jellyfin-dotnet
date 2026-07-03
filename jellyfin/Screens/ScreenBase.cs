@@ -43,8 +43,8 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 BackgroundColor = new Color(0f, 0f, 0f, 0.7f),
                 PositionUsesPivotPoint = true,
-                ParentOrigin = ParentOrigin.Center,
-                PivotPoint = PivotPoint.Center,
+                ParentOrigin = Tizen.NUI.ParentOrigin.Center,
+                PivotPoint = Tizen.NUI.PivotPoint.Center,
                 // Z index is not directly assignable for View, rely on Add order or PositionZ if needed
                 Opacity = 0.0f,
             };
@@ -60,7 +60,7 @@ namespace JellyfinTizen.Screens
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
                 VerticalAlignment = VerticalAlignment.Bottom,
-                HorizontalAlignment = Tizen.NUI.BaseComponents.HorizontalAlignment.Left,
+                HorizontalAlignment = HorizontalAlignment.Begin,
                 Padding = new Extents(10, 10, 10, 10)
             };
             _debugOverlay.Add(_debugOverlayLabel);

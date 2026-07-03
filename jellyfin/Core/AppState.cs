@@ -276,8 +276,9 @@ namespace JellyfinTizen.Core
             var normalized = NormalizeServerUrl(serverUrl);
             if (string.IsNullOrWhiteSpace(normalized) ||
                 string.IsNullOrWhiteSpace(accessToken) ||
-                string.IsNullOrWhiteSpace(userId))
+                !IsValidGuidValue(userId))
             {
+                TailscaleDebugLog.Add("AppState.TrySaveSession rejected session with invalid user id.");
                 return false;
             }
 
@@ -529,7 +530,7 @@ namespace JellyfinTizen.Core
         {
             return record != null &&
                    !string.IsNullOrWhiteSpace(record.AccessToken) &&
-                   !string.IsNullOrWhiteSpace(record.UserId);
+                   IsValidGuidValue(record.UserId);
         }
 
         private static string NormalizeServerUrl(string serverUrl)
@@ -781,8 +782,10 @@ namespace JellyfinTizen.Core
                 if (Tizen.Applications.Preference.Contains(KeyDeviceId))
                 {
                     var existing = Tizen.Applications.Preference.Get<string>(KeyDeviceId);
-                    if (!string.IsNullOrWhiteSpace(existing))
+                    if (IsValidGuidValue(existing))
                         return existing;
+
+                    TailscaleDebugLog.Add($"Replacing invalid Jellyfin device id: {existing}");
                 }
             }
             catch
@@ -790,7 +793,7 @@ namespace JellyfinTizen.Core
                 // Continue and generate a new id when preference read fails.
             }
 
-            var generated = "tizen-" + Guid.NewGuid().ToString("N");
+            var generated = Guid.NewGuid().ToString("N");
 
             try
             {
@@ -802,6 +805,11 @@ namespace JellyfinTizen.Core
             }
 
             return generated;
+        }
+
+        private static bool IsValidGuidValue(string value)
+        {
+            return !string.IsNullOrWhiteSpace(value) && Guid.TryParse(value.Trim(), out _);
         }
 
         public static bool IsTailscaleConnected()
@@ -819,6 +827,21 @@ namespace JellyfinTizen.Core
             {
                 return false;
             }
+        }
+
+        public static bool IsTailscaleUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url) ||
+                !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                return false;
+            }
+
+            string host = uri.Host;
+            return host.StartsWith("100.", StringComparison.OrdinalIgnoreCase) ||
+                   host.StartsWith("127.0.", StringComparison.OrdinalIgnoreCase) ||
+                   host.StartsWith("fd", StringComparison.OrdinalIgnoreCase) ||
+                   host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
         }
 
         public static string RewriteServerUrlForTailscale(string serverUrl)
@@ -841,11 +864,7 @@ namespace JellyfinTizen.Core
             try
             {
                 var uri = new Uri(url);
-                string host = uri.Host;
-                bool isTailscale = host.StartsWith("100.") ||
-                                   host.StartsWith("127.0.") ||
-                                   host.StartsWith("fd") ||
-                                   host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+                bool isTailscale = IsTailscaleUrl(url);
 
                 if (isTailscale)
                 {
