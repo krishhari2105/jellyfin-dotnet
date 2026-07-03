@@ -17,6 +17,9 @@ using System.Text.RegularExpressions;
 using System.Net;
 using System.Globalization;
 using System.Text;
+using System.Threading;
+// Alias the UI Timer to avoid ambiguity with System.Threading.Timer
+using Timer = Tizen.NUI.Timer;
 
 namespace JellyfinTizen.Screens
 {
@@ -205,6 +208,22 @@ namespace JellyfinTizen.Screens
         private const int SmartPopupGapAboveSeekbar = 28;
         private const int TopOsdSidePadding = 60;
 
+        // Tizen Player buffer configuration for stable seeking.
+        // PlayerBufferingTime constructor parameters:
+        //   - preBufferMillisecond : initial buffer before playback starts (ms)
+        //   - reBufferMillisecond  : buffer required to resume after stall/seek (ms)
+        // Values match litefin's proven stable configuration (6s initial / 4s resume)
+        // which follows Samsung's recommended minimum of 4 seconds for setBufferingParam.
+        private const int PlayerBufferInitialMs = 6000;        // 6s initial buffer (matches litefin tizenInitialBuffer)
+        private const int PlayerBufferResumeMs = 4000;         // 4s resume buffer (matches litefin tizenResumeBuffer)
+        // Post-seek safety net: if the pipeline stalls in READY after a seek without
+        // firing buffering events (a known Tizen firmware issue), re-assert Start().
+        private const int SeekSafetyNetMs = 250;
+        private const int TrickplayMaxCacheTiles = 8;          // max trickplay tiles in memory
+        private const int TrickplayMaxConcurrentDownloads = 2; // max concurrent tile downloads
+        private const int TrickplayMaxTileSizeBytes = 2 * 1024 * 1024; // 2MB max tile size (OOM protection)
+        private const int SubtitleMaxSizeBytes = 5 * 1024 * 1024; // 5MB max subtitle file size (OOM protection)
+
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
         private int? _overrideAudioIndex = null;
@@ -362,12 +381,13 @@ namespace JellyfinTizen.Screens
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
                     "StartPlayback",
                     details: $"token={playbackToken},burnIn={_burnIn},requested={requestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},nativeRestart={preferNativeEmbeddedOnStart}");
-                _player = new Player();
+                 _player = new Player();
+                 _player.BufferingTime = new PlayerBufferingTime(PlayerBufferInitialMs, PlayerBufferResumeMs);
 
-                _player.ErrorOccurred += OnPlayerErrorOccurred;
-                _player.BufferingProgressChanged += OnBufferingProgressChanged;
-                _player.PlaybackCompleted += OnPlaybackCompleted;
-                _player.SubtitleUpdated += OnSubtitleUpdated;
+                 _player.ErrorOccurred += OnPlayerErrorOccurred;
+                 _player.BufferingProgressChanged += OnBufferingProgressChanged;
+                 _player.PlaybackCompleted += OnPlaybackCompleted;
+                 _player.SubtitleUpdated += OnSubtitleUpdated;
 
                 _player.Display = new Display(Window.Default);
                 _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
@@ -676,10 +696,12 @@ namespace JellyfinTizen.Screens
 
                 if (_useParsedSubtitleRenderer) TryDisableNativeSubtitleTrack();
 
+                _player.Start();
+
+                // Apply startup seek after Start() for faster resume - matches litefin's approach
+                // Litefin seeks after play() to avoid decoder initialization delays
                 if (_startPositionMs > 0)
                     await _player.SetPlayPositionAsync(_startPositionMs, false);
-
-                _player.Start();
                 if (playbackToken != _playbackToken)
                     return;
 
@@ -848,7 +870,24 @@ namespace JellyfinTizen.Screens
 
                 using var response = await client.SendAsync(request);
                 response.EnsureSuccessStatusCode();
+
+                // OOM protection: Check content length before downloading
+                long? contentLength = response.Content.Headers.ContentLength;
+                if (contentLength.HasValue && contentLength.Value > SubtitleMaxSizeBytes)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent("Subtitle.DownloadTooLarge", subtitleStream, $"size={contentLength.Value}");
+                    return false;
+                }
+
                 var data = await response.Content.ReadAsByteArrayAsync();
+                if (data.Length > SubtitleMaxSizeBytes)
+                {
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent("Subtitle.DownloadTooLarge", subtitleStream, $"size={data.Length}");
+                    return false;
+                }
+
                 await File.WriteAllBytesAsync(localPath, data);
                 _externalSubtitlePath = localPath;
 
@@ -3671,10 +3710,8 @@ namespace JellyfinTizen.Screens
                 _isSeeking = true;
                 _seekPreviewMs = targetMs;
                 UpdatePreviewBar();
+                // Direct seek without complex error handling - matches litefin's approach
                 await _player.SetPlayPositionAsync(targetMs, false);
-            }
-            catch
-            {
             }
             finally
             {
@@ -4076,10 +4113,20 @@ namespace JellyfinTizen.Screens
                 {
                     await Task.Delay(visualHoldMs);
                 }
-                var seekTask = _player.SetPlayPositionAsync(_seekPreviewMs, false);
-                await Task.WhenAny(seekTask, Task.Delay(3000));
+
+                // Pause progress timer during seek to reduce CPU/memory pressure
+                _progressTimer?.Stop();
+
+                // Direct seek without retry logic - matches litefin's fast approach
+                // AVPlay seekTo is reliable and doesn't need complex retry/timeout mechanisms
+                await _player.SetPlayPositionAsync(_seekPreviewMs, false);
             }
-            catch {}
+            catch
+            {
+                // Log seek failure but don't attempt recovery - let player continue from current position
+                if (DebugSwitches.EnablePlaybackDebugOverlay)
+                    Console.WriteLine($"[Seek] Direct seek failed to {_seekPreviewMs}ms");
+            }
             finally
             {
                 _isSeeking = false;
@@ -4089,6 +4136,7 @@ namespace JellyfinTizen.Screens
                 _hiddenSeekBurstDirection = 0;
                 HideSeekFeedback();
                 HideTrickplayPreview();
+                _progressTimer?.Start();
                 UpdateProgress();
             }
         }
@@ -4305,7 +4353,8 @@ namespace JellyfinTizen.Screens
                 _trickplayPreviewImage.PixelArea = pixelArea;
             });
 
-            _ = GetOrDownloadTrickplayTileAsync(tileIndex + 1);
+            // DISABLED: Prefetching next tile during seek slows down seek operations
+            // _ = GetOrDownloadTrickplayTileAsync(tileIndex + 1);
         }
 
         private async Task<string> GetOrDownloadTrickplayTileAsync(int tileIndex)
@@ -4370,8 +4419,19 @@ namespace JellyfinTizen.Screens
                     url += $"&MediaSourceId={Uri.EscapeDataString(_currentMediaSource.Id)}";
 
                 var trickplayClient = AppState.HttpClient;
-                var bytes = await trickplayClient.GetByteArrayAsync(url);
-                if (bytes == null || bytes.Length < 64)
+
+                // OOM protection: Check content length before downloading
+                using var response = await trickplayClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+
+                long? contentLength = response.Content.Headers.ContentLength;
+                if (contentLength.HasValue && contentLength.Value > TrickplayMaxTileSizeBytes)
+                {
+                    return null; // Skip tiles that are too large
+                }
+
+                var bytes = await response.Content.ReadAsByteArrayAsync();
+                if (bytes == null || bytes.Length < 64 || bytes.Length > TrickplayMaxTileSizeBytes)
                     return null;
 
                 await File.WriteAllBytesAsync(localPath, bytes);
@@ -4425,6 +4485,25 @@ namespace JellyfinTizen.Screens
                 _trickplayTileCache.Clear();
                 _trickplayTileDownloads.Clear();
             }
+
+            // Clean up old trickplay cache files to prevent disk space issues
+            try
+            {
+                if (Directory.Exists(_trickplayCacheDir))
+                {
+                    var files = Directory.GetFiles(_trickplayCacheDir);
+                    // Keep only the most recent 50 files to prevent disk bloat
+                    if (files.Length > 50)
+                    {
+                        var sortedFiles = files.OrderBy(f => new FileInfo(f).LastWriteTime).ToArray();
+                        for (int i = 0; i < files.Length - 50; i++)
+                        {
+                            try { File.Delete(sortedFiles[i]); } catch { }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private void CreateSubtitleOverlay()

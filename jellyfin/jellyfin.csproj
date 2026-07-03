@@ -17,4 +17,8 @@
     <Folder Include="res\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Tizen.NET" Version="9.0.0.*" />
+  </ItemGroup>
+
 </Project>

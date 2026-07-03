@@ -373,12 +373,6 @@ namespace JellyfinTizen.Screens
                 _busCts?.Cancel();
                 _busCts = new CancellationTokenSource();
 
-                // 1. Establish watch BEFORE calling StartLoginInteractiveAsync to avoid race conditions
-                TailscaleDebugLog.Add("Pre-establishing IPN bus watch...");
-                var enumerator = AppState.Tailscale.WatchIPNBus(mask: 7, _busCts.Token).GetAsyncEnumerator(_busCts.Token);
-                var firstMoveTask = enumerator.MoveNextAsync();
-
-                // 2. Call login-interactive
                 TailscaleDebugLog.Add("Calling StartLoginInteractiveAsync...");
                 await AppState.Tailscale.StartLoginInteractiveAsync();
                 TailscaleDebugLog.Add("Login API call succeeded");
@@ -393,7 +387,8 @@ namespace JellyfinTizen.Screens
                     _statusLabel.Text = "Waiting for login URL...";
                 }
 
-                _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, firstMoveTask);
+                // Start polling for authentication completion
+                _ = WatchForAuthenticationCompletionAsync(_busCts.Token);
             }
             catch (Exception ex)
             {
@@ -404,85 +399,52 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async Task WatchForLoginUrlWithEnumeratorAsync(System.Collections.Generic.IAsyncEnumerator<JsonNode> enumerator, System.Threading.Tasks.ValueTask<bool> firstMoveTask)
+        private async Task WatchForAuthenticationCompletionAsync(CancellationToken token)
         {
             try
             {
-                TailscaleDebugLog.Add("Watching IPN bus for events...");
-                
-                bool hasNext = await firstMoveTask;
-                while (hasNext && !_busCts.Token.IsCancellationRequested)
+                TailscaleDebugLog.Add("Starting authentication completion polling");
+                while (!token.IsCancellationRequested)
                 {
-                    var notify = enumerator.Current;
-                    string json = notify?.ToJsonString() ?? "";
-                    TailscaleDebugLog.Add($"Bus event: {json.Substring(0, Math.Min(120, json.Length))}");
+                    await Task.Delay(2000, token);
 
-                    string authUrl = ExtractAuthUrl(notify);
-                    if (!string.IsNullOrEmpty(authUrl))
+                    JsonNode status = null;
+                    try
                     {
-                        TailscaleDebugLog.Add($"Got auth URL: {authUrl}");
+                        status = await AppState.Tailscale.GetStatusAsync(token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"Auth completion status check failed: {ex.GetType().Name}: {ex.Message}");
+                        continue;
+                    }
+
+                    var selfNode = status?["Self"]?.AsObject();
+                    var online = selfNode?["Online"]?.GetValue<bool>() ?? false;
+                    var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
+
+                    if (online || backendState == "Running")
+                    {
+                        TailscaleDebugLog.Add("Authentication completed by status polling");
                         RunOnUiThread(() =>
                         {
-                            ShowAuthUrl(authUrl);
-                        });
-                    }
-                    
-                    // Check if online
-                    var self = notify?["Self"];
-                    if (self is JsonNode selfNode)
-                    {
-                        bool online = selfNode["Online"]?.GetValue<bool>() ?? false;
-                        if (online)
-                        {
-                            TailscaleDebugLog.Add("Authentication successful!");
-                            RunOnUiThread(() =>
-                            {
-                                _statusLabel.Text = "Successfully connected to tailnet!";
-                                _loginLabel.Text = "Connected";
-                                _loginButton.Opacity = 0.4f;
-                                _loginButton.Focusable = false;
-                            });
-                            _busCts.Cancel();
-                            return;
-                        }
-                    }
-                    
-                    // Check state changes
-                    var stateNode = notify?["State"];
-                    if (stateNode is JsonNode state && state.GetValue<int>() == 6) // Running
-                    {
-                        TailscaleDebugLog.Add("State changed to Running");
-                        RunOnUiThread(() =>
-                        {
-                            _statusLabel.Text = "Connected to tailnet!";
+                            _statusLabel.Text = "Successfully connected to tailnet!";
                             _loginLabel.Text = "Connected";
                             _loginButton.Opacity = 0.4f;
                             _loginButton.Focusable = false;
                         });
-                        _busCts.Cancel();
+                        _busCts?.Cancel();
                         return;
                     }
-
-                    hasNext = await enumerator.MoveNextAsync();
                 }
             }
             catch (OperationCanceledException)
             {
-                TailscaleDebugLog.Add("Bus watch cancelled");
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"Bus watch error: {ex.GetType().Name}: {ex.Message}");
-                RunOnUiThread(() =>
-                {
-                    _statusLabel.Text = $"Error watching login: {ex.Message}";
-                    _loginButton.Opacity = 1.0f;
-                    _loginButton.Focusable = true;
-                });
-            }
-            finally
-            {
-                await enumerator.DisposeAsync();
+                TailscaleDebugLog.Add("Authentication completion polling cancelled");
             }
         }
 

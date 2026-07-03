@@ -185,14 +185,6 @@ namespace JellyfinTizen.Screens
                     // Auth URL already available - show it immediately
                     TailscaleDebugLog.Add($"AuthURL already available: {authUrl}");
                     ShowAuthUrl(authUrl);
-                    _loginButton.Opacity = 0.4f;
-                    _loginButton.Focusable = false;
-                    // Watch for completion
-                    _busCts?.Cancel();
-                    _busCts = new CancellationTokenSource();
-                    var enumerator = AppState.Tailscale.WatchIPNBus(mask: 7, _busCts.Token).GetAsyncEnumerator(_busCts.Token);
-                    _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, enumerator.MoveNextAsync());
-                    _ = WatchForAuthenticationCompletionAsync(_busCts.Token);
                 }
                 else
                 {
@@ -227,14 +219,9 @@ namespace JellyfinTizen.Screens
                 _busCts?.Cancel();
                 _busCts = new CancellationTokenSource();
 
-                // Establish watch BEFORE calling StartLoginInteractiveAsync to avoid race condition
-                TailscaleDebugLog.Add("LoginAsync: pre-establishing IPN bus watch");
-                var enumerator = AppState.Tailscale.WatchIPNBus(mask: 7, _busCts.Token).GetAsyncEnumerator(_busCts.Token);
-                var firstMoveTask = enumerator.MoveNextAsync();
-
                 TailscaleDebugLog.Add("LoginAsync: calling StartLoginInteractiveAsync");
                 await AppState.Tailscale.StartLoginInteractiveAsync();
-                TailscaleDebugLog.Add("LoginAsync: API call succeeded, watching bus for URL");
+                TailscaleDebugLog.Add("LoginAsync: API call succeeded, checking for auth URL");
 
                 var authUrl = await TryGetCurrentAuthUrlAsync();
                 if (!string.IsNullOrWhiteSpace(authUrl))
@@ -246,7 +233,7 @@ namespace JellyfinTizen.Screens
                     _statusLabel.Text = "Waiting for login URL...";
                 }
 
-                _ = WatchForLoginUrlWithEnumeratorAsync(enumerator, firstMoveTask);
+                // Start polling for authentication completion
                 _ = WatchForAuthenticationCompletionAsync(_busCts.Token);
             }
             catch (Exception ex)
@@ -262,64 +249,14 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async Task WatchForLoginUrlWithEnumeratorAsync(System.Collections.Generic.IAsyncEnumerator<JsonNode> enumerator, System.Threading.Tasks.ValueTask<bool> firstMoveTask)
-        {
-            try
-            {
-                TailscaleDebugLog.Add("WatchForLoginUrl: watching IPN bus...");
-                bool hasNext = await firstMoveTask;
-                while (hasNext && !_busCts.Token.IsCancellationRequested)
-                {
-                    var notify = enumerator.Current;
-                    string json = notify?.ToJsonString() ?? "";
-                    TailscaleDebugLog.Add($"Bus event: {json.Substring(0, Math.Min(150, json.Length))}");
-
-                    string authUrl = ExtractAuthUrl(notify);
-                    if (!string.IsNullOrEmpty(authUrl))
-                    {
-                        TailscaleDebugLog.Add($"Got auth URL: {authUrl}");
-                        RunOnUiThread(() =>
-                        {
-                            ShowAuthUrl(authUrl);
-                        });
-                    }
-
-                    if (IsConnectedStatus(notify))
-                    {
-                        TailscaleDebugLog.Add("Authentication successful!");
-                        RunOnUiThread(ShowConnected);
-                        _busCts.Cancel();
-                        return;
-                    }
-
-                    hasNext = await enumerator.MoveNextAsync();
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                TailscaleDebugLog.Add("Bus watch cancelled");
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"Bus watch error: {ex.GetType().Name}: {ex.Message}");
-                RunOnUiThread(() =>
-                {
-                    _statusLabel.Text = $"Login failed: {ex.Message}\n\nYou can skip and configure later in settings.";
-                    _loginButton.Opacity = 1.0f;
-                    _loginButton.Focusable = true;
-                    _isLoading = false;
-                });
-            }
-            finally
-            {
-                await enumerator.DisposeAsync();
-            }
-        }
+        // Removed WatchForLoginUrlWithEnumeratorAsync - using polling approach instead
+        // which is more reliable for detecting authentication completion
 
         private async Task WatchForAuthenticationCompletionAsync(CancellationToken token)
         {
             try
             {
+                TailscaleDebugLog.Add("Starting authentication completion polling");
                 while (!token.IsCancellationRequested)
                 {
                     await Task.Delay(2000, token);
@@ -343,17 +280,26 @@ namespace JellyfinTizen.Screens
                     if (!string.IsNullOrWhiteSpace(authUrl))
                         RunOnUiThread(() => ShowAuthUrl(authUrl));
 
-                    if (!IsConnectedStatus(status))
-                        continue;
+                    // Enhanced connection detection - check multiple indicators
+                    var selfNode = status?["Self"]?.AsObject();
+                    var online = selfNode?["Online"]?.GetValue<bool>() ?? false;
+                    var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
+                    var running = status?["Running"]?.GetValue<bool>() ?? false;
 
-                    TailscaleDebugLog.Add("Authentication completed by status polling");
-                    RunOnUiThread(ShowConnected);
-                    _busCts?.Cancel();
-                    return;
+                    bool isConnected = online || backendState == "Running" || running;
+
+                    if (isConnected)
+                    {
+                        TailscaleDebugLog.Add($"Authentication completed by status polling: online={online}, backendState={backendState}, running={running}");
+                        RunOnUiThread(ShowConnected);
+                        _busCts?.Cancel();
+                        return;
+                    }
                 }
             }
             catch (OperationCanceledException)
             {
+                TailscaleDebugLog.Add("Authentication completion polling cancelled");
             }
         }
 
