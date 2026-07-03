@@ -36,6 +36,7 @@ namespace JellyfinTizen.Core
         public bool IsSocketReachable => !string.IsNullOrEmpty(_socket) && System.IO.File.Exists(_socket);
 
         public static string ProxyAddress => "127.0.0.1";
+        public static int PeerToPeerPort => 41641;
         public static int HttpProxyPort => 3128;
         public static int Socks5ProxyPort => 1080;
         public static string HttpProxyUrl => $"http://{ProxyAddress}:{HttpProxyPort}";
@@ -133,12 +134,13 @@ namespace JellyfinTizen.Core
             psi.ArgumentList.Add("--statedir=" + _stateDir);
             psi.ArgumentList.Add("--socket=" + _socket);
             psi.ArgumentList.Add("--state=" + Path.Combine(_stateDir, "tailscaled.state"));
+            psi.ArgumentList.Add("--port=" + PeerToPeerPort);
             psi.ArgumentList.Add("--verbose=1");
             psi.ArgumentList.Add("--socks5-server=" + $"{ProxyAddress}:{Socks5ProxyPort}");
             psi.ArgumentList.Add("--outbound-http-proxy-listen=" + $"{ProxyAddress}:{HttpProxyPort}");
 
             TailscaleDebugLog.Add($"Starting tailscaled: {_tailscaledExe}");
-            TailscaleDebugLog.Add($"Arguments: --tun=userspace-networking --statedir={_stateDir} --socket={_socket}");
+            TailscaleDebugLog.Add($"Arguments: --tun=userspace-networking --port={PeerToPeerPort} --statedir={_stateDir} --socket={_socket}");
             
             _tailscaledProc = new Process { StartInfo = psi, EnableRaisingEvents = true };
             

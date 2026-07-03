@@ -39,7 +39,7 @@ namespace JellyfinTizen.Screens
             _statusPanel = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 200,
+                HeightSpecification = 280,
                 CornerRadius = 20,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BorderlineWidth = 1.5f
@@ -48,13 +48,14 @@ namespace JellyfinTizen.Screens
             _statusLabel = new TextLabel("Checking status...")
             {
                 TextColor = UiTheme.TextPrimary,
-                PointSize = 26,
+                PointSize = 22,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 MultiLine = true,
-                LineWrapMode = LineWrapMode.Word
+                LineWrapMode = LineWrapMode.Word,
+                Padding = new Extents(18, 18, 12, 12)
             };
             _statusPanel.Add(_statusLabel);
             panel.Add(_statusPanel);
@@ -213,7 +214,10 @@ namespace JellyfinTizen.Screens
                 string statusText;
                 if (online)
                 {
-                    statusText = $"Connected to tailnet\n\nHostname: {hostname}\nIPs: {ipList}";
+                    var peerRoutes = BuildPeerRouteSummary(status);
+                    statusText = $"Connected to tailnet\nHostname: {hostname}\nIPs: {ipList}";
+                    if (!string.IsNullOrWhiteSpace(peerRoutes))
+                        statusText += $"\nRoutes: {peerRoutes}";
                     TailscaleDebugLog.Add("Status: Connected to tailnet");
                     _loginLabel.Text = "Connected";
                     _loginButton.Opacity = 0.4f;
@@ -258,6 +262,101 @@ namespace JellyfinTizen.Screens
                 _isLoading = false;
                 TailscaleDebugLog.Add("RefreshStatusAsync completed");
             }
+        }
+
+        private static string BuildPeerRouteSummary(JsonNode status)
+        {
+            try
+            {
+                var peers = status?["Peer"]?.AsObject();
+                if (peers == null || peers.Count == 0)
+                    return string.Empty;
+
+                var targetRows = new List<string>();
+                var activeRows = new List<string>();
+                var otherRows = new List<string>();
+                var targetHost = TryGetTailscaleServerHost();
+
+                foreach (var peerEntry in peers)
+                {
+                    var peer = peerEntry.Value?.AsObject();
+                    if (peer == null)
+                        continue;
+
+                    var hostname = peer["HostName"]?.ToString();
+                    var dnsName = peer["DNSName"]?.ToString();
+                    var curAddr = peer["CurAddr"]?.ToString();
+                    var relay = peer["Relay"]?.ToString();
+                    var online = peer["Online"]?.GetValue<bool>() ?? false;
+                    var active = peer["Active"]?.GetValue<bool>() ?? false;
+                    var ips = peer["TailscaleIPs"]?.AsArray();
+                    var matchesTarget = MatchesTailscaleHost(ips, targetHost);
+
+                    var name = !string.IsNullOrWhiteSpace(hostname)
+                        ? hostname
+                        : !string.IsNullOrWhiteSpace(dnsName)
+                            ? dnsName.TrimEnd('.')
+                            : peerEntry.Key;
+                    var route = !string.IsNullOrWhiteSpace(curAddr)
+                        ? $"direct {curAddr}"
+                        : !string.IsNullOrWhiteSpace(relay)
+                            ? $"relay {relay}"
+                            : "idle";
+                    var flags = active ? "active" : online ? "online" : "offline";
+                    var prefix = matchesTarget ? "* " : "";
+                    var row = $"{prefix}{name}: {route} ({flags})";
+                    if (matchesTarget)
+                        targetRows.Add(row);
+                    else if (active)
+                        activeRows.Add(row);
+                    else if (otherRows.Count < 2)
+                        otherRows.Add(row);
+                }
+
+                var rows = targetRows
+                    .Concat(activeRows)
+                    .Concat(otherRows)
+                    .Take(2)
+                    .ToList();
+
+                return string.Join("\n", rows);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static string TryGetTailscaleServerHost()
+        {
+            try
+            {
+                var serverUrl = AppState.ServerUrl;
+                if (string.IsNullOrWhiteSpace(serverUrl) || !AppState.IsTailscaleUrl(serverUrl))
+                    return null;
+
+                return Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri)
+                    ? uri.Host
+                    : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool MatchesTailscaleHost(JsonArray ips, string targetHost)
+        {
+            if (ips == null || string.IsNullOrWhiteSpace(targetHost))
+                return false;
+
+            foreach (var ip in ips)
+            {
+                if (string.Equals(ip?.ToString(), targetHost, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
         }
 
         private CancellationTokenSource _busCts;
