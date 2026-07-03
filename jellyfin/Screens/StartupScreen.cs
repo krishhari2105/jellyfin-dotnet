@@ -74,8 +74,14 @@ namespace JellyfinTizen.Screens
                             if (isTailscaleServer && AppState.TailscaleReadyTask != null)
                             {
                                 _loadingVisual.SetMessage("Initializing Tailscale...");
-                                // Wait for Tailscale to be ready, with a 10-second timeout
+                                // Wait for Tailscale daemon and proxy to be ready
                                 await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
+
+                                // Wait for Tailscale backend connection to be Running (online)
+                                if (AppState.Tailscale != null)
+                                {
+                                    await AppState.Tailscale.WaitForBackendRunningAsync(10000);
+                                }
                                 _loadingVisual.SetMessage("Loading...");
                             }
                         }

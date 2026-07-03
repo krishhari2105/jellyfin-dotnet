@@ -282,6 +282,31 @@ namespace JellyfinTizen.Core
             return JsonNode.Parse(body);
         }
 
+        public async Task<bool> WaitForBackendRunningAsync(int timeoutMs = 10000)
+        {
+            using var cts = new CancellationTokenSource(timeoutMs);
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    var status = await GetStatusAsync(cts.Token);
+                    var backendState = status?["BackendState"]?.ToString();
+                    TailscaleDebugLog.Add($"WaitForBackendRunningAsync: backendState={backendState}");
+                    if (string.Equals(backendState, "Running", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TailscaleDebugLog.Add($"WaitForBackendRunningAsync error: {ex.Message}");
+                }
+
+                try { await Task.Delay(250, cts.Token); } catch { break; }
+            }
+            return false;
+        }
+
         public void Stop()
         {
             if (_tailscaledProc == null || _tailscaledProc.HasExited)

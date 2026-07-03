@@ -546,6 +546,10 @@ namespace JellyfinTizen.Screens
                     try
                     {
                         await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
+                        if (AppState.Tailscale != null)
+                        {
+                            await AppState.Tailscale.WaitForBackendRunningAsync(10000);
+                        }
                     }
                     catch { }
                 }
