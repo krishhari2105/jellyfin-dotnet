@@ -607,7 +607,46 @@ namespace JellyfinTizen.Screens
                 return sourcePath;
             }
 
-            return sourcePath;
+            string versionToken;
+            try
+            {
+                versionToken = File.GetLastWriteTimeUtc(sourcePath)
+                    .Ticks
+                    .ToString(CultureInfo.InvariantCulture);
+            }
+            catch
+            {
+                versionToken = "0";
+            }
+
+            string cacheKey = $"{sourcePath}|{versionToken}";
+            if (_darkButtonIconPathCache.TryGetValue(cacheKey, out var cachedPath) && File.Exists(cachedPath))
+                return cachedPath;
+
+            try
+            {
+                string svg = File.ReadAllText(sourcePath);
+                string darkSvg = svg
+                    .Replace("#FFFFFF", "#000000", StringComparison.OrdinalIgnoreCase)
+                    .Replace("fill=\"white\"", "fill=\"#000000\"", StringComparison.OrdinalIgnoreCase)
+                    .Replace("stroke=\"#FFFFFF\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase)
+                    .Replace("stroke=\"white\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase);
+
+                string cacheDir = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.Data, "icon-cache");
+                Directory.CreateDirectory(cacheDir);
+
+                string baseName = System.IO.Path.GetFileNameWithoutExtension(iconFile);
+                string darkPath = System.IO.Path.Combine(cacheDir, $"{baseName}_dark_{versionToken}.svg");
+                if (!File.Exists(darkPath))
+                    File.WriteAllText(darkPath, darkSvg);
+
+                _darkButtonIconPathCache[cacheKey] = darkPath;
+                return darkPath;
+            }
+            catch
+            {
+                return sourcePath;
+            }
         }
 
         private static View CreateButtonRow()

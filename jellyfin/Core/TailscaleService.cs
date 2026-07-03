@@ -63,7 +63,6 @@ namespace JellyfinTizen.Core
             TailscaleDebugLog.Add($"x86 binary exists: {File.Exists(x86Binary)}");
             
             string sourceBinary = null;
-            bool isX86 = false;
             
             // Check if we're on x86 (emulator) by examining the process architecture
             // Since we can't easily detect it, check both binaries and use the one that exists
@@ -72,7 +71,6 @@ namespace JellyfinTizen.Core
             if (File.Exists(x86Binary))
             {
                 sourceBinary = x86Binary;
-                isX86 = true;
                 TailscaleDebugLog.Add("Using x86 binary (emulator detected)");
             }
             else if (File.Exists(armBinary))
