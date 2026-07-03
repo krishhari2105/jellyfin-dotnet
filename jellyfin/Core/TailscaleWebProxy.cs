@@ -36,6 +36,8 @@ namespace JellyfinTizen.Core
 
             // Check both: process is running OR it previously ran (socket may still exist)
             bool canProxy = AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable;
+            TailscaleDebugLog.Add($"TailscaleWebProxy.IsTailscale: canProxy={canProxy} (IsRunning={AppState.Tailscale.IsRunning}, IsSocketReachable={AppState.Tailscale.IsSocketReachable})");
+
             if (!canProxy)
                 return false;
 

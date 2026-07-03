@@ -43,9 +43,11 @@ namespace JellyfinTizen.Core
 
         public void Connect(string serverUrl)
         {
+            TailscaleDebugLog.Add($"JellyfinService.Connect: Original serverUrl={serverUrl}");
             // Rewrite Tailscale IPs to use local proxy before connecting
-            var rewrittenUrl = AppState.RewriteServerUrlForTailscale(serverUrl?.TrimEnd('/'));
-            var normalizedUrl = rewrittenUrl?.TrimEnd('/');
+            var rewrittenUrl = AppState.RewriteServerUrlForTailscale(serverUrl?.TrimEnd("/".ToCharArray()));
+            var normalizedUrl = rewrittenUrl?.TrimEnd("/".ToCharArray());
+            TailscaleDebugLog.Add($"JellyfinService.Connect: Rewritten/normalizedUrl={normalizedUrl}");
             
             if (string.IsNullOrWhiteSpace(normalizedUrl))
                 throw new ArgumentException("Server URL is required.", nameof(serverUrl));
