@@ -31,6 +31,9 @@ namespace JellyfinTizen.Core
         public string LastAuthUrl => _lastAuthUrl;
         public event Action<string> AuthUrlReceived;
 
+        /// <summary>Clears the cached auth URL once the tailnet is authenticated.</summary>
+        public void ClearAuthUrl() => _lastAuthUrl = null;
+
         /// <summary>True if the tailscaled Unix socket file exists, meaning the daemon is (or was) reachable.
         /// This stays true even if the Tizen app restarted but tailscaled kept running.</summary>
         public bool IsSocketReachable => !string.IsNullOrEmpty(_socket) && System.IO.File.Exists(_socket);

@@ -193,6 +193,7 @@ namespace JellyfinTizen.Screens
                 if (online)
                 {
                     TailscaleDebugLog.Add("Already connected!");
+                    AppState.Tailscale?.ClearAuthUrl();
                     _statusLabel.Text = "Tailscale is already connected!";
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
@@ -396,6 +397,10 @@ namespace JellyfinTizen.Screens
 
         private void ShowConnected()
         {
+            // Clear the cached auth URL so re-entering this screen won't flash
+            // the stale QR code before the status check runs.
+            AppState.Tailscale?.ClearAuthUrl();
+
             _statusLabel.Text = "Successfully connected to tailnet!";
             _loginButton.Opacity = 0.4f;
             _loginButton.Focusable = false;
@@ -416,8 +421,10 @@ namespace JellyfinTizen.Screens
             AppState.Tailscale.AuthUrlReceived -= OnAuthUrlReceived;
             AppState.Tailscale.AuthUrlReceived += OnAuthUrlReceived;
 
-            if (!string.IsNullOrWhiteSpace(AppState.Tailscale.LastAuthUrl))
-                ShowAuthUrl(AppState.Tailscale.LastAuthUrl);
+            // Do NOT eagerly call ShowAuthUrl here — CheckCurrentStatusAsync (called
+            // right after) reads LastAuthUrl itself AND first verifies we are not
+            // already connected. Calling ShowAuthUrl here races with that check and
+            // causes the QR code to persist even after a successful authentication.
         }
 
         private void UnsubscribeAuthUrlEvents()
