@@ -20,9 +20,12 @@ namespace JellyfinTizen.Screens
     {
         private View _statusPanel;
         private TextLabel _statusLabel;
+        private ImageView _qrImageView;
         private View _loginButton;
         private TextLabel _loginLabel;
         private bool _isLoading;
+private bool wasConnected = false;
+private CancellationTokenSource _refreshCts;
 
         public TailscaleScreen()
         {
@@ -32,32 +35,49 @@ namespace JellyfinTizen.Screens
         private void Initialize()
         {
             var root = UiFactory.CreateAtmosphericBackground();
-            var panel = UiFactory.CreateCenteredPanel(width: 960, top: 140);
+            var panel = UiFactory.CreateCenteredPanel(width: 1000, top: 100);
             panel.Add(UiFactory.CreateDisplayTitle("Tailscale"));
             panel.Add(UiFactory.CreateSubtitle("Tailnet connectivity"));
 
             _statusPanel = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 280,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 CornerRadius = 20,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 1.5f
+                BorderlineWidth = 1.5f,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 16),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                Padding = new Extents(24, 24, 24, 24)
             };
 
             _statusLabel = new TextLabel("Checking status...")
             {
                 TextColor = UiTheme.TextPrimary,
-                PointSize = 22,
+                PointSize = 26,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 MultiLine = true,
-                LineWrapMode = LineWrapMode.Word,
-                Padding = new Extents(18, 18, 12, 12)
+                LineWrapMode = LineWrapMode.Word
             };
             _statusPanel.Add(_statusLabel);
+
+            _qrImageView = new ImageView
+            {
+                WidthSpecification = 320,
+                HeightSpecification = 320,
+                ExcludeLayouting = true
+            };
+            _qrImageView.Hide();
+            _statusPanel.Add(_qrImageView);
+
             panel.Add(_statusPanel);
 
             _loginButton = new View
@@ -97,12 +117,15 @@ namespace JellyfinTizen.Screens
             SubscribeAuthUrlEvents();
             TailscaleDebugLog.Add("=== TailscaleScreen shown ===");
             _ = RefreshStatusAsync();
-            
+
             // Set initial focus to login button if it's focusable
             if (_loginButton.Focusable)
             {
                 FocusManager.Instance.SetCurrentFocusView(_loginButton);
             }
+
+            // Start periodic refresh to handle slow Tailscale service startup
+            StartPeriodicRefresh();
         }
 
         public override void OnHide()
@@ -132,6 +155,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
                     _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                     return;
                 }
 
@@ -167,6 +192,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
                     _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                     return;
                 }
 
@@ -189,6 +216,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Opacity = 1.0f;
                     _loginButton.Focusable = true;
                     _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                     return;
                 }
 
@@ -212,7 +241,9 @@ namespace JellyfinTizen.Screens
                 if (string.IsNullOrWhiteSpace(authUrl))
                     authUrl = ExtractAuthUrl(status);
                 string statusText;
-                if (online)
+                // Consider the daemon as logged in if BackendState is "Running" (has valid key)
+                // Even if Online is false temporarily (e.g., no network), we still treat as logged in.
+                if (backendState == "Running" || online)
                 {
                     var peerRoutes = BuildPeerRouteSummary(status);
                     statusText = $"Connected to tailnet\nHostname: {hostname}\nIPs: {ipList}";
@@ -222,6 +253,8 @@ namespace JellyfinTizen.Screens
                     _loginLabel.Text = "Connected";
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                 }
                 else if (backendState == "NeedsLogin" || !string.IsNullOrEmpty(authUrl))
                 {
@@ -230,13 +263,27 @@ namespace JellyfinTizen.Screens
                     _loginButton.Focusable = true;
                     if (!string.IsNullOrEmpty(authUrl))
                     {
-                        statusText = $"Open this URL to authenticate:\n\n{authUrl}";
+                        statusText = $"Open this URL or scan the QR code to authenticate:\n\n{authUrl}";
                         TailscaleDebugLog.Add($"Status: Waiting for login, URL={authUrl}");
+                        var qrPath = JellyfinTizen.Utils.QrCodeHelper.GenerateQrCode(authUrl);
+                        if (qrPath != null)
+                        {
+                            _qrImageView.SetImage(qrPath);
+                            _qrImageView.ExcludeLayouting = false;
+                            _qrImageView.Show();
+                        }
+                        else
+                        {
+                            _qrImageView.Hide();
+                            _qrImageView.ExcludeLayouting = true;
+                        }
                     }
                     else
                     {
                         statusText = $"Not logged in.\nPress 'Log In with Tailscale' to authenticate.";
                         TailscaleDebugLog.Add("Status: NeedsLogin, no authUrl yet");
+                        _qrImageView.Hide();
+                        _qrImageView.ExcludeLayouting = true;
                     }
                 }
                 else
@@ -246,6 +293,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Focusable = true;
                     statusText = $"Tailscale state: {backendState}\nHostname: {hostname}";
                     TailscaleDebugLog.Add($"Status: State={backendState}, not online");
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                 }
 
                 _statusLabel.Text = statusText;
@@ -256,6 +305,8 @@ namespace JellyfinTizen.Screens
                 _statusLabel.Text = $"Error: {ex.Message}";
                 _loginButton.Opacity = 0.4f;
                 _loginButton.Focusable = false;
+                _qrImageView.Hide();
+                _qrImageView.ExcludeLayouting = true;
             }
             finally
             {
@@ -466,6 +517,46 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private async Task<bool> CheckConnectionStatusSilently()
+        {
+            try
+            {
+                if (AppState.Tailscale == null)
+                    return false;
+
+                bool reachable = AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable;
+                if (!reachable)
+                    return false;
+
+                var status = await AppState.Tailscale.GetStatusAsync();
+                if (status == null)
+                    return false;
+
+                var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
+                // BackendState values: NoState, NeedsLogin, NeedsMachineAuth, Stopped,
+                //                     Starting, Running
+                bool daemonHealthy = backendState == "Running" || backendState == "Starting" ||
+                                     backendState == "NeedsLogin" || backendState == "NeedsMachineAuth";
+
+                if (!daemonHealthy)
+                {
+                    TailscaleDebugLog.Add($"Daemon unhealthy, BackendState={backendState}");
+                    return false;
+                }
+
+                var selfNode = status?["Self"]?.AsObject();
+                var online = selfNode?["Online"]?.GetValue<bool>() ?? false;
+
+                // Consider connected if either online or backend is running (has valid key)
+                return online || backendState == "Running";
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"CheckConnectionStatusSilently error: {ex.Message}");
+                return false; // Assume not connected on error
+            }
+        }
+
         private static string ExtractAuthUrl(JsonNode node)
         {
             return node?["BrowseToURL"]?.GetValue<string>()
@@ -478,7 +569,20 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(authUrl))
                 return;
 
-            _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
+            _statusLabel.Text = $"Open this URL or scan the QR code to authenticate:\n\n{authUrl}";
+
+            var qrPath = JellyfinTizen.Utils.QrCodeHelper.GenerateQrCode(authUrl);
+            if (qrPath != null)
+            {
+                _qrImageView.SetImage(qrPath);
+                _qrImageView.ExcludeLayouting = false;
+                _qrImageView.Show();
+            }
+            else
+            {
+                _qrImageView.Hide();
+                _qrImageView.ExcludeLayouting = true;
+            }
         }
 
         private void SubscribeAuthUrlEvents()
@@ -502,6 +606,63 @@ namespace JellyfinTizen.Screens
         private void OnAuthUrlReceived(string authUrl)
         {
             RunOnUiThread(() => ShowAuthUrl(authUrl));
+        }
+
+        private void StartPeriodicRefresh()
+        {
+            // Cancel any existing refresh operation
+            _refreshCts?.Cancel();
+            _refreshCts = new CancellationTokenSource();
+
+            // Start periodic refresh every 2 seconds
+            _ = PeriodicRefreshAsync(_refreshCts.Token);
+        }
+
+        private async Task PeriodicRefreshAsync(CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, token); // Check every 2 seconds
+                    if (!token.IsCancellationRequested)
+                    {
+                        // Only check if we're not currently loading/authenticating
+                        if (!_isLoading)
+                        {
+                            TailscaleDebugLog.Add("Periodic refresh triggered");
+
+                            // Get current status without updating UI yet
+                            bool isCurrentlyConnected = await CheckConnectionStatusSilently();
+
+                            // Only update UI if connection state changed or we're unsure
+                            if (!wasConnected && isCurrentlyConnected)
+                            {
+                                // Just connected - update UI to show connected state
+                                TailscaleDebugLog.Add("Device just connected - updating UI");
+                                wasConnected = true;
+                                _ = RefreshStatusAsync(); // This will update UI
+                            }
+                            else if (wasConnected && !isCurrentlyConnected)
+                            {
+                                // Just disconnected - update UI to show disconnected state
+                                TailscaleDebugLog.Add("Device just disconnected - updating UI");
+                                wasConnected = false;
+                                _ = RefreshStatusAsync(); // This will update UI
+                            }
+                            // If state hasn't changed, don't update UI to avoid flickering
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                TailscaleDebugLog.Add("Periodic refresh cancelled");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Periodic refresh error: {ex.Message}");
+            }
         }
 
         public void HandleKey(AppKey key)
