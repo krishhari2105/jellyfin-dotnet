@@ -31,21 +31,23 @@ jellyfin-dotnet/
 
 ## Building
 
-1. Build Tailscale binaries for ARM (real TV) and x86 (emulator) and place in `jellyfin/lib/`
+1. Install the Tizen .NET workload (requires .NET 6 SDK):
+   ```bash
+   Invoke-WebRequest "https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.ps1" -OutFile "workload-install.ps1"
+
+   .\workload-install.ps1
+   ```
+2. Build or download Tailscale binaries for ARM (real TV) and x86 (emulator) from "https://tailscale.com/kb/1053/install-static" and place in `jellyfin/lib/`
    - `tailscaled` (ARM binary)
    - `tailscaled-x86` (x86 binary)
-2. Build the .NET application:
+3. Build the .NET application:
    ```bash
    dotnet build -c Release
-   ```
-3. Package for Tizen:
-   ```bash
-   tizen package -t tpk -c Release
    ```
 
 ## Usage
 
-1. Install the generated TPK on your Tizen TV
+1. Install the generated TPK on your Tizen TV (refer to official Tizen documentation for installing TPK files on Tizen TVs) or use "https://github.com/Apps2Samsung/Apps2Samsung" for easier installation.
 2. Launch the app and navigate to Tailscale settings
 3. Connect via QR code or manual URL
 4. Configure your Jellyfin server using the Tailscale IP address
@@ -54,7 +56,9 @@ jellyfin-dotnet/
 
 - Built with AI assistance (primarily Codex)
 - Uses [Tizen.NET](https://github.com/Samsung/Tizen.NET) and [QRCoder](https://github.com/codebude/QRCoder)
-- Integrates [Tailscale](https://github.com/tailscale/tailscale) for secure networking
+- Integrates [Tailscale](https://github.com/tailscale/tailscale) for secure networking.
+- [Apps2Samsung](https://github.com/Apps2Samsung/Apps2Samsung)
+- [litefin](https://github.com/Samsung/litefin)
 
 ## Disclaimer
 
