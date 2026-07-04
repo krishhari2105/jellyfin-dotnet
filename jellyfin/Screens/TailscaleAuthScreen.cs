@@ -17,6 +17,7 @@ namespace JellyfinTizen.Screens
     {
         private View _mainPanel;
         private TextLabel _statusLabel;
+        private ImageView _qrImageView;
         private View _loginButton;
         private View _skipButton;
         private TextLabel _skipLabel;
@@ -31,17 +32,25 @@ namespace JellyfinTizen.Screens
         private void Initialize()
         {
             var root = UiFactory.CreateAtmosphericBackground();
-            var panel = UiFactory.CreateCenteredPanel(width: 960, top: 140);
+            var panel = UiFactory.CreateCenteredPanel(width: 1000, top: 60);
             panel.Add(UiFactory.CreateDisplayTitle("Tailscale Setup"));
             panel.Add(UiFactory.CreateSubtitle("Authenticate with your tailnet"));
 
             _mainPanel = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 300,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 CornerRadius = 20,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 1.5f
+                BorderlineWidth = 1.5f,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Vertical,
+                    CellPadding = new Size2D(0, 16),
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                },
+                Padding = new Extents(24, 24, 24, 24)
             };
 
             _statusLabel = new TextLabel("Checking Tailscale status...")
@@ -49,19 +58,29 @@ namespace JellyfinTizen.Screens
                 TextColor = UiTheme.TextPrimary,
                 PointSize = 26,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word
             };
             _mainPanel.Add(_statusLabel);
+
+            _qrImageView = new ImageView
+            {
+                WidthSpecification = 320,
+                HeightSpecification = 320,
+                ExcludeLayouting = true
+            };
+            _qrImageView.Hide();
+            _mainPanel.Add(_qrImageView);
+
             panel.Add(_mainPanel);
 
             _loginButton = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 96,
+                HeightSpecification = 88,
                 CornerRadius = 20,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BorderlineWidth = 1.5f,
@@ -84,7 +103,7 @@ namespace JellyfinTizen.Screens
             _skipButton = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 96,
+                HeightSpecification = 88,
                 CornerRadius = 20,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BorderlineWidth = 1.5f,
@@ -179,6 +198,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Focusable = false;
                     _skipLabel.Text = "Continue to Server Setup";
                     _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                 }
                 else if (!string.IsNullOrEmpty(authUrl))
                 {
@@ -194,6 +215,8 @@ namespace JellyfinTizen.Screens
                     _loginButton.Focusable = true;
                     FocusManager.Instance.SetCurrentFocusView(_loginButton);
                     _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
                 }
             }
             catch (Exception ex)
@@ -350,12 +373,25 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(authUrl))
                 return;
 
-            _statusLabel.Text = $"Open this URL to authenticate:\n\n{authUrl}\n\nWaiting for authentication...";
+            _statusLabel.Text = $"Open this URL or scan the QR code to authenticate:\n\n{authUrl}";
             _loginButton.Opacity = 0.4f;
             _loginButton.Focusable = false;
             _skipButton.Opacity = 1.0f;
             _skipButton.Focusable = true;
             _isLoading = false;
+
+            var qrPath = JellyfinTizen.Utils.QrCodeHelper.GenerateQrCode(authUrl);
+            if (qrPath != null)
+            {
+                _qrImageView.SetImage(qrPath);
+                _qrImageView.ExcludeLayouting = false;
+                _qrImageView.Show();
+            }
+            else
+            {
+                _qrImageView.Hide();
+                _qrImageView.ExcludeLayouting = true;
+            }
         }
 
         private void ShowConnected()
@@ -368,6 +404,8 @@ namespace JellyfinTizen.Screens
             _skipButton.Focusable = true;
             _isLoading = false;
             FocusManager.Instance.SetCurrentFocusView(_skipButton);
+            _qrImageView.Hide();
+            _qrImageView.ExcludeLayouting = true;
         }
 
         private void SubscribeAuthUrlEvents()
