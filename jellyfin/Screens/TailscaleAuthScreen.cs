@@ -23,6 +23,7 @@ namespace JellyfinTizen.Screens
         private TextLabel _skipLabel;
         private bool _isLoading;
         private CancellationTokenSource _busCts;
+private CancellationTokenSource _refreshCts;
 
         public TailscaleAuthScreen()
         {
@@ -144,6 +145,9 @@ namespace JellyfinTizen.Screens
             _skipButton.Focusable = true;
             FocusManager.Instance.SetCurrentFocusView(_skipButton);
             _ = CheckCurrentStatusAsync();
+
+            // Start periodic refresh to handle slow Tailscale service startup
+            StartPeriodicRefresh();
         }
 
         public override void OnHide()
@@ -190,14 +194,19 @@ namespace JellyfinTizen.Screens
                     authUrl = ExtractAuthUrl(status);
                 TailscaleDebugLog.Add($"BackendState={backendState}, Online={online}, AuthURL={(!string.IsNullOrEmpty(authUrl) ? "present" : "none")}");
 
-                if (online)
+                // Consider the daemon as logged in if BackendState is "Running" (has valid key)
+                // Even if Online is false temporarily (e.g., no network), we still treat as logged in.
+                if (backendState == "Running")
                 {
-                    TailscaleDebugLog.Add("Already connected!");
+                    TailscaleDebugLog.Add("BackendState is Running -> treated as connected/logged in");
                     AppState.Tailscale?.ClearAuthUrl();
                     _statusLabel.Text = "Tailscale is already connected!";
                     _loginButton.Opacity = 0.4f;
                     _loginButton.Focusable = false;
                     _skipLabel.Text = "Continue to Server Setup";
+                    _skipButton.Opacity = 1.0f;
+                    _skipButton.Focusable = true;
+                    FocusManager.Instance.SetCurrentFocusView(_skipButton);
                     _isLoading = false;
                     _qrImageView.Hide();
                     _qrImageView.ExcludeLayouting = true;
@@ -327,6 +336,35 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private async Task<bool> CheckConnectionStatusSilently()
+        {
+            try
+            {
+                if (AppState.Tailscale == null)
+                    return false;
+
+                bool reachable = AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable;
+                if (!reachable)
+                    return false;
+
+                var status = await AppState.Tailscale.GetStatusAsync();
+                if (status == null)
+                    return false;
+
+                var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
+                var online = status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
+
+                // Consider connected if BackendState is "Running" (has valid key)
+                // Even if Online is false temporarily (e.g., no network), we still treat as logged in.
+                return backendState == "Running";
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"CheckConnectionStatusSilently error: {ex.Message}");
+                return false; // Assume not connected on error
+            }
+        }
+
         private async Task<string> TryGetCurrentAuthUrlAsync()
         {
             try
@@ -436,6 +474,65 @@ namespace JellyfinTizen.Screens
         private void OnAuthUrlReceived(string authUrl)
         {
             RunOnUiThread(() => ShowAuthUrl(authUrl));
+        }
+
+        private void StartPeriodicRefresh()
+        {
+            // Cancel any existing refresh operation
+            _refreshCts?.Cancel();
+            _refreshCts = new CancellationTokenSource();
+
+            // Start periodic refresh every 2 seconds
+            _ = PeriodicRefreshAsync(_refreshCts.Token);
+        }
+
+        private async Task PeriodicRefreshAsync(CancellationToken token)
+        {
+            try
+            {
+                bool wasConnected = false;
+
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, token); // Check every 2 seconds
+                    if (!token.IsCancellationRequested)
+                    {
+                        // Only check if we're not currently loading/authenticating
+                        if (!_isLoading)
+                        {
+                            TailscaleDebugLog.Add("Periodic refresh triggered");
+
+                            // Get current status without updating UI yet
+                            bool isCurrentlyConnected = await CheckConnectionStatusSilently();
+
+                            // Only update UI if connection state changed or we're unsure
+                            if (!wasConnected && isCurrentlyConnected)
+                            {
+                                // Just connected - update UI to show connected state
+                                TailscaleDebugLog.Add("Device just connected - updating UI");
+                                wasConnected = true;
+                                _ = CheckCurrentStatusAsync(); // This will update UI
+                            }
+                            else if (wasConnected && !isCurrentlyConnected)
+                            {
+                                // Just disconnected - update UI to show disconnected state
+                                TailscaleDebugLog.Add("Device just disconnected - updating UI");
+                                wasConnected = false;
+                                _ = CheckCurrentStatusAsync(); // This will update UI
+                            }
+                            // If state hasn't changed, don't update UI to avoid flickering
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                TailscaleDebugLog.Add("Periodic refresh cancelled");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Periodic refresh error: {ex.Message}");
+            }
         }
 
         private void SkipAuthentication()

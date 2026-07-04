@@ -24,6 +24,8 @@ namespace JellyfinTizen.Screens
         private View _loginButton;
         private TextLabel _loginLabel;
         private bool _isLoading;
+private bool wasConnected = false;
+private CancellationTokenSource _refreshCts;
 
         public TailscaleScreen()
         {
@@ -115,12 +117,15 @@ namespace JellyfinTizen.Screens
             SubscribeAuthUrlEvents();
             TailscaleDebugLog.Add("=== TailscaleScreen shown ===");
             _ = RefreshStatusAsync();
-            
+
             // Set initial focus to login button if it's focusable
             if (_loginButton.Focusable)
             {
                 FocusManager.Instance.SetCurrentFocusView(_loginButton);
             }
+
+            // Start periodic refresh to handle slow Tailscale service startup
+            StartPeriodicRefresh();
         }
 
         public override void OnHide()
@@ -236,7 +241,9 @@ namespace JellyfinTizen.Screens
                 if (string.IsNullOrWhiteSpace(authUrl))
                     authUrl = ExtractAuthUrl(status);
                 string statusText;
-                if (online)
+                // Consider the daemon as logged in if BackendState is "Running" (has valid key)
+                // Even if Online is false temporarily (e.g., no network), we still treat as logged in.
+                if (backendState == "Running" || online)
                 {
                     var peerRoutes = BuildPeerRouteSummary(status);
                     statusText = $"Connected to tailnet\nHostname: {hostname}\nIPs: {ipList}";
@@ -510,6 +517,46 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private async Task<bool> CheckConnectionStatusSilently()
+        {
+            try
+            {
+                if (AppState.Tailscale == null)
+                    return false;
+
+                bool reachable = AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable;
+                if (!reachable)
+                    return false;
+
+                var status = await AppState.Tailscale.GetStatusAsync();
+                if (status == null)
+                    return false;
+
+                var backendState = status?["BackendState"]?.ToString() ?? "Unknown";
+                // BackendState values: NoState, NeedsLogin, NeedsMachineAuth, Stopped,
+                //                     Starting, Running
+                bool daemonHealthy = backendState == "Running" || backendState == "Starting" ||
+                                     backendState == "NeedsLogin" || backendState == "NeedsMachineAuth";
+
+                if (!daemonHealthy)
+                {
+                    TailscaleDebugLog.Add($"Daemon unhealthy, BackendState={backendState}");
+                    return false;
+                }
+
+                var selfNode = status?["Self"]?.AsObject();
+                var online = selfNode?["Online"]?.GetValue<bool>() ?? false;
+
+                // Consider connected if either online or backend is running (has valid key)
+                return online || backendState == "Running";
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"CheckConnectionStatusSilently error: {ex.Message}");
+                return false; // Assume not connected on error
+            }
+        }
+
         private static string ExtractAuthUrl(JsonNode node)
         {
             return node?["BrowseToURL"]?.GetValue<string>()
@@ -559,6 +606,63 @@ namespace JellyfinTizen.Screens
         private void OnAuthUrlReceived(string authUrl)
         {
             RunOnUiThread(() => ShowAuthUrl(authUrl));
+        }
+
+        private void StartPeriodicRefresh()
+        {
+            // Cancel any existing refresh operation
+            _refreshCts?.Cancel();
+            _refreshCts = new CancellationTokenSource();
+
+            // Start periodic refresh every 2 seconds
+            _ = PeriodicRefreshAsync(_refreshCts.Token);
+        }
+
+        private async Task PeriodicRefreshAsync(CancellationToken token)
+        {
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    await Task.Delay(2000, token); // Check every 2 seconds
+                    if (!token.IsCancellationRequested)
+                    {
+                        // Only check if we're not currently loading/authenticating
+                        if (!_isLoading)
+                        {
+                            TailscaleDebugLog.Add("Periodic refresh triggered");
+
+                            // Get current status without updating UI yet
+                            bool isCurrentlyConnected = await CheckConnectionStatusSilently();
+
+                            // Only update UI if connection state changed or we're unsure
+                            if (!wasConnected && isCurrentlyConnected)
+                            {
+                                // Just connected - update UI to show connected state
+                                TailscaleDebugLog.Add("Device just connected - updating UI");
+                                wasConnected = true;
+                                _ = RefreshStatusAsync(); // This will update UI
+                            }
+                            else if (wasConnected && !isCurrentlyConnected)
+                            {
+                                // Just disconnected - update UI to show disconnected state
+                                TailscaleDebugLog.Add("Device just disconnected - updating UI");
+                                wasConnected = false;
+                                _ = RefreshStatusAsync(); // This will update UI
+                            }
+                            // If state hasn't changed, don't update UI to avoid flickering
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                TailscaleDebugLog.Add("Periodic refresh cancelled");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Periodic refresh error: {ex.Message}");
+            }
         }
 
         public void HandleKey(AppKey key)
