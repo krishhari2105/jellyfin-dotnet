@@ -95,8 +95,10 @@ namespace JellyfinTizen.Core
                             TailscaleProxy = new TailscaleProxyService(HttpClient);
                             TailscaleProxy.Start();
                             
-                            // Give the proxy a tiny bit of time to start its listener
-                            await Task.Delay(100);
+                            // Give the proxy time to start its listener
+                            // Increased from 100ms to 500ms to prevent race conditions
+                            // that cause image loading failures and black screens on Tizen TV
+                            await Task.Delay(500);
                         }
                         catch (Exception ex)
                         {
