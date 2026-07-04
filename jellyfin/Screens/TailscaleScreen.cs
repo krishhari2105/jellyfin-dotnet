@@ -33,7 +33,7 @@ namespace JellyfinTizen.Screens
         private void Initialize()
         {
             var root = UiFactory.CreateAtmosphericBackground();
-            var panel = UiFactory.CreateCenteredPanel(width: 1000, top: 60);
+            var panel = UiFactory.CreateCenteredPanel(width: 1000, top: 100);
             panel.Add(UiFactory.CreateDisplayTitle("Tailscale"));
             panel.Add(UiFactory.CreateSubtitle("Tailnet connectivity"));
 
