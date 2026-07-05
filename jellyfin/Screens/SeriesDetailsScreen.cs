@@ -78,7 +78,7 @@ namespace JellyfinTizen.Screens
 
             var posterUrl =
                 $"{serverUrl}/Items/{_series.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=95&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
@@ -344,14 +344,14 @@ namespace JellyfinTizen.Screens
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (season.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=90&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 

@@ -5,16 +5,15 @@ namespace JellyfinTizen.Core
 {
     public class TailscaleWebProxy : IWebProxy
     {
-        private readonly Uri _proxyUri = new Uri(TailscaleService.HttpProxyUrl);
-
         public ICredentials Credentials { get; set; }
 
         public Uri GetProxy(Uri destination)
         {
             if (IsTailscale(destination))
             {
-                TailscaleDebugLog.Add($"Proxy routing: {destination.AbsoluteUri} -> {_proxyUri}");
-                return _proxyUri;
+                var proxyUri = new Uri(TailscaleService.HttpProxyUrl);
+                TailscaleDebugLog.Add($"Proxy routing: {destination.AbsoluteUri} -> {proxyUri}");
+                return proxyUri;
             }
             TailscaleDebugLog.Add($"Direct routing (bypass proxy): {destination.AbsoluteUri}");
             return null;

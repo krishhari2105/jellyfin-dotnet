@@ -30,13 +30,13 @@ namespace JellyfinTizen.Screens
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int PreferredPortraitCardTextHeight = 96;
         private const int PreferredLandscapeCardTextHeight = 80;
-        private const int RowBuildBatchSize = 2;
+        private const int RowBuildBatchSize = 3;
         private const int PosterVisibleRowBuffer = 1;
-        private const int PosterKeepLowRowBuffer = 3;
-        private const int PosterRefreshIntervalMs = 260;
-        private const int PosterRefreshBurstTicks = 4;
-        private const int BuildTickMs = 20;
-        private const int HighQualityDelayMs = 320;
+        private const int PosterKeepLowRowBuffer = 2;
+        private const int PosterRefreshIntervalMs = 150;
+        private const int PosterRefreshBurstTicks = 6;
+        private const int BuildTickMs = 15;
+        private const int HighQualityDelayMs = 200;
 
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
 
@@ -359,7 +359,6 @@ namespace JellyfinTizen.Screens
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
             string basePath = null;
-            int highQuality = 90;
             if (_useLandscapeCards && movie.HasThumb)
             {
                 basePath = $"{serverUrl}/Items/{movie.Id}/Images/Thumb/0";
@@ -367,7 +366,6 @@ namespace JellyfinTizen.Screens
             else if (_useLandscapeCards && movie.HasBackdrop)
             {
                 basePath = $"{serverUrl}/Items/{movie.Id}/Images/Backdrop/0";
-                highQuality = 85;
             }
             else if (movie.HasPrimary)
             {
@@ -380,15 +378,16 @@ namespace JellyfinTizen.Screens
             else if (movie.HasBackdrop)
             {
                 basePath = $"{serverUrl}/Items/{movie.Id}/Images/Backdrop/0";
-                highQuality = 85;
             }
 
             if (string.IsNullOrWhiteSpace(basePath))
                 return;
 
             int lowWidth = Math.Max(_useLandscapeCards ? 180 : 120, _cardWidth / 2);
-            lowUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={lowWidth}&quality=52&api_key={apiKey}");
-            highUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality={highQuality}&api_key={apiKey}");
+            // Lower quality (40) and smaller dimensions for faster initial load
+            lowUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={lowWidth}&quality=40&api_key={apiKey}");
+            // Reduce high quality from 90/85 to 70 for faster loading over Tailscale
+            highUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality=70&api_key={apiKey}");
         }
 
         private void StartBuildTimer()

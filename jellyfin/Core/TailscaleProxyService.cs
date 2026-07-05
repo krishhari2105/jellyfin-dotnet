@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -18,9 +20,30 @@ namespace JellyfinTizen.Core
         private Task _listenerTask;
         private bool _disposed;
 
+        // In-memory cache for images to speed up repeated loads
+        private static readonly ConcurrentDictionary<string, CachedImage> _imageCache = new();
+        private static readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(10);
+        private static readonly int _maxCacheSize = 100; // Max images to cache
+
+        private sealed class CachedImage
+        {
+            public byte[] Data;
+            public string ContentType;
+            public DateTime CachedAt;
+        }
+
         public static string LocalProxyAddress => "127.0.0.1";
-        public static int LocalProxyPort => 8123;
-        public static string LocalProxyUrl => $"http://{LocalProxyAddress}:{LocalProxyPort}";
+        private static int _localProxyPort = 8123;
+        public static int LocalProxyPort
+        {
+            get => _localProxyPort;
+            set
+            {
+                _localProxyPort = value;
+                LocalProxyUrl = $"http://{LocalProxyAddress}:{value}";
+            }
+        }
+        public static string LocalProxyUrl { get; private set; } = $"http://{LocalProxyAddress}:8123";
 
         public TailscaleProxyService(HttpClient httpClient)
         {
@@ -38,12 +61,35 @@ namespace JellyfinTizen.Core
             if (_listener != null)
                 return;
 
-            _listener = new HttpListener();
-            _listener.Prefixes.Add($"http://{LocalProxyAddress}:{LocalProxyPort}/");
-            _listener.Start();
+            int retries = 5;
+            while (retries > 0)
+            {
+                try
+                {
+                    _listener = new HttpListener();
+                    _listener.Prefixes.Add($"http://{LocalProxyAddress}:{LocalProxyPort}/");
+                    _listener.Start();
 
-            _cts = new CancellationTokenSource();
-            _listenerTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+                    _cts = new CancellationTokenSource();
+                    _listenerTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+                    TailscaleDebugLog.Add("TailscaleProxyService listener started successfully.");
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    TailscaleDebugLog.Add($"Failed to start TailscaleProxyService (retries left: {retries - 1}): {ex.Message}");
+                    _listener = null;
+                    retries--;
+                    if (retries > 0)
+                    {
+                        System.Threading.Thread.Sleep(200);
+                    }
+                    else
+                    {
+                        throw;
+                    }
+                }
+            }
         }
 
         public void Stop()
@@ -160,13 +206,49 @@ namespace JellyfinTizen.Core
 
                     if (isImageContent)
                     {
-                        // Buffer images fully to survive Tizen ImageView's early connection close
-                        using var memoryStream = new MemoryStream();
-                        await proxyResponse.Content.CopyToAsync(memoryStream, cancellationToken);
-                        response.ContentLength64 = memoryStream.Length;
-                        memoryStream.Seek(0, SeekOrigin.Begin);
-                        await memoryStream.CopyToAsync(response.OutputStream, cancellationToken);
-                        await response.OutputStream.FlushAsync(cancellationToken);
+                        // Check cache first for faster subsequent loads
+                        string cacheKey = targetUrl;
+                        if (_imageCache.TryGetValue(cacheKey, out var cached) &&
+                            DateTime.UtcNow - cached.CachedAt < _cacheExpiration)
+                        {
+                            TailscaleDebugLog.Add($"Proxy: Serving image from cache: {targetUrl}");
+                            response.ContentLength64 = cached.Data.Length;
+                            response.ContentType = cached.ContentType;
+                            await response.OutputStream.WriteAsync(cached.Data, 0, cached.Data.Length, cancellationToken);
+                            await response.OutputStream.FlushAsync(cancellationToken);
+                        }
+                        else
+                        {
+                            // Buffer images fully to survive Tizen ImageView's early connection close
+                            using var memoryStream = new MemoryStream();
+                            await proxyResponse.Content.CopyToAsync(memoryStream, cancellationToken);
+                            var imageData = memoryStream.ToArray();
+
+                            // Cache the image for future requests (with size limit) - ONLY if response is successful
+                            if (proxyResponse.IsSuccessStatusCode && imageData.Length < 5 * 1024 * 1024 && _imageCache.Count < _maxCacheSize) // 5MB max per image
+                            {
+                                _imageCache[cacheKey] = new CachedImage
+                                {
+                                    Data = imageData,
+                                    ContentType = contentType,
+                                    CachedAt = DateTime.UtcNow
+                                };
+
+                                // Trim cache if too large
+                                if (_imageCache.Count > _maxCacheSize)
+                                {
+                                    var oldestEntry = _imageCache.OrderBy(kvp => kvp.Value.CachedAt).FirstOrDefault();
+                                    if (!oldestEntry.Equals(default))
+                                    {
+                                        _imageCache.TryRemove(oldestEntry.Key, out _);
+                                    }
+                                }
+                            }
+
+                            response.ContentLength64 = imageData.Length;
+                            await response.OutputStream.WriteAsync(imageData, 0, imageData.Length, cancellationToken);
+                            await response.OutputStream.FlushAsync(cancellationToken);
+                        }
                     }
                     else
                     {
@@ -233,6 +315,11 @@ namespace JellyfinTizen.Core
 
             Stop();
             _disposed = true;
+        }
+
+        public static void ClearCache()
+        {
+            _imageCache.Clear();
         }
     }
 }

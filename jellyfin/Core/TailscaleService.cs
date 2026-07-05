@@ -39,9 +39,9 @@ namespace JellyfinTizen.Core
         public bool IsSocketReachable => !string.IsNullOrEmpty(_socket) && System.IO.File.Exists(_socket);
 
         public static string ProxyAddress => "127.0.0.1";
-        public static int PeerToPeerPort => 41641;
-        public static int HttpProxyPort => 3128;
-        public static int Socks5ProxyPort => 1080;
+        public static int PeerToPeerPort { get; private set; } = 41641;
+        public static int HttpProxyPort { get; private set; } = 3128;
+        public static int Socks5ProxyPort { get; private set; } = 1080;
         public static string HttpProxyUrl => $"http://{ProxyAddress}:{HttpProxyPort}";
         public static string Socks5ProxyUrl => $"socks5://{ProxyAddress}:{Socks5ProxyPort}";
 
@@ -51,8 +51,70 @@ namespace JellyfinTizen.Core
             string dataDir = Application.Current.DirectoryInfo.Data;
             _stateDir = Path.Combine(dataDir, "tailscale-state");
             Directory.CreateDirectory(_stateDir);
-            _socket = Path.Combine(_stateDir, "tailscaled.sock");
+            
+            // Clean up any stale socket files from previous runs
+            try
+            {
+                if (Directory.Exists(_stateDir))
+                {
+                    foreach (var file in Directory.GetFiles(_stateDir, "*.sock"))
+                    {
+                        try 
+                        { 
+                            TailscaleDebugLog.Add($"Deleting stale socket file: {file}");
+                            File.Delete(file); 
+                        } 
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+
+            // Use a unique socket name for this specific app instance (PID-based)
+            _socket = Path.Combine(_stateDir, $"tailscaled_{System.Diagnostics.Process.GetCurrentProcess().Id}.sock");
             _tailscaledExe = Path.Combine(dataDir, "tailscaled");
+
+            // Allocate free ports to avoid conflicts with frozen processes
+            try
+            {
+                PeerToPeerPort = GetFreeUdpPort(41641);
+                HttpProxyPort = GetFreePort(3128);
+                Socks5ProxyPort = GetFreePort(1080);
+                TailscaleDebugLog.Add($"Allocated dynamic ports: P2P={PeerToPeerPort}, HTTP Proxy={HttpProxyPort}, Socks5 Proxy={Socks5ProxyPort}");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Warning: Port allocation failed ({ex.Message}), using default fallback ports");
+                PeerToPeerPort = 41641;
+                HttpProxyPort = 3128;
+                Socks5ProxyPort = 1080;
+            }
+
+            try
+            {
+                TailscaleDebugLog.Add("Checking for orphaned tailscaled processes...");
+                var processes = Process.GetProcessesByName("tailscaled");
+                foreach (var p in processes)
+                {
+                    try
+                    {
+                        if (p.Id != System.Diagnostics.Process.GetCurrentProcess().Id)
+                        {
+                            TailscaleDebugLog.Add($"Killing orphaned tailscaled process (PID: {p.Id})");
+                            p.Kill();
+                            p.Dispose();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"Warning: Failed to kill orphaned process: {ex.Message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Warning: Failed to scan/kill tailscaled processes: {ex.Message}");
+            }
 
             // Detect architecture and pick the right binary
             // Both ARM and x86 binaries can be placed in lib/ folder
@@ -373,6 +435,58 @@ namespace JellyfinTizen.Core
 
             Stop();
             _disposed = true;
+        }
+
+        public static int GetFreePort(int defaultPort)
+        {
+            try
+            {
+                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, defaultPort);
+                listener.Start();
+                listener.Stop();
+                return defaultPort;
+            }
+            catch
+            {
+                try
+                {
+                    var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+                    listener.Start();
+                    int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+                    listener.Stop();
+                    return port;
+                }
+                catch
+                {
+                    return defaultPort;
+                }
+            }
+        }
+
+        private static int GetFreeUdpPort(int defaultPort)
+        {
+            try
+            {
+                var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+                socket.Bind(new IPEndPoint(IPAddress.Loopback, defaultPort));
+                socket.Close();
+                return defaultPort;
+            }
+            catch
+            {
+                try
+                {
+                    var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+                    socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                    int port = ((IPEndPoint)socket.LocalEndPoint).Port;
+                    socket.Close();
+                    return port;
+                }
+                catch
+                {
+                    return defaultPort;
+                }
+            }
         }
     }
 }

@@ -19,8 +19,27 @@ namespace JellyfinTizen
             NavigationService.NotifyAppTerminating();
         }
 
+        protected override void OnResume()
+        {
+            base.OnResume();
+            try
+            {
+                AppState.OnAppResumed();
+            }
+            catch (System.Exception ex)
+            {
+                Tizen.Log.Error("Jellyfin", $"Failed to handle App resume: {ex.Message}");
+            }
+        }
+
         protected override void OnTerminate()
         {
+            try
+            {
+                AppState.TailscaleProxy?.Stop();
+                AppState.Tailscale?.Stop();
+            }
+            catch { }
             NavigationService.NotifyAppTerminating();
             base.OnTerminate();
         }

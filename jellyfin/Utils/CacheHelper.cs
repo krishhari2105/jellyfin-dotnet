@@ -41,5 +41,13 @@ namespace JellyfinTizen.Utils
             _cache[key] = item;
             return value;
         }
+
+        /// <summary>
+        /// Clears all cached items.
+        /// </summary>
+        public static void Clear()
+        {
+            _cache.Clear();
+        }
     }
 }

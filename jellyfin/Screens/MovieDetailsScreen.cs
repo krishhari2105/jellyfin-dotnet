@@ -134,7 +134,7 @@ namespace JellyfinTizen.Screens
             };
             var posterUrl =
                 $"{serverUrl}/Items/{_mediaItem.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=95&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
             var posterFrame = new View
             {
