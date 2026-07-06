@@ -23,6 +23,7 @@ namespace JellyfinTizen.Core
         private const string KeyServersRegistry = "jf_servers_registry_v1";
         private const string KeyActiveServerUrl = "jf_active_server_url";
         private const int MaxStoredServersCount = 4;
+        private const int DefaultApiTimeoutSeconds = 20;
 
         private static readonly object ServerRegistryLock = new();
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -1088,7 +1089,7 @@ namespace JellyfinTizen.Core
             };
             var client = new HttpClient(handler)
             {
-                Timeout = TimeSpan.FromSeconds(10)
+                Timeout = TimeSpan.FromSeconds(DefaultApiTimeoutSeconds)
             };
             client.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinTizen/2.0");
             return client;
