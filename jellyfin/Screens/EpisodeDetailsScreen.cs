@@ -129,12 +129,12 @@ namespace JellyfinTizen.Screens
             
             var thumbUrl =
                 _episode.IsEpisode && _episode.HasPrimary
-                    ? $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
+                    ? $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=75&api_key={apiKey}"
                     : _episode.HasThumb
-                        ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}"
+                        ? $"{serverUrl}/Items/{_episode.Id}/Images/Thumb/0?maxWidth={EpisodeThumbWidth}&quality=75&api_key={apiKey}"
                         : _episode.HasBackdrop
-                            ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=90&api_key={apiKey}"
-                            : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=95&api_key={apiKey}";
+                            ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=70&api_key={apiKey}"
+                            : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=75&api_key={apiKey}";
             thumbUrl = AppState.RewriteImageUrlForTailscale(thumbUrl);
             
             var thumbFrame = new View

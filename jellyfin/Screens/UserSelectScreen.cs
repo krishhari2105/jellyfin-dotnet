@@ -254,7 +254,7 @@ namespace JellyfinTizen.Screens
 
             string url =
                 $"{serverUrl.TrimEnd('/')}/Users/{Uri.EscapeDataString(user.Id)}/Images/Primary" +
-                $"?width={size}&height={size}&fillWidth={size}&fillHeight={size}&quality=95";
+                $"?width={size}&height={size}&fillWidth={size}&fillHeight={size}&quality=75";
 
             if (!string.IsNullOrWhiteSpace(user.PrimaryImageTag))
                 url += $"&tag={Uri.EscapeDataString(user.PrimaryImageTag)}";

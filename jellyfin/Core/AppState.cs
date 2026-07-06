@@ -92,11 +92,14 @@ namespace JellyfinTizen.Core
 
                         try
                         {
+                            TailscaleProxyService.LocalProxyPort = TailscaleService.GetFreePort(8123);
                             TailscaleProxy = new TailscaleProxyService(HttpClient);
                             TailscaleProxy.Start();
-                            
-                            // Give the proxy a tiny bit of time to start its listener
-                            await Task.Delay(100);
+
+                            // Give the proxy time to start its listener
+                            // Increased from 100ms to 500ms to prevent race conditions
+                            // that cause image loading failures and black screens on Tizen TV
+                            await Task.Delay(500);
                         }
                         catch (Exception ex)
                         {
@@ -364,6 +367,13 @@ namespace JellyfinTizen.Core
 
                 Jellyfin?.ClearAuthToken();
                 Jellyfin?.SetUserId(null);
+
+                try
+                {
+                    TailscaleProxyService.ClearCache();
+                    JellyfinTizen.Utils.CacheHelper.Clear();
+                }
+                catch { }
 
                 var active = GetActiveRecordInternal();
                 if (active != null)
@@ -887,6 +897,95 @@ namespace JellyfinTizen.Core
             }
 
             return url;
+        }
+
+        public static void OnAppResumed()
+        {
+            TailscaleDebugLog.Add("App resumed. Checking Tailscale and proxy service status...");
+
+            try
+            {
+                TailscaleProxyService.ClearCache();
+                JellyfinTizen.Utils.CacheHelper.Clear();
+                TailscaleDebugLog.Add("Cleared image and API caches on resume.");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Error clearing caches on resume: {ex.Message}");
+            }
+
+            try
+            {
+                if (Tailscale != null && !Tailscale.IsRunning)
+                {
+                    TailscaleDebugLog.Add("Tailscale process is not running on resume. Attempting restart...");
+                    Tailscale.StageAndStart();
+                }
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Error restarting Tailscale on resume: {ex.Message}");
+            }
+
+            try
+            {
+                if (TailscaleProxy != null)
+                {
+                    TailscaleDebugLog.Add("Stopping existing Tailscale proxy...");
+                    TailscaleProxy.Stop();
+                }
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Error stopping proxy on resume: {ex.Message}");
+            }
+
+            try
+            {
+                bool reachable = (Tailscale != null) && (Tailscale.IsRunning || Tailscale.IsSocketReachable);
+                if (reachable)
+                {
+                    TailscaleDebugLog.Add("Starting Tailscale proxy...");
+                    TailscaleProxyService.LocalProxyPort = TailscaleService.GetFreePort(8123);
+                    if (TailscaleProxy == null)
+                    {
+                        TailscaleProxy = new TailscaleProxyService(HttpClient);
+                    }
+                    TailscaleProxy.Start();
+                }
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Error restarting proxy on resume: {ex.Message}");
+            }
+
+            if (IsTailscaleUrl(ServerUrl))
+            {
+                NavigationService.ShowReconnectOverlay("Re-establishing Tailscale connection...");
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    int attempts = 0;
+                    bool connected = false;
+                    while (attempts < 15)
+                    {
+                        try
+                        {
+                            if (IsTailscaleConnected())
+                            {
+                                connected = true;
+                                break;
+                            }
+                        }
+                        catch { }
+
+                        await Task.Delay(1000);
+                        attempts++;
+                    }
+
+                    TailscaleDebugLog.Add($"Tailscale reconnection status after resume: connected={connected} (attempts={attempts})");
+                    NavigationService.HideReconnectOverlay();
+                });
+            }
         }
 
         public static bool? TryGetAspectMode(string itemId, string mediaSourceId)

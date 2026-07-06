@@ -561,5 +561,58 @@ namespace JellyfinTizen.Core
             catch { }
         }
 
+        private static View _reconnectOverlay;
+
+        public static void ShowReconnectOverlay(string message)
+        {
+            if (_window == null) return;
+            
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                if (_reconnectOverlay == null)
+                {
+                    _reconnectOverlay = new View
+                    {
+                        WidthResizePolicy = ResizePolicyType.FillToParent,
+                        HeightResizePolicy = ResizePolicyType.FillToParent,
+                        BackgroundColor = new NColor(0f, 0f, 0f, 0.75f)
+                    };
+                    
+                    var panel = MonochromeAuthFactory.CreatePanel(width: 600, yOffset: 0);
+                    panel.Padding = new Extents(40, 40, 30, 30);
+                    panel.BackgroundColor = new NColor(7f / 255f, 13f / 255f, 28f / 255f, 1.0f);
+                    panel.BorderlineColor = new NColor(1f, 1f, 1f, 0.2f);
+                    if (panel.Layout is LinearLayout panelLayout)
+                        panelLayout.CellPadding = new Size2D(0, 14);
+
+                    var title = MonochromeAuthFactory.CreateTitle("Tailscale Connection");
+                    title.PointSize = 32f;
+                    
+                    var subtitle = MonochromeAuthFactory.CreateSubtitle(message);
+                    subtitle.PointSize = 20f;
+                    subtitle.TextColor = new NColor(1f, 1f, 1f, 0.7f);
+                    
+                    panel.Add(title);
+                    panel.Add(subtitle);
+                    _reconnectOverlay.Add(panel);
+                }
+                
+                try { _window.Remove(_reconnectOverlay); } catch { }
+                _window.Add(_reconnectOverlay);
+                _reconnectOverlay.Show();
+                _reconnectOverlay.RaiseToTop();
+            });
+        }
+
+        public static void HideReconnectOverlay()
+        {
+            if (_reconnectOverlay == null) return;
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                _reconnectOverlay.Hide();
+                try { _window.Remove(_reconnectOverlay); } catch { }
+            });
+        }
+
     }
 }
