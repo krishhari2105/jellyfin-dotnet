@@ -45,7 +45,7 @@ namespace JellyfinTizen.Core
         public static string HttpProxyUrl => $"http://{ProxyAddress}:{HttpProxyPort}";
         public static string Socks5ProxyUrl => $"socks5://{ProxyAddress}:{Socks5ProxyPort}";
 
-        public void StageAndStart()
+        public async Task StageAndStart()
         {
             string installDir = Application.Current.DirectoryInfo.Resource;
             string dataDir = Application.Current.DirectoryInfo.Data;
@@ -244,7 +244,7 @@ namespace JellyfinTizen.Core
             // Give it a moment to initialize
             try
             {
-                Task.Delay(2000).Wait();
+                await Task.Delay(2000);
             }
             catch (Exception ex)
             {
