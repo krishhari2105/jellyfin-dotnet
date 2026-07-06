@@ -22,6 +22,7 @@ namespace JellyfinTizen.Core
         private string _tailscaledExe;
         private bool _disposed;
         private string _lastAuthUrl;
+        private HttpClient _localApiClient;
 
         private static readonly Regex AuthUrlRegex = new(
             @"(?:AuthURL is|AuthURL=|BrowseToURL=)\s*(?<url>https?://\S+)|(?<url>https://login\.tailscale\.com/\S+)",
@@ -311,6 +312,7 @@ namespace JellyfinTizen.Core
         public async System.Collections.Generic.IAsyncEnumerable<JsonNode> WatchIPNBus(int mask = 7, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
         {
             await WaitForReadyAsync();
+            // Long-lived SSE stream — use scoped client to avoid lifetime coupling with Dispose()
             using var client = CreateLocalApiClient();
             using var resp = await client.GetAsync($"/localapi/v0/watch-ipn-bus?mask={mask}", ct);
             resp.EnsureSuccessStatusCode();
@@ -330,7 +332,8 @@ namespace JellyfinTizen.Core
         public async Task StartLoginInteractiveAsync(CancellationToken ct = default)
         {
             await WaitForReadyAsync();
-            using var client = CreateLocalApiClient();
+            _localApiClient ??= CreateLocalApiClient();
+            var client = _localApiClient;
             using var content = new StringContent("");
             var resp = await client.PostAsync("/localapi/v0/login-interactive", content, ct);
             string body = await resp.Content.ReadAsStringAsync(ct);
@@ -340,7 +343,8 @@ namespace JellyfinTizen.Core
         public async Task<JsonNode> GetStatusAsync(CancellationToken ct = default)
         {
             await WaitForReadyAsync();
-            using var client = CreateLocalApiClient();
+            _localApiClient ??= CreateLocalApiClient();
+            var client = _localApiClient;
             using var resp = await client.GetAsync("/localapi/v0/status", ct);
             string body = await resp.Content.ReadAsStringAsync(ct);
             resp.EnsureSuccessStatusCode();
@@ -434,6 +438,8 @@ namespace JellyfinTizen.Core
                 return;
 
             Stop();
+            _localApiClient?.Dispose();
+            _localApiClient = null;
             _disposed = true;
         }
 

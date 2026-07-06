@@ -24,6 +24,7 @@ namespace JellyfinTizen.Screens
         private TextLabel _errorLabel;
         private bool _continueInProgress;
         private System.Threading.Timer _errorTimer;
+        private HttpClient _probeHttpClient;
 
         public ServerSetupScreen()
         {
@@ -73,6 +74,8 @@ namespace JellyfinTizen.Screens
         {
             _continueInProgress = false;
             DisposeTimer(ref _errorTimer);
+            _probeHttpClient?.Dispose();
+            _probeHttpClient = null;
             base.OnHide(); // calls HideDebugOverlay()
         }
 
@@ -251,15 +254,16 @@ namespace JellyfinTizen.Screens
             try
             {
                 Core.TailscaleDebugLog.Add($"ResolveServerBaseUrl: {url}");
-                var handler = new HttpClientHandler
+                _probeHttpClient ??= new HttpClient(new HttpClientHandler
                 {
                     Proxy = new TailscaleWebProxy(),
                     UseProxy = true,
-                    // Don't follow redirects automatically so we capture final URL properly
                     AllowAutoRedirect = true,
+                })
+                {
+                    Timeout = TimeSpan.FromSeconds(8)
                 };
-                using var httpClient = new System.Net.Http.HttpClient(handler);
-                httpClient.Timeout = System.TimeSpan.FromSeconds(8);
+                var httpClient = _probeHttpClient;
                 var normalizedInput = url.TrimEnd('/');
                 var targetUrl = normalizedInput + "/System/Info/Public";
                 Core.TailscaleDebugLog.Add($"GET {targetUrl}");
@@ -298,7 +302,6 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
-                // Capture the final URL after redirects (http->https, reverse proxy path rewrites, etc).
                 var finalUri = response.RequestMessage?.RequestUri;
                 if (finalUri == null)
                 {
