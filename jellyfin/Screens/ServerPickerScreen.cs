@@ -611,6 +611,13 @@ namespace JellyfinTizen.Screens
                     await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
                 }
 
+                // If Tailscale startup failed, early exit instead of proceeding to checks
+                if (AppState.TailscaleStartupFailed)
+                {
+                    Core.TailscaleDebugLog.Add("ServerPicker.TailscaleReady: Tailscale startup failed");
+                    return false;
+                }
+
                 if (AppState.Tailscale == null)
                 {
                     Core.TailscaleDebugLog.Add("ServerPicker.TailscaleReady: Tailscale service is null");

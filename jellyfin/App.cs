@@ -36,8 +36,9 @@ namespace JellyfinTizen
         {
             try
             {
-                AppState.TailscaleProxy?.Stop();
+                AppState.TailscaleProxy?.Dispose();
                 AppState.Tailscale?.Stop();
+                AppState.Jellyfin?.Dispose();
             }
             catch { }
             NavigationService.NotifyAppTerminating();

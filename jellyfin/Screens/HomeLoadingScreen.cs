@@ -19,12 +19,62 @@ namespace JellyfinTizen.Screens
     {
         private const int ImageUrlCacheMaxEntries = 2500;
 
+        // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
+        // LinkedList tracks access order (oldest at First, newest at Last)
+        // Single lock covers entire GetOrAdd operation to prevent race conditions
+        private sealed class LruCache
+        {
+            private readonly ConcurrentDictionary<string, LinkedListNode<CacheEntry>> _dict = new();
+            private readonly LinkedList<CacheEntry> _lru = new();
+            private readonly int _maxSize;
+            private readonly object _lruLock = new();
+
+            private sealed class CacheEntry
+            {
+                public string Key;
+                public string Value;
+            }
+
+            public LruCache(int maxSize) => _maxSize = maxSize;
+
+            public string GetOrAdd(string key, Func<string> factory)
+            {
+                lock (_lruLock)
+                {
+                    if (_dict.TryGetValue(key, out var node))
+                    {
+                        _lru.Remove(node);
+                        _lru.AddLast(node);
+                        return node.Value.Value;
+                    }
+
+                    var value = factory();
+                    var entry = new CacheEntry { Key = key, Value = value };
+                    var newNode = new LinkedListNode<CacheEntry>(entry);
+
+                    if (_dict.Count >= _maxSize)
+                    {
+                        var oldest = _lru.First;
+                        _lru.RemoveFirst();
+                        _dict.TryRemove(oldest.Value.Key, out _);
+                    }
+
+                    _lru.AddLast(newNode);
+                    _dict[key] = newNode;
+                    return value;
+                }
+            }
+
+            public void Clear() { _dict.Clear(); lock (_lruLock) _lru.Clear(); }
+        }
+
         private bool _navigated;
         private bool _loaded;
         private ThreadingTimer _fallbackTimer;
         private AppleTvLoadingVisual _loadingVisual;
-        private static readonly object ImageUrlCacheTrimLock = new();
-        private static readonly ConcurrentDictionary<string, string> ImageUrlCache = new();
+
+        // Single static LRU cache instance (initialized on first access)
+        private static readonly Lazy<LruCache> ImageUrlCache = new(() => new LruCache(ImageUrlCacheMaxEntries));
 
         public HomeLoadingScreen()
         {
@@ -345,16 +395,7 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(key) || factory == null)
                 return null;
 
-            if (!ImageUrlCache.ContainsKey(key) && ImageUrlCache.Count >= ImageUrlCacheMaxEntries)
-            {
-                lock (ImageUrlCacheTrimLock)
-                {
-                    if (!ImageUrlCache.ContainsKey(key) && ImageUrlCache.Count >= ImageUrlCacheMaxEntries)
-                        ImageUrlCache.Clear();
-                }
-            }
-
-            return ImageUrlCache.GetOrAdd(key, _ => factory());
+            return ImageUrlCache.Value.GetOrAdd(key, factory);
         }
 
         private static async Task<T> WithTimeout<T>(Task<T> task, int timeoutMs)

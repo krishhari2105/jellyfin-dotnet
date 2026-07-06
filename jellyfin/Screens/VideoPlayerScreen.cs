@@ -93,7 +93,6 @@ namespace JellyfinTizen.Screens
         private readonly Dictionary<int, string> _trickplayTileCache = new();
         private readonly Dictionary<int, Task<string>> _trickplayTileDownloads = new();
         private readonly object _trickplayTileLock = new();
-        private HttpClient _trickplayHttpClient;
         private View _subtitleListContainer;
         private ScrollableBase _subtitleScrollView;
         private View _audioListContainer;
@@ -318,6 +317,24 @@ namespace JellyfinTizen.Screens
                 _reportProgressTimer.Stop();
             }
             _reportProgressTimer = null;
+            if (_subtitleRenderTimer != null)
+            {
+                _subtitleRenderTimer.Tick -= OnSubtitleRenderTick;
+                _subtitleRenderTimer.Stop();
+            }
+            _subtitleRenderTimer = null;
+            if (_osdTimer != null)
+            {
+                _osdTimer.Tick -= OnOsdTimerTick;
+                _osdTimer.Stop();
+            }
+            _osdTimer = null;
+            if (_progressTimer != null)
+            {
+                _progressTimer.Tick -= OnProgressTimerTick;
+                _progressTimer.Stop();
+            }
+            _progressTimer = null;
             ReportProgressToServer();
             UiAnimator.StopAndDispose(ref _osdAnimation);
             UiAnimator.StopAndDispose(ref _topOsdAnimation);
@@ -327,9 +344,18 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
             UiAnimator.StopAndDispose(ref _smartActionPopupAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
-            _seekCommitTimer?.Stop();
+            if (_seekCommitTimer != null)
+            {
+                _seekCommitTimer.Tick -= OnSeekCommitTimerTick;
+                _seekCommitTimer.Stop();
+            }
             _seekCommitTimer = null;
-            _smartActionTimer?.Stop();
+            if (_smartActionTimer != null)
+            {
+                _smartActionTimer.Tick -= OnSmartActionTick;
+                _smartActionTimer.Stop();
+            }
+            _smartActionTimer = null;
             StopPlayback();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
@@ -2473,7 +2499,13 @@ namespace JellyfinTizen.Screens
             _osdTimer = new Timer(5000);
             _osdTimer.Tick += OnOsdTimerTick;
             _progressTimer = new Timer(500);
-            _progressTimer.Tick += (_, __) => { UpdateProgress(); return true; };
+            _progressTimer.Tick += OnProgressTimerTick;
+        }
+
+        private bool OnProgressTimerTick(object sender, Timer.TickEventArgs e)
+        {
+            UpdateProgress();
+            return true;
         }
 
         private static string UpsertQueryParam(string url, string key, string value)
@@ -5934,8 +5966,18 @@ namespace JellyfinTizen.Screens
             UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
             UiAnimator.StopAndDispose(ref _playPauseFadeAnimation);
             UiAnimator.StopAndDisposeAll(_focusAnimations);
-            _playPauseFeedbackTimer?.Stop();
-            _seekCommitTimer?.Stop();
+            if (_playPauseFeedbackTimer != null)
+            {
+                _playPauseFeedbackTimer.Tick -= OnPlayPauseFeedbackTimerTick;
+                _playPauseFeedbackTimer.Stop();
+            }
+            _playPauseFeedbackTimer = null;
+            if (_seekCommitTimer != null)
+            {
+                _seekCommitTimer.Tick -= OnSeekCommitTimerTick;
+                _seekCommitTimer.Stop();
+            }
+            _seekCommitTimer = null;
             _pendingSeekDeltaSeconds = 0;
             _isQueuedDirectionalSeekActive = false;
             _isSeeking = false;
@@ -5951,8 +5993,6 @@ namespace JellyfinTizen.Screens
             _osd?.Hide();
             _topOsd?.Hide();
             ResetTrickplayState();
-            _trickplayHttpClient?.Dispose();
-            _trickplayHttpClient = null;
             ResetSmartActionState();
 
             try 
@@ -5982,11 +6022,30 @@ namespace JellyfinTizen.Screens
             
             try
             {
-                if (_player == null) return;
-                try { _progressTimer?.Stop(); } catch { }
-                try { _osdTimer?.Stop(); } catch { }
-                try { _subtitleRenderTimer?.Stop(); } catch { }
-                try { _subtitleHideTimer?.Stop(); } catch { }
+                if (_progressTimer != null)
+                {
+                    _progressTimer.Tick -= OnProgressTimerTick;
+                    _progressTimer.Stop();
+                }
+                _progressTimer = null;
+                if (_osdTimer != null)
+                {
+                    _osdTimer.Tick -= OnOsdTimerTick;
+                    _osdTimer.Stop();
+                }
+                _osdTimer = null;
+                if (_subtitleRenderTimer != null)
+                {
+                    _subtitleRenderTimer.Tick -= OnSubtitleRenderTick;
+                    _subtitleRenderTimer.Stop();
+                }
+                _subtitleRenderTimer = null;
+                if (_subtitleHideTimer != null)
+                {
+                    _subtitleHideTimer.Tick -= OnSubtitleHideTimerTick;
+                    _subtitleHideTimer.Stop();
+                }
+                _subtitleHideTimer = null;
                 try { _player.PlaybackCompleted -= OnPlaybackCompleted; } catch { }
                 try { _player.ErrorOccurred -= OnPlayerErrorOccurred; } catch { }
                 try { _player.BufferingProgressChanged -= OnBufferingProgressChanged; } catch { }

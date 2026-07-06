@@ -13,6 +13,8 @@ namespace JellyfinTizen.Core
     {
         public static Task TailscaleReadyTask { get; private set; }
 
+        public static bool TailscaleStartupFailed { get; private set; } = false;
+        private static bool _resumeInProgress = false;
         private const string KeyServerUrl = "jf_server_url";
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
@@ -82,8 +84,9 @@ namespace JellyfinTizen.Core
             {
                 try
                 {
-                    Tailscale.StageAndStart();
-                    
+                    await Tailscale.StageAndStart();
+                    TailscaleStartupFailed = false;
+
                     bool reachable = Tailscale.IsRunning || Tailscale.IsSocketReachable;
                     if (reachable)
                     {
@@ -111,6 +114,7 @@ namespace JellyfinTizen.Core
                 catch (Exception ex)
                 {
                     Tizen.Log.Warn("AppState", $"Tailscale not available: {ex.Message}");
+                    TailscaleStartupFailed = true;
                 }
             });
 
@@ -822,7 +826,7 @@ namespace JellyfinTizen.Core
             return !string.IsNullOrWhiteSpace(value) && Guid.TryParse(value.Trim(), out _);
         }
 
-        public static bool IsTailscaleConnected()
+        public static async Task<bool> IsTailscaleConnectedAsync()
         {
             try
             {
@@ -830,7 +834,7 @@ namespace JellyfinTizen.Core
                     return false;
 
                 // Quick sync check - if we can get status and Online is true
-                var status = Tailscale.GetStatusAsync().GetAwaiter().GetResult();
+                var status = await Tailscale.GetStatusAsync();
                 return status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
             }
             catch
@@ -899,8 +903,14 @@ namespace JellyfinTizen.Core
             return url;
         }
 
-        public static void OnAppResumed()
+        public static async void OnAppResumed()
         {
+            if (_resumeInProgress)
+            {
+                TailscaleDebugLog.Add("OnAppResumed: reconnect already in progress, skipping.");
+                return;
+            }
+            _resumeInProgress = true;
             TailscaleDebugLog.Add("App resumed. Checking Tailscale and proxy service status...");
 
             try
@@ -919,7 +929,7 @@ namespace JellyfinTizen.Core
                 if (Tailscale != null && !Tailscale.IsRunning)
                 {
                     TailscaleDebugLog.Add("Tailscale process is not running on resume. Attempting restart...");
-                    Tailscale.StageAndStart();
+                    await Tailscale.StageAndStart();
                 }
             }
             catch (Exception ex)
@@ -933,6 +943,8 @@ namespace JellyfinTizen.Core
                 {
                     TailscaleDebugLog.Add("Stopping existing Tailscale proxy...");
                     TailscaleProxy.Stop();
+                    TailscaleProxy.Dispose();
+                    TailscaleProxy = null;
                 }
             }
             catch (Exception ex)
@@ -964,27 +976,40 @@ namespace JellyfinTizen.Core
                 NavigationService.ShowReconnectOverlay("Re-establishing Tailscale connection...");
                 System.Threading.Tasks.Task.Run(async () =>
                 {
-                    int attempts = 0;
-                    bool connected = false;
-                    while (attempts < 15)
+                    try
                     {
-                        try
+                        int attempts = 0;
+                        bool connected = false;
+                        while (attempts < 15)
                         {
-                            if (IsTailscaleConnected())
+                            try
                             {
-                                connected = true;
-                                break;
+                                if (await IsTailscaleConnectedAsync())
+                                {
+                                    TailscaleStartupFailed = false;
+                                    connected = true;
+                                    break;
+                                }
                             }
+                            catch { }
+
+                            await Task.Delay(1000);
+                            attempts++;
                         }
-                        catch { }
 
-                        await Task.Delay(1000);
-                        attempts++;
+                        TailscaleDebugLog.Add($"Tailscale reconnection status after resume: connected={connected} (attempts={attempts})");
+                        NavigationService.HideReconnectOverlay();
                     }
-
-                    TailscaleDebugLog.Add($"Tailscale reconnection status after resume: connected={connected} (attempts={attempts})");
-                    NavigationService.HideReconnectOverlay();
+                    finally
+                    {
+                        _resumeInProgress = false;
+                    }
                 });
+            }
+            else
+            {
+                // Not a Tailscale URL — no background task started, reset flag immediately
+                _resumeInProgress = false;
             }
         }
 

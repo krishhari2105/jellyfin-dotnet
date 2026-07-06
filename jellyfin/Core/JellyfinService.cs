@@ -12,7 +12,7 @@ using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
-    public class JellyfinService
+    public class JellyfinService : IDisposable
     {
         private const string DefaultDeviceId = "00000000000000000000000000000000";
         private const string ClientName = "Jellyfin for Tizen";
@@ -24,10 +24,20 @@ namespace JellyfinTizen.Core
 
         private readonly HttpClient _http;
         private string _connectedServerUrl;
+        private bool _disposed;
 
         public JellyfinService(HttpClient httpClient)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _http?.Dispose();
+            _disposed = true;
         }
 
         public string ServerUrl { get; private set; }
