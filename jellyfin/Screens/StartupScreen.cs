@@ -66,10 +66,7 @@ namespace JellyfinTizen.Screens
                         if (Uri.TryCreate(active.Url, UriKind.Absolute, out var uri))
                         {
                             string host = uri.Host;
-                            bool isTailscaleServer = host.StartsWith("100.") ||
-                                                     host.StartsWith("127.0.") ||
-                                                     host.StartsWith("fd") ||
-                                                     host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+                            bool isTailscaleServer = AppState.IsTailscaleUrl(active.Url);
 
                             if (isTailscaleServer && AppState.TailscaleReadyTask != null)
                             {

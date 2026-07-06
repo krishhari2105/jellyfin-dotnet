@@ -806,12 +806,8 @@ namespace JellyfinTizen.Screens
                 if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
                     return url;
 
-                string host = uri.Host;
-                if (string.IsNullOrWhiteSpace(host))
-                    return url;
-
                 // If the host is a Tailscale IP (100.x.y.z or 127.0.y.z or fd..), route through local proxy
-                if (host.StartsWith("100.") || host.StartsWith("127.") || host.StartsWith("fd", StringComparison.OrdinalIgnoreCase))
+                if (AppState.IsTailscaleUrl(url))
                 {
                     string proxyUrl = Core.TailscaleProxyService.LocalProxyUrl;
                     string encodedUrl = Uri.EscapeDataString(url);
