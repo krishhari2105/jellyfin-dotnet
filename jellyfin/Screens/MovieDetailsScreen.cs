@@ -11,70 +11,29 @@ using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
+using IOPath = System.IO.Path;
 
 namespace JellyfinTizen.Screens
 {
-    public class MovieDetailsScreen : ScreenBase, IKeyHandler
+    public class MovieDetailsScreen : DetailsScreenBase
     {
-        private enum DetailsPanelMode
-        {
-            None,
-            Subtitle,
-            Audio
-        }
-
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
-        private const float ButtonFocusScale = 1.08f;
         private const float EpisodeFocusScale = 1.03f;
         private const int FixedTopContentHeight = 500;
         private const int FixedOverviewViewportHeight = 240;
         private const int OverviewScrollStepPx = 70;
         private const int OverviewScrollTailPx = 28;
-        private const int ActionButtonHeight = 70;
-        private const int ActionButtonRowGap = 28;
-        private const int SecondaryActionButtonWidth = 240;
-        private const int PlayActionButtonWidth = 176;
-        private const int IconActionButtonWidth = 122;
-        private const int ActionButtonIconLabelGap = 6;
-        private const int PlayActionButtonIconSize = 46;
-        private const int AudioActionButtonIconSize = 36;
-        private const int SubtitleActionButtonIconSize = 34;
-        private const int DetailsHorizontalPadding = 90;
-        private const int DetailsColumnGap = 60;
         private const int TitleLogoMaxWidth = 720;
         private const int TitleLogoQuality = 76;
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
         private readonly JellyfinMovie _mediaItem;
-        private readonly bool _resumeAvailable;
-        private View _playButton;
-        private View _resumeButton;
-        private View _audioButton;
-        private View _subtitleButton;
-        private View _versionButton;
-        private readonly List<View> _buttons = new();
-        private int _buttonIndex;
-        private View _infoColumn;
-        private View _buttonGroup;
-        private View _buttonRowTop;
-        private View _buttonRowBottom;
         private View _episodesView;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
-        private List<MediaStream> _subtitleStreams;
-        private List<MediaSourceInfo> _mediaSources = new();
-        private int _selectedMediaSourceIndex = 0;
-        private int? _selectedSubtitleIndex = null;
-        private int? _selectedAudioIndex = null;
-        private bool _subtitleStreamsLoaded;
-        private bool _mediaSourcesLoaded;
-        private readonly Dictionary<View, Animation> _focusAnimations = new();
-        private readonly Dictionary<string, string> _darkButtonIconPathCache = new(StringComparer.OrdinalIgnoreCase);
-        private DetailsSelectionPanel _selectionPanel;
-        private DetailsPanelMode _selectionPanelMode;
         private View _metadataContainer;
         private View _metadataSummaryRow;
         private TextLabel _metadataSummaryLabel;
@@ -85,19 +44,15 @@ namespace JellyfinTizen.Screens
         private TextLabel _overviewLabel;
         private int _overviewScrollOffset;
         private int _overviewMaxScroll;
-        private bool _actionButtonReflowScheduled;
-        private const string DolbyAudioChipPrefix = "__DOLBY_AUDIO__:";
-        private const string DolbyVisionChipToken = "__DOLBY_VISION_ICON__";
 
         public bool UsesImageLogoTitle =>
             _mediaItem != null &&
             !_mediaItem.IsEpisode &&
             _mediaItem.HasLogo;
 
-        public MovieDetailsScreen(JellyfinMovie movie)
+        public MovieDetailsScreen(JellyfinMovie movie) : base(movie)
         {
             _mediaItem = movie;
-            _resumeAvailable = movie.PlaybackPositionTicks > 0;
             var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -224,20 +179,20 @@ namespace JellyfinTizen.Screens
                     Margin = new Extents(0, 0, 34, 0)
                 };
 
-                _buttonRowTop = CreateButtonRow();
-                _buttonRowBottom = CreateButtonRow();
+                _buttonRowTop = DetailsScreenHelpers.CreateButtonRow();
+                _buttonRowBottom = DetailsScreenHelpers.CreateButtonRow();
                 _buttonGroup.Add(_buttonRowTop);
                 _buttonGroup.Add(_buttonRowBottom);
 
-                _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: PlayActionButtonWidth, iconSize: PlayActionButtonIconSize);
+                _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: DetailsScreenHelpers.PlayActionButtonWidth, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
 
                 if (_resumeAvailable)
                 {
-                    _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: PlayActionButtonIconSize);
+                    _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
                 }
 
-                _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: IconActionButtonWidth, iconSize: AudioActionButtonIconSize);
-                _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: IconActionButtonWidth, iconSize: SubtitleActionButtonIconSize);
+                _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.AudioActionButtonIconSize);
+                _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.SubtitleActionButtonIconSize);
                 _versionButton = CreateActionButton("Default", isPrimary: false);
                 RebuildActionButtons(includeVersionButton: false);
                 _infoColumn.Add(_buttonGroup);
@@ -248,7 +203,6 @@ namespace JellyfinTizen.Screens
             root.Add(dimOverlay);
             root.Add(content);
             Add(root);
-            _selectionPanel = new DetailsSelectionPanel(this);
             NormalizeSelectionStateForCurrentMediaSource();
         }
         public override void OnShow()
@@ -272,6 +226,48 @@ namespace JellyfinTizen.Screens
         {
             UiAnimator.StopAndDisposeAll(_focusAnimations);
             HideSelectionPanel();
+        }
+
+        public override void HandleKey(AppKey key)
+        {
+            if (HandleSelectionPanelKey(key))
+                return;
+
+            if (_isEpisodeViewFocused)
+            {
+                HandleEpisodeKey(key);
+                return;
+            }
+            switch (key)
+            {
+                case AppKey.Left:
+                    MoveFocus(-1);
+                    break;
+                case AppKey.Right:
+                    MoveFocus(1);
+                    break;
+                case AppKey.Up:
+                    if (!_mediaItem.IsSeries)
+                        ScrollOverview(-OverviewScrollStepPx);
+                    break;
+                case AppKey.Enter:
+                    ActivateFocusedButton();
+                    break;
+                case AppKey.Back:
+                    NavigationService.NavigateBack();
+                    break;
+                case AppKey.Down:
+                    if (_mediaItem.IsSeries && _episodes != null)
+                    {
+                        _isEpisodeViewFocused = true;
+                        FocusEpisode(0);
+                    }
+                    else if (!_mediaItem.IsSeries)
+                    {
+                        ScrollOverview(OverviewScrollStepPx);
+                    }
+                    break;
+            }
         }
 
         private View CreateDetailsTitleView(string fallbackText)
@@ -365,7 +361,7 @@ namespace JellyfinTizen.Screens
                 HeightResizePolicy = ResizePolicyType.FillToParent
             };
             episodesScrollView.Add(_episodesView);
-            
+
             int currentSeason = -1;
             foreach (var episode in _episodes)
             {
@@ -472,48 +468,6 @@ namespace JellyfinTizen.Screens
             });
         }
 
-        public void HandleKey(AppKey key)
-        {
-            if (HandleSelectionPanelKey(key))
-                return;
-
-            if (_isEpisodeViewFocused)
-            {
-                HandleEpisodeKey(key);
-                return;
-            }
-            switch (key)
-            {
-                case AppKey.Left:
-                    MoveFocus(-1);
-                    break;
-                case AppKey.Right:
-                    MoveFocus(1);
-                    break;
-                case AppKey.Up:
-                    if (!_mediaItem.IsSeries)
-                        ScrollOverview(-OverviewScrollStepPx);
-                    break;
-                case AppKey.Enter:
-                    ActivateFocusedButton();
-                    break;
-                case AppKey.Back:
-                    NavigationService.NavigateBack();
-                    break;
-                case AppKey.Down:
-                    if (_mediaItem.IsSeries && _episodes != null)
-                    {
-                        _isEpisodeViewFocused = true;
-                        FocusEpisode(0);
-                    }
-                    else if (!_mediaItem.IsSeries)
-                    {
-                        ScrollOverview(OverviewScrollStepPx);
-                    }
-                    break;
-            }
-        }
-
         private void RefreshOverviewScrollBounds()
         {
             if (_overviewViewport == null || _overviewLabel == null)
@@ -615,781 +569,23 @@ namespace JellyfinTizen.Screens
                 FocusManager.Instance.SetCurrentFocusView(_episodeViews[_episodeIndex]);
             }
         }
-        private View CreateActionButton(string text, bool isPrimary, string iconFile = null, int? width = SecondaryActionButtonWidth, int iconSize = 30)
+
+        protected override JellyfinMovie GetMediaItem() => _mediaItem;
+        protected override int ThumbnailWidthForLayout => PosterWidth;
+        protected override bool UseFallbackForResolution => true;
+        protected override void PlayMedia(JellyfinMovie media, int startPositionMs)
         {
-            var button = new View
-            {
-                HeightSpecification = ActionButtonHeight,
-                BackgroundColor = Color.Black,
-                Focusable = true,
-                CornerRadius = ActionButtonHeight / 2.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 2.0f,
-                BorderlineColor = Color.White,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            bool autoWidth = !width.HasValue;
-            if (autoWidth)
-            {
-                button.WidthResizePolicy = ResizePolicyType.FitToChildren;
-                button.Padding = new Extents(34, 34, 8, 8);
-                button.Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-            }
-            else
-            {
-                button.WidthSpecification = width.Value;
-            }
-
-            if (!string.IsNullOrWhiteSpace(iconFile))
-            {
-                var icon = new ImageView
-                {
-                    WidthSpecification = iconSize,
-                    HeightSpecification = iconSize,
-                    ResourceUrl = ResolveActionIconPath(iconFile, focused: false),
-                    Name = iconFile,
-                    PreMultipliedAlpha = false,
-                    FittingMode = FittingModeType.ShrinkToFit,
-                    SamplingMode = SamplingModeType.BoxThenLanczos,
-                    ParentOrigin = Tizen.NUI.ParentOrigin.Center,
-                    PivotPoint = Tizen.NUI.PivotPoint.Center,
-                    PositionUsesPivotPoint = true
-                };
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    var content = new View
-                    {
-                        WidthResizePolicy = ResizePolicyType.FitToChildren,
-                        HeightResizePolicy = ResizePolicyType.FitToChildren,
-                        Layout = new LinearLayout
-                        {
-                            LinearOrientation = LinearLayout.Orientation.Horizontal,
-                            CellPadding = new Size2D(ActionButtonIconLabelGap, 0)
-                        }
-                    };
-                    if (!autoWidth)
-                    {
-                        content.ParentOrigin = Tizen.NUI.ParentOrigin.Center;
-                        content.PivotPoint = Tizen.NUI.PivotPoint.Center;
-                        content.PositionUsesPivotPoint = true;
-                    }
-
-                    var label = new TextLabel(text)
-                    {
-                        HeightSpecification = iconSize,
-                        WidthResizePolicy = ResizePolicyType.FitToChildren,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        PointSize = 26,
-                        TextColor = Color.White,
-                        Ellipsis = true
-                    };
-
-                    var rowIcon = new ImageView
-                    {
-                        WidthSpecification = iconSize,
-                        HeightSpecification = iconSize,
-                        ResourceUrl = ResolveActionIconPath(iconFile, focused: false),
-                        Name = iconFile,
-                        PreMultipliedAlpha = false,
-                        FittingMode = FittingModeType.ShrinkToFit,
-                        SamplingMode = SamplingModeType.BoxThenLanczos
-                    };
-
-                    content.Add(rowIcon);
-                    content.Add(label);
-                    button.Add(content);
-                }
-                else
-                {
-                    button.Add(icon);
-                }
-            }
-            else
-            {
-                var label = new TextLabel(text)
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FillToParent,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center,
-                    PointSize = 26,
-                    TextColor = Color.White,
-                    Ellipsis = true,
-                    Padding = new Extents(24, 24, 0, 0)
-                };
-                button.Add(label);
-            }
-
-            ApplyActionButtonVisual(button, focused: false);
-            return button;
-        }
-
-        private void ApplyActionButtonVisual(View button, bool focused)
-        {
-            if (button == null)
-                return;
-
-            UiFactory.SetButtonFocusState(button, focused: focused);
-            ApplyActionButtonIconState(button, focused);
-        }
-
-        private void ApplyActionButtonIconState(View view, bool focused)
-        {
-            if (view == null)
-                return;
-
-            if (view is ImageView icon && !string.IsNullOrWhiteSpace(icon.Name))
-                icon.ResourceUrl = ResolveActionIconPath(icon.Name, focused);
-
-            uint childCount = view.ChildCount;
-            for (uint i = 0; i < childCount; i++)
-            {
-                if (view.GetChildAt(i) is View child)
-                    ApplyActionButtonIconState(child, focused);
-            }
-        }
-
-        private string ResolveActionIconPath(string iconFile, bool focused)
-        {
-            if (string.IsNullOrWhiteSpace(iconFile))
-                return string.Empty;
-
-            string sourcePath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
-            if (!focused ||
-                !iconFile.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ||
-                !File.Exists(sourcePath))
-            {
-                return sourcePath;
-            }
-
-            string versionToken;
-            try
-            {
-                versionToken = File.GetLastWriteTimeUtc(sourcePath)
-                    .Ticks
-                    .ToString(CultureInfo.InvariantCulture);
-            }
-            catch
-            {
-                versionToken = "0";
-            }
-
-            string cacheKey = $"{sourcePath}|{versionToken}";
-            if (_darkButtonIconPathCache.TryGetValue(cacheKey, out var cachedPath) && File.Exists(cachedPath))
-                return cachedPath;
-
-            try
-            {
-                string svg = File.ReadAllText(sourcePath);
-                string darkSvg = svg
-                    .Replace("#FFFFFF", "#000000", StringComparison.OrdinalIgnoreCase)
-                    .Replace("fill=\"white\"", "fill=\"#000000\"", StringComparison.OrdinalIgnoreCase)
-                    .Replace("stroke=\"#FFFFFF\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase)
-                    .Replace("stroke=\"white\"", "stroke=\"#000000\"", StringComparison.OrdinalIgnoreCase);
-
-                string cacheDir = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.Data, "icon-cache");
-                Directory.CreateDirectory(cacheDir);
-
-                string baseName = System.IO.Path.GetFileNameWithoutExtension(iconFile);
-                string darkPath = System.IO.Path.Combine(cacheDir, $"{baseName}_dark_{versionToken}.svg");
-                if (!File.Exists(darkPath))
-                    File.WriteAllText(darkPath, darkSvg);
-
-                _darkButtonIconPathCache[cacheKey] = darkPath;
-                return darkPath;
-            }
-            catch
-            {
-                return sourcePath;
-            }
-        }
-
-        private static View CreateButtonRow()
-        {
-            return new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 100,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(42, 0)
-                }
-            };
-        }
-
-        private void RebuildActionButtons(bool includeVersionButton)
-        {
-            if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
-                return;
-
-            ClearRowChildren(_buttonRowTop);
-            ClearRowChildren(_buttonRowBottom);
-            _buttons.Clear();
-            int topRowAvailableWidth = ResolveTopActionRowAvailableWidth();
-            int topRowUsedWidth = 0;
-            bool wrappedToSecondRow = false;
-
-            AddActionButton(_playButton);
-            if (_resumeButton != null)
-                AddActionButton(_resumeButton);
-            AddActionButton(_audioButton);
-            AddActionButton(_subtitleButton);
-            if (includeVersionButton)
-                AddActionButton(_versionButton);
-
-            _buttonIndex = Math.Clamp(_buttonIndex, 0, Math.Max(0, _buttons.Count - 1));
-
-            void AddActionButton(View button)
-            {
-                if (button == null)
-                    return;
-
-                _buttons.Add(button);
-                if (wrappedToSecondRow)
-                {
-                    _buttonRowBottom.Add(button);
-                    return;
-                }
-
-                int buttonWidth = EstimateActionButtonWidth(button);
-                int gapBefore = _buttonRowTop.ChildCount > 0 ? ActionButtonRowGap : 0;
-                bool fitsTopRow = _buttonRowTop.ChildCount == 0 || (topRowUsedWidth + gapBefore + buttonWidth) <= topRowAvailableWidth;
-                if (fitsTopRow)
-                {
-                    _buttonRowTop.Add(button);
-                    topRowUsedWidth += gapBefore + buttonWidth;
-                    return;
-                }
-
-                wrappedToSecondRow = true;
-                _buttonRowBottom.Add(button);
-            }
-        }
-
-        private int ResolveTopActionRowAvailableWidth()
-        {
-            int groupWidth = (int)Math.Round(_buttonGroup?.SizeWidth ?? 0);
-            int infoWidth = (int)Math.Round(_infoColumn?.SizeWidth ?? 0);
-            int fallbackWidth = Math.Max(320, Window.Default.Size.Width - (DetailsHorizontalPadding * 2) - PosterWidth - DetailsColumnGap);
-            return Math.Max(fallbackWidth, Math.Max(infoWidth, groupWidth));
-        }
-
-        private static int EstimateActionButtonWidth(View button)
-        {
-            if (button == null)
-                return 0;
-
-            int actualWidth = (int)Math.Round(button.SizeWidth);
-            if (actualWidth > 0)
-                return actualWidth;
-
-            int specifiedWidth = (int)Math.Round((double)(float)button.WidthSpecification);
-            if (specifiedWidth > 0)
-                return specifiedWidth;
-
-            string buttonText = FindActionButtonText(button);
-            bool hasIcon = ContainsActionButtonIcon(button);
-            int iconWidth = hasIcon ? 46 : 0;
-            int textWidth = EstimateActionButtonTextWidth(buttonText);
-            int contentGap = hasIcon && !string.IsNullOrWhiteSpace(buttonText) ? 14 : 0;
-            int paddingWidth = 68;
-            int estimatedWidth = paddingWidth + iconWidth + contentGap + textWidth;
-            return Math.Clamp(estimatedWidth, 180, 620);
-        }
-
-        private static int EstimateActionButtonTextWidth(string text)
-        {
-            int length = string.IsNullOrWhiteSpace(text) ? 0 : text.Trim().Length;
-            if (length <= 0)
-                return 0;
-
-            return Math.Clamp(40 + (length * 15), 80, 360);
-        }
-
-        private static string FindActionButtonText(View view)
-        {
-            if (view == null)
-                return null;
-
-            if (view is TextLabel label && !string.IsNullOrWhiteSpace(label.Text))
-                return label.Text;
-
-            uint childCount = view.ChildCount;
-            for (uint i = 0; i < childCount; i++)
-            {
-                if (view.GetChildAt(i) is View child)
-                {
-                    string childText = FindActionButtonText(child);
-                    if (!string.IsNullOrWhiteSpace(childText))
-                        return childText;
-                }
-            }
-
-            return null;
-        }
-
-        private static bool ContainsActionButtonIcon(View view)
-        {
-            if (view == null)
-                return false;
-
-            if (view is ImageView)
-                return true;
-
-            uint childCount = view.ChildCount;
-            for (uint i = 0; i < childCount; i++)
-            {
-                if (view.GetChildAt(i) is View child && ContainsActionButtonIcon(child))
-                    return true;
-            }
-
-            return false;
-        }
-
-        private static void ClearRowChildren(View row)
-        {
-            while (row != null && row.ChildCount > 0)
-            {
-                var child = row.GetChildAt(0);
-                row.Remove(child);
-            }
-        }
-
-        private static bool HasChild(View parent, View child)
-        {
-            if (parent == null || child == null)
-                return false;
-
-            foreach (var existing in parent.Children)
-            {
-                if (ReferenceEquals(existing, child))
-                    return true;
-            }
-
-            return false;
-        }
-        private void MoveFocus(int delta)
-        {
-            if (_buttons.Count == 0)
-                return;
-            var newIndex = Math.Clamp(_buttonIndex + delta, 0, _buttons.Count - 1);
-            FocusButton(newIndex);
-        }
-        private void FocusButton(int index)
-        {
-            _buttonIndex = Math.Clamp(index, 0, _buttons.Count - 1);
-            for (int i = 0; i < _buttons.Count; i++)
-            {
-                var focused = i == _buttonIndex;
-                var button = _buttons[i];
-                AnimateScale(button, focused ? new Vector3(ButtonFocusScale, ButtonFocusScale, 1f) : Vector3.One);
-                ApplyActionButtonVisual(button, focused);
-            }
-
-            if (_buttonIndex >= 0)
-            {
-                FocusManager.Instance.SetCurrentFocusView(_buttons[_buttonIndex]);
-            }
-        }
-
-        private void AnimateScale(View view, Vector3 targetScale)
-        {
-            if (view == null)
-                return;
-
-            if (_focusAnimations.TryGetValue(view, out var existing))
-            {
-                UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(view);
-            }
-
-            var animation = UiAnimator.Start(
-                UiAnimator.FocusDurationMs,
-                anim => anim.AnimateTo(view, "Scale", targetScale),
-                () => _focusAnimations.Remove(view)
+            NavigationService.Navigate(
+                new VideoPlayerScreen(
+                    media,
+                    startPositionMs,
+                    _selectedSubtitleIndex,
+                    AppState.BurnInSubtitles,
+                    GetSelectedMediaSourceId(),
+                    GetEffectiveSelectedAudioIndex(),
+                    GetSelectedSubtitleCodec()
+                )
             );
-
-            _focusAnimations[view] = animation;
-        }
-
-        private void SetScaleInstant(View view, Vector3 targetScale)
-        {
-            if (view == null)
-                return;
-
-            if (_focusAnimations.TryGetValue(view, out var existing))
-            {
-                UiAnimator.StopAndDispose(ref existing);
-                _focusAnimations.Remove(view);
-            }
-
-            view.Scale = targetScale;
-        }
-        private void ActivateFocusedButton()
-        {
-            if (_buttonIndex < 0 || _buttonIndex >= _buttons.Count)
-                return;
-
-            var focusedButton = _buttons[_buttonIndex];
-            if (focusedButton == _playButton)
-            {
-                PlayMedia(_mediaItem, 0);
-                return;
-            }
-            if (_resumeButton != null && focusedButton == _resumeButton)
-            {
-                PlayMedia(_mediaItem, TicksToMs(_mediaItem.PlaybackPositionTicks));
-                return;
-            }
-            if (focusedButton == _audioButton)
-            {
-                ShowAudioPanel();
-                return;
-            }
-            if (focusedButton == _subtitleButton)
-            {
-                ShowSubtitlePanel();
-                return;
-            }
-            if (focusedButton == _versionButton)
-            {
-                CycleMediaSource();
-                return;
-            }
-        }
-
-        private bool HandleSelectionPanelKey(AppKey key)
-        {
-            if (_selectionPanel == null || !_selectionPanel.IsVisible)
-                return false;
-
-            switch (key)
-            {
-                case AppKey.Up:
-                    _selectionPanel.MoveSelection(-1);
-                    break;
-                case AppKey.Down:
-                    _selectionPanel.MoveSelection(1);
-                    break;
-                case AppKey.Enter:
-                    ApplyPanelSelection();
-                    break;
-                case AppKey.Back:
-                    HideSelectionPanel();
-                    break;
-            }
-
-            return true;
-        }
-
-        private void ShowSubtitlePanel()
-        {
-            if (_selectionPanel == null)
-                return;
-
-            var subtitleStreams = GetAvailableSubtitleStreams();
-            var options = new List<DetailsSelectionOption>
-            {
-                new DetailsSelectionOption("OFF_INDEX", "OFF")
-            };
-
-            int selectedIndex = 0;
-            foreach (var stream in subtitleStreams)
-            {
-                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), FormatSubtitleStreamOption(stream)));
-                if (_selectedSubtitleIndex.HasValue && stream.Index == _selectedSubtitleIndex.Value)
-                    selectedIndex = options.Count - 1;
-            }
-
-            _selectionPanelMode = DetailsPanelMode.Subtitle;
-            _selectionPanel.Show("Subtitles", options, selectedIndex, UiTheme.PlayerOverlayItem);
-        }
-
-        private void ShowAudioPanel()
-        {
-            if (_selectionPanel == null)
-                return;
-
-            var audioStreams = GetAvailableAudioStreams();
-            if (audioStreams.Count == 0)
-                return;
-
-            int? selectedAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
-            int selectedIndex = 0;
-            var options = new List<DetailsSelectionOption>(audioStreams.Count);
-            foreach (var stream in audioStreams)
-            {
-                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), FormatAudioStreamOption(stream)));
-                if (selectedAudioIndex.HasValue && stream.Index == selectedAudioIndex.Value)
-                    selectedIndex = options.Count - 1;
-            }
-
-            _selectionPanelMode = DetailsPanelMode.Audio;
-            _selectionPanel.Show("Audio Tracks", options, selectedIndex, UiTheme.PlayerAudioItem);
-        }
-
-        private void ApplyPanelSelection()
-        {
-            if (_selectionPanel == null || !_selectionPanel.TryGetSelectedOption(out var selectedOption))
-            {
-                HideSelectionPanel();
-                return;
-            }
-
-            switch (_selectionPanelMode)
-            {
-                case DetailsPanelMode.Subtitle:
-                    _selectedSubtitleIndex = string.Equals(selectedOption.Id, "OFF_INDEX", StringComparison.Ordinal)
-                        ? null
-                        : int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var subtitleIndex)
-                            ? subtitleIndex
-                            : null;
-                    UpdateSubtitleButtonText();
-                    break;
-                case DetailsPanelMode.Audio:
-                    if (int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var audioIndex))
-                    {
-                        _selectedAudioIndex = audioIndex;
-                        UpdateAudioButtonText();
-                    }
-                    break;
-            }
-
-            HideSelectionPanel();
-        }
-
-        private void HideSelectionPanel()
-        {
-            _selectionPanelMode = DetailsPanelMode.None;
-            _selectionPanel?.Hide();
-        }
-
-        private void CycleMediaSource()
-        {
-            if (_mediaSources == null || _mediaSources.Count <= 1)
-            {
-                UpdateVersionButtonText();
-                return;
-            }
-
-            _selectedMediaSourceIndex = (_selectedMediaSourceIndex + 1) % _mediaSources.Count;
-            NormalizeSelectionStateForCurrentMediaSource(resetSubtitleSelection: true, resetAudioSelection: true);
-            HideSelectionPanel();
-            UpdateVersionButtonText();
-            UpdateMetadataView();
-        }
-
-        private void UpdateSubtitleButtonText()
-        {
-            if (_subtitleButton == null) return;
-            var label = _subtitleButton.Children[0] as TextLabel;
-            if (label == null) return;
-
-            if (!_selectedSubtitleIndex.HasValue)
-            {
-                label.Text = "Subtitles: Off";
-            }
-            else
-            {
-                var stream = GetAvailableSubtitleStreams().Find(s => s.Index == _selectedSubtitleIndex.Value);
-                label.Text = stream == null
-                    ? "Subtitles: Off"
-                    : $"Subtitles: {NormalizeLanguageLabel(stream.Language)}";
-            }
-        }
-
-        private void UpdateAudioButtonText()
-        {
-            if (_audioButton == null)
-                return;
-
-            if (!(_audioButton.Children[0] is TextLabel label))
-                return;
-
-            var audioStreams = GetAvailableAudioStreams();
-            int? effectiveAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
-            if (!effectiveAudioIndex.HasValue)
-            {
-                label.Text = "Audio: Default";
-                return;
-            }
-
-            var stream = audioStreams.Find(s => s.Index == effectiveAudioIndex.Value);
-            label.Text = stream == null
-                ? "Audio: Default"
-                : $"Audio: {FormatAudioButtonLabel(stream)}";
-        }
-
-        private void UpdateVersionButtonText()
-        {
-            if (_versionButton == null || _versionButton.ChildCount == 0)
-                return;
-
-            if (!(_versionButton.GetChildAt(0) is TextLabel label))
-                return;
-
-            var total = _mediaSources?.Count ?? 0;
-            if (total <= 0)
-            {
-                label.Text = "Source";
-                return;
-            }
-
-            _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, total - 1);
-            var sourceName = GetMediaSourceDisplayName(_mediaSources[_selectedMediaSourceIndex], _selectedMediaSourceIndex + 1);
-            label.Text = sourceName;
-        }
-
-        private static string GetMediaSourceDisplayName(MediaSourceInfo source, int fallbackIndex)
-        {
-            if (source == null)
-                return $"Source {fallbackIndex}";
-            if (!string.IsNullOrWhiteSpace(source.Name))
-                return source.Name.Trim();
-            return $"Source {fallbackIndex}";
-        }
-
-        private string GetSelectedMediaSourceId()
-        {
-            if (_mediaSources == null || _mediaSources.Count == 0)
-                return null;
-            if (_selectedMediaSourceIndex < 0 || _selectedMediaSourceIndex >= _mediaSources.Count)
-                return null;
-            return _mediaSources[_selectedMediaSourceIndex]?.Id;
-        }
-
-        private MediaSourceInfo GetSelectedMediaSource()
-        {
-            if (_mediaSources == null || _mediaSources.Count == 0)
-                return null;
-
-            if (_selectedMediaSourceIndex >= 0 && _selectedMediaSourceIndex < _mediaSources.Count)
-                return _mediaSources[_selectedMediaSourceIndex];
-
-            return _mediaSources[0];
-        }
-
-        private List<MediaStream> GetAvailableSubtitleStreams()
-        {
-            var selectedSourceSubtitleStreams = GetSelectedMediaSource()?.MediaStreams?
-                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(s => s.Index)
-                .ToList();
-
-            if (selectedSourceSubtitleStreams != null && selectedSourceSubtitleStreams.Count > 0)
-                return selectedSourceSubtitleStreams;
-
-            return _subtitleStreams?
-                .OrderBy(s => s.Index)
-                .ToList() ?? new List<MediaStream>();
-        }
-
-        private string GetSelectedSubtitleCodec()
-        {
-            if (!_selectedSubtitleIndex.HasValue)
-                return null;
-
-            return GetAvailableSubtitleStreams()
-                .FirstOrDefault(s => s.Index == _selectedSubtitleIndex.Value)
-                ?.Codec;
-        }
-
-        private List<MediaStream> GetAvailableAudioStreams()
-        {
-            return GetSelectedMediaSource()?.MediaStreams?
-                .Where(s => string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase))
-                .OrderBy(s => s.Index)
-                .ToList() ?? new List<MediaStream>();
-        }
-
-        private void NormalizeSelectionStateForCurrentMediaSource(bool resetSubtitleSelection = false, bool resetAudioSelection = false)
-        {
-            var subtitleStreams = GetAvailableSubtitleStreams();
-            if (resetSubtitleSelection || (_selectedSubtitleIndex.HasValue && !subtitleStreams.Any(s => s.Index == _selectedSubtitleIndex.Value)))
-                _selectedSubtitleIndex = null;
-
-            var audioStreams = GetAvailableAudioStreams();
-            int? effectiveAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
-            _selectedAudioIndex = resetAudioSelection
-                ? ResolveDefaultAudioStreamIndex(audioStreams)
-                : effectiveAudioIndex;
-
-            UpdateSubtitleButtonText();
-            UpdateAudioButtonText();
-        }
-
-        private int? GetEffectiveSelectedAudioIndex(List<MediaStream> audioStreams = null)
-        {
-            audioStreams ??= GetAvailableAudioStreams();
-            if (audioStreams == null || audioStreams.Count == 0)
-                return null;
-
-            if (_selectedAudioIndex.HasValue && audioStreams.Any(s => s.Index == _selectedAudioIndex.Value))
-                return _selectedAudioIndex.Value;
-
-            return ResolveDefaultAudioStreamIndex(audioStreams);
-        }
-
-        private static int? ResolveDefaultAudioStreamIndex(List<MediaStream> audioStreams)
-        {
-            if (audioStreams == null || audioStreams.Count == 0)
-                return null;
-
-            var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
-            return (defaultStream ?? audioStreams[0]).Index;
-        }
-
-        private static string FormatSubtitleStreamOption(MediaStream stream)
-        {
-            if (stream == null)
-                return "Unknown";
-
-            string lang = string.IsNullOrWhiteSpace(stream.Language) ? "UNKNOWN" : stream.Language.ToUpperInvariant();
-            string title = string.IsNullOrWhiteSpace(stream.DisplayTitle) ? $"Sub {stream.Index}" : stream.DisplayTitle;
-            string label = $"{lang} | {title}";
-            if (stream.IsExternal)
-                label += " (Ext)";
-            return label;
-        }
-
-        private static string FormatAudioStreamOption(MediaStream stream)
-        {
-            if (stream == null)
-                return "UNKNOWN | AUDIO";
-
-            string lang = string.IsNullOrWhiteSpace(stream.Language) ? "UNKNOWN" : stream.Language.ToUpperInvariant();
-            string codec = string.IsNullOrWhiteSpace(stream.Codec) ? "AUDIO" : stream.Codec.ToUpperInvariant();
-            return $"{lang} | {codec}";
-        }
-
-        private static string FormatAudioButtonLabel(MediaStream stream)
-        {
-            if (stream == null)
-                return "Default";
-
-            string codec = string.IsNullOrWhiteSpace(stream.Codec) ? "Audio" : stream.Codec.ToUpperInvariant();
-            string lang = NormalizeLanguageLabel(stream.Language);
-            return string.Equals(lang, "Unknown", StringComparison.Ordinal)
-                ? codec
-                : $"{lang} | {codec}";
-        }
-
-        private static string NormalizeLanguageLabel(string language)
-        {
-            if (string.IsNullOrWhiteSpace(language))
-                return "Unknown";
-
-            string trimmed = language.Trim();
-            if (trimmed.Length == 1)
-                return trimmed.ToUpperInvariant();
-
-            return char.ToUpper(trimmed[0], CultureInfo.InvariantCulture) + trimmed.Substring(1);
         }
 
         private View CreateMetadataView()
@@ -1425,7 +621,7 @@ namespace JellyfinTizen.Screens
                 VerticalAlignment = VerticalAlignment.Center
             };
 
-            var ratingStar = new TextLabel("\u2605")
+            var ratingStar = new TextLabel("★")
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
@@ -1482,7 +678,7 @@ namespace JellyfinTizen.Screens
             if (_metadataContainer == null || _metadataSummaryLabel == null || _metadataTagRow == null)
                 return;
 
-            var summaryText = BuildSummaryText(_mediaItem);
+            var summaryText = DetailsScreenHelpers.BuildSummaryText(_mediaItem);
             _metadataSummaryLabel.Text = string.IsNullOrWhiteSpace(summaryText) ? " " : summaryText;
 
             if (_mediaItem.CommunityRating.HasValue && _mediaItem.CommunityRating.Value > 0)
@@ -1495,7 +691,7 @@ namespace JellyfinTizen.Screens
                 _metadataRatingGroup.Hide();
             }
 
-            var tags = BuildTechnicalTags(GetSelectedMediaSource());
+            var tags = DetailsScreenHelpers.BuildTechnicalTags(GetSelectedMediaSource(), useFallbackForResolution: true);
             RebuildMetadataTags(tags);
 
             _metadataSummaryRow.Show();
@@ -1530,13 +726,13 @@ namespace JellyfinTizen.Screens
         private static View CreateMetadataChip(string text)
         {
             bool isDolbyVisionChip =
-                string.Equals(text, DolbyVisionChipToken, StringComparison.Ordinal) ||
+                string.Equals(text, DetailsScreenHelpers.DolbyVisionChipToken, StringComparison.Ordinal) ||
                 string.Equals(text?.Trim(), "Dolby Vision", StringComparison.OrdinalIgnoreCase);
             bool isDolbyAudioChip = !isDolbyVisionChip &&
                 !string.IsNullOrWhiteSpace(text) &&
-                text.StartsWith(DolbyAudioChipPrefix, StringComparison.Ordinal);
+                text.StartsWith(DetailsScreenHelpers.DolbyAudioChipPrefix, StringComparison.Ordinal);
             string chipLabelText = isDolbyAudioChip
-                ? text.Substring(DolbyAudioChipPrefix.Length).Trim()
+                ? text.Substring(DetailsScreenHelpers.DolbyAudioChipPrefix.Length).Trim()
                 : text;
 
             var chip = new View
@@ -1563,7 +759,7 @@ namespace JellyfinTizen.Screens
             if (isDolbyVisionChip || isDolbyAudioChip)
             {
                 string iconFile = isDolbyVisionChip ? "dolby_vision.svg" : "dolby_audio.svg";
-                string iconPath = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
+                string iconPath = IOPath.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
                 if (File.Exists(iconPath))
                 {
                     int iconWidth = isDolbyVisionChip ? 124 : 24;
@@ -1603,306 +799,6 @@ namespace JellyfinTizen.Screens
 
             chip.Add(label);
             return chip;
-        }
-
-        private static string BuildSummaryText(JellyfinMovie media)
-        {
-            if (media == null)
-                return string.Empty;
-
-            var parts = new List<string>();
-
-            if (media.ProductionYear > 0)
-                parts.Add(media.ProductionYear.ToString(CultureInfo.InvariantCulture));
-
-            var runtime = FormatRuntimeForMetadata(media.RunTimeTicks);
-            if (!string.IsNullOrWhiteSpace(runtime))
-                parts.Add(runtime);
-
-            if (!string.IsNullOrWhiteSpace(media.OfficialRating))
-                parts.Add(media.OfficialRating.Trim());
-
-            return string.Join("  ", parts);
-        }
-
-        private static string FormatRuntimeForMetadata(long ticks)
-        {
-            if (ticks <= 0)
-                return null;
-
-            var totalMinutes = (int)Math.Round(TimeSpan.FromTicks(ticks).TotalMinutes, MidpointRounding.AwayFromZero);
-            if (totalMinutes <= 0)
-                return null;
-
-            var hours = totalMinutes / 60;
-            var minutes = totalMinutes % 60;
-
-            if (hours <= 0)
-                return $"{totalMinutes}m";
-            if (minutes == 0)
-                return $"{hours}h";
-
-            return $"{hours}h {minutes}m";
-        }
-
-        private static List<string> BuildTechnicalTags(MediaSourceInfo source)
-        {
-            var tags = new List<string>();
-            if (source?.MediaStreams == null || source.MediaStreams.Count == 0)
-                return tags;
-
-            MediaStream videoStream = null;
-            MediaStream audioStream = null;
-
-            foreach (var stream in source.MediaStreams)
-            {
-                if (stream == null)
-                    continue;
-
-                if (videoStream == null &&
-                    string.Equals(stream.Type, "Video", StringComparison.OrdinalIgnoreCase))
-                {
-                    videoStream = stream;
-                }
-                else if (audioStream == null &&
-                         string.Equals(stream.Type, "Audio", StringComparison.OrdinalIgnoreCase))
-                {
-                    audioStream = stream;
-                }
-            }
-
-            AddMetadataTag(tags, GetResolutionTag(videoStream));
-            AddMetadataTag(tags, GetVideoCodecTag(videoStream?.Codec));
-            AddMetadataTag(tags, GetDolbyVisionChipTag(videoStream) ?? GetHdrTag(videoStream));
-            AddMetadataTag(tags, GetAudioCodecTag(audioStream));
-            AddMetadataTag(tags, GetDolbyAudioChipTag(audioStream) ?? GetAudioChannelTag(audioStream));
-
-            while (tags.Count > 5)
-                tags.RemoveAt(tags.Count - 1);
-
-            return tags;
-        }
-
-        private static string GetResolutionTag(MediaStream stream)
-        {
-            if (stream == null)
-                return null;
-
-            var width = stream.Width.GetValueOrDefault();
-            var height = stream.Height.GetValueOrDefault();
-
-            if (width >= 3800 || height >= 2000)
-                return "4K";
-            if (width >= 1900 || height >= 1000)
-                return "1080p";
-            if (width >= 1200 || height >= 700)
-                return "HD";
-
-            var description = GetStreamSearchText(stream);
-            if (description.Contains("2160"))
-                return "4K";
-            if (description.Contains("1080"))
-                return "1080p";
-            if (description.Contains("720"))
-                return "HD";
-
-            return null;
-        }
-
-        private static string GetVideoCodecTag(string codec)
-        {
-            if (string.IsNullOrWhiteSpace(codec))
-                return null;
-
-            var normalized = codec.Trim().ToLowerInvariant();
-
-            if (normalized.Contains("hevc") || normalized.Contains("h265") || normalized.Contains("x265"))
-                return "HEVC";
-            if (normalized.Contains("h264") || normalized.Contains("avc") || normalized.Contains("x264"))
-                return "H.264";
-            if (normalized.Contains("av1"))
-                return "AV1";
-            if (normalized.Contains("vp9"))
-                return "VP9";
-
-            return codec.Trim().ToUpperInvariant();
-        }
-
-        private static string GetHdrTag(MediaStream stream)
-        {
-            var text = GetStreamSearchText(stream);
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
-
-            if (text.Contains("hdr10+"))
-                return "HDR10+";
-            if (text.Contains("hdr10"))
-                return "HDR10";
-            if (text.Contains("hlg"))
-                return "HLG";
-            if (text.Contains("hdr"))
-                return "HDR";
-
-            return null;
-        }
-
-        private static string GetAudioCodecTag(MediaStream stream)
-        {
-            if (stream == null)
-                return null;
-
-            var text = GetStreamSearchText(stream);
-            var codec = stream.Codec?.ToLowerInvariant() ?? string.Empty;
-
-            if (text.Contains("dolby digital plus") || text.Contains("eac3") || codec.Contains("eac3"))
-                return "Dolby Digital+";
-            if (text.Contains("dolby digital") || codec == "ac3" || codec.Contains("ac3"))
-                return "Dolby Digital";
-            if (text.Contains("truehd") || codec.Contains("truehd"))
-                return "TrueHD";
-            if (text.Contains("dts") || codec.Contains("dts"))
-                return "DTS";
-            if (text.Contains("aac") || codec.Contains("aac"))
-                return "AAC";
-            if (text.Contains("flac") || codec.Contains("flac"))
-                return "FLAC";
-            if (text.Contains("opus") || codec.Contains("opus"))
-                return "Opus";
-            if (text.Contains("mp3") || codec.Contains("mp3"))
-                return "MP3";
-
-            if (!string.IsNullOrWhiteSpace(stream.Codec))
-                return stream.Codec.Trim().ToUpperInvariant();
-
-            return null;
-        }
-
-        private static string GetDolbyVisionChipTag(MediaStream stream)
-        {
-            var text = GetStreamSearchText(stream);
-            if (string.IsNullOrWhiteSpace(text))
-                return null;
-
-            if (text.Contains("dolby vision") || text.Contains("dovi") || text.Contains("dvhe"))
-                return DolbyVisionChipToken;
-
-            return null;
-        }
-
-        private static string GetDolbyAudioChipTag(MediaStream stream)
-        {
-            if (stream == null)
-                return null;
-
-            var text = GetStreamSearchText(stream);
-            var codec = stream.Codec?.ToLowerInvariant() ?? string.Empty;
-            bool isDolbyAudio = text.Contains("dolby") ||
-                                codec.Contains("eac3") ||
-                                codec.Contains("ac3") ||
-                                codec.Contains("truehd");
-            if (!isDolbyAudio)
-                return null;
-
-            if (text.Contains("atmos"))
-                return $"{DolbyAudioChipPrefix}Atmos";
-
-            var channels = GetAudioChannelTag(stream);
-            if (channels == "5.1" || channels == "7.1")
-                return $"{DolbyAudioChipPrefix}{channels}";
-
-            return null;
-        }
-
-        private static string GetAudioChannelTag(MediaStream stream)
-        {
-            if (stream == null)
-                return null;
-
-            if (!string.IsNullOrWhiteSpace(stream.ChannelLayout))
-            {
-                var layout = stream.ChannelLayout.ToLowerInvariant();
-
-                if (layout.Contains("7.1"))
-                    return "7.1";
-                if (layout.Contains("6.1"))
-                    return "6.1";
-                if (layout.Contains("5.1"))
-                    return "5.1";
-                if (layout.Contains("2.0") || layout.Contains("stereo"))
-                    return "2.0";
-                if (layout.Contains("1.0") || layout.Contains("mono"))
-                    return "1.0";
-            }
-
-            if (stream.Channels.HasValue && stream.Channels.Value > 0)
-            {
-                return stream.Channels.Value switch
-                {
-                    8 => "7.1",
-                    7 => "6.1",
-                    6 => "5.1",
-                    2 => "2.0",
-                    1 => "1.0",
-                    _ => $"{stream.Channels.Value}.0"
-                };
-            }
-
-            var text = GetStreamSearchText(stream);
-            if (text.Contains("7.1"))
-                return "7.1";
-            if (text.Contains("6.1"))
-                return "6.1";
-            if (text.Contains("5.1"))
-                return "5.1";
-            if (text.Contains("2.0") || text.Contains("stereo"))
-                return "2.0";
-
-            return null;
-        }
-
-        private static string GetStreamSearchText(MediaStream stream)
-        {
-            if (stream == null)
-                return string.Empty;
-
-            return $"{stream.DisplayTitle} {stream.VideoRange} {stream.ChannelLayout} {stream.Codec}".ToLowerInvariant();
-        }
-
-        private static void AddMetadataTag(List<string> tags, string value)
-        {
-            if (tags == null || string.IsNullOrWhiteSpace(value))
-                return;
-
-            var normalized = value.Trim();
-            foreach (var existing in tags)
-            {
-                if (string.Equals(existing, normalized, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
-
-            tags.Add(normalized);
-        }
-
-        private void PlayMedia(JellyfinMovie media, int startPositionMs)
-        {
-            NavigationService.Navigate(
-                new VideoPlayerScreen(
-                    media,
-                    startPositionMs,
-                    _selectedSubtitleIndex,
-                    AppState.BurnInSubtitles,
-                    GetSelectedMediaSourceId(),
-                    GetEffectiveSelectedAudioIndex(),
-                    GetSelectedSubtitleCodec()
-                )
-            );
-        }
-        private static int TicksToMs(long ticks)
-        {
-            if (ticks <= 0)
-                return 0;
-            var ms = ticks / 10000;
-            return (int)Math.Clamp(ms, 0, int.MaxValue);
         }
     }
 }
