@@ -590,7 +590,7 @@ namespace JellyfinTizen.Screens
             return playbackInfo;
         }
 
-        private async Task<(PlaybackInfoResponse? playbackInfo, string requestedMediaSourceId)> TryFallbackPlaybackInfoAsync(
+        private async Task<(PlaybackInfoResponse playbackInfo, string requestedMediaSourceId)> TryFallbackPlaybackInfoAsync(
             string itemId,
             PlaybackInfoResponse currentPlaybackInfo,
             int? requestedSubtitleStreamIndex,
