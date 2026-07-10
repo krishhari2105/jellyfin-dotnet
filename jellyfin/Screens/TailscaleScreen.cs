@@ -680,7 +680,7 @@ private CancellationTokenSource _refreshCts;
                     break;
                 case AppKey.Enter:
                     if (_loginButton.Focusable && _loginButton.Opacity > 0.5f)
-                        FireAndForget(LoginAsync());
+                        FireAndForget(LoginAsync(), nameof(LoginAsync));
                     break;
             }
         }

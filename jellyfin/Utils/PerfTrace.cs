@@ -1,11 +1,16 @@
 using System;
 using System.Diagnostics;
+using JellyfinTizen.Core;
 
 namespace JellyfinTizen.Utils
 {
     public static class PerfTrace
     {
-        public static bool Enabled { get; set; } = false;
+        /// <summary>
+        /// Returns true if performance tracing is enabled.
+        /// Controlled by DebugSwitches.EnableVerboseDebugLogging to keep a single debug switch.
+        /// </summary>
+        public static bool Enabled => DebugSwitches.EnableVerboseDebugLogging;
 
         public static long Start()
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
@@ -44,9 +45,16 @@ namespace JellyfinTizen.Screens
         private View _profilesRow;
         private int _profilesContentWidth;
         private int _focusedIndex = 0;
+        private bool _needsUserFetch;
+
+        public UserSelectScreen() : this(null)
+        {
+        }
 
         public UserSelectScreen(List<JellyfinUser> users)
         {
+            _needsUserFetch = users == null;
+            
             var root = MonochromeAuthFactory.CreateBackground();
             var panel = MonochromeAuthFactory.CreatePanel();
             panel.Add(MonochromeAuthFactory.CreateTitle("Who's Watching?"));
@@ -71,11 +79,14 @@ namespace JellyfinTizen.Screens
                 }
             };
 
-            foreach (var user in users ?? new List<JellyfinUser>())
+            if (users != null)
             {
-                var tile = CreateUserTile(user);
-                _profiles.Add(tile);
-                _profilesRow.Add(tile.Root);
+                foreach (var user in users)
+                {
+                    var tile = CreateUserTile(user);
+                    _profiles.Add(tile);
+                    _profilesRow.Add(tile.Root);
+                }
             }
 
             if (_profiles.Count == 0)
@@ -104,6 +115,15 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            base.OnShow();
+
+            if (_needsUserFetch && _profiles.Count == 0)
+            {
+                _needsUserFetch = false;
+                FireAndForget(FetchUsersAndPopulateAsync(), nameof(FetchUsersAndPopulateAsync));
+                return;
+            }
+
             if (_profiles.Count > 0)
             {
                 _focusedIndex = Math.Clamp(_focusedIndex, 0, _profiles.Count - 1);
@@ -113,6 +133,79 @@ namespace JellyfinTizen.Screens
                 ApplyFocusState(_profiles[_focusedIndex], focused: true);
                 FocusManager.Instance.SetCurrentFocusView(_profiles[_focusedIndex].Root);
                 EnsureFocusedVisible(centerWhenNoOverflow: true);
+            }
+        }
+
+        private async Task FetchUsersAndPopulateAsync()
+        {
+            try
+            {
+                var users = await AppState.Jellyfin.GetPublicUsersAsync();
+                AppState.CachedPublicUsers = users;
+                RunOnUiThread(() =>
+                {
+                    if (users != null && users.Count > 0)
+                    {
+                        foreach (var user in users)
+                        {
+                            var tile = CreateUserTile(user);
+                            _profiles.Add(tile);
+                            _profilesRow.Add(tile.Root);
+                        }
+
+                        _profilesContentWidth = (_profiles.Count * TileWidth) + ((_profiles.Count - 1) * TileSpacing);
+                        _profilesRow.WidthSpecification = _profilesContentWidth;
+
+                        // Remove "No profiles found" label if present
+                        if (_profilesViewport.Children.Count > 0 && _profilesViewport.Children[0] is TextLabel label)
+                        {
+                            _profilesViewport.Remove(label);
+                        }
+
+                        _profilesViewport.Add(_profilesRow);
+
+                        _focusedIndex = 0;
+                        ApplyFocusState(_profiles[0], focused: true);
+                        FocusManager.Instance.SetCurrentFocusView(_profiles[0].Root);
+                    }
+                    else
+                    {
+                        // No users - show error and allow back navigation
+                        while (_profilesViewport.Children.Count > 0)
+                        {
+                            _profilesViewport.Remove(_profilesViewport.Children[0]);
+                        }
+                        _profilesViewport.Add(new TextLabel("No profiles found")
+                        {
+                            WidthResizePolicy = ResizePolicyType.FillToParent,
+                            HeightResizePolicy = ResizePolicyType.FillToParent,
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            VerticalAlignment = VerticalAlignment.Center,
+                            PointSize = 24.0f,
+                            TextColor = new Color(1f, 1f, 1f, 0.72f)
+                        });
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error("Jellyfin", $"Failed to fetch users for UserSelectScreen: {ex.Message}");
+                RunOnUiThread(() =>
+                {
+                    while (_profilesViewport.Children.Count > 0)
+                    {
+                        _profilesViewport.Remove(_profilesViewport.Children[0]);
+                    }
+                    _profilesViewport.Add(new TextLabel("Failed to load profiles")
+                    {
+                        WidthResizePolicy = ResizePolicyType.FillToParent,
+                        HeightResizePolicy = ResizePolicyType.FillToParent,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        PointSize = 24.0f,
+                        TextColor = new Color(1f, 0.3f, 0.3f, 1f)
+                    });
+                });
             }
         }
 

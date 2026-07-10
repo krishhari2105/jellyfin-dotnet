@@ -12,7 +12,7 @@ using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
-    public class JellyfinService
+    public class JellyfinService : IDisposable
     {
         private const string DefaultDeviceId = "00000000000000000000000000000000";
         private const string ClientName = "Jellyfin for Tizen";
@@ -24,10 +24,20 @@ namespace JellyfinTizen.Core
 
         private readonly HttpClient _http;
         private string _connectedServerUrl;
+        private bool _disposed;
 
         public JellyfinService(HttpClient httpClient)
         {
             _http = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+
+            _http?.Dispose();
+            _disposed = true;
         }
 
         public string ServerUrl { get; private set; }
@@ -79,27 +89,30 @@ namespace JellyfinTizen.Core
         // STEP 2 will use this
         public async Task<string> GetAsync(string path)
         {
-            EnsureConnected();
-            using var response = await _http.GetAsync(ServerUrl + path);
-            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            return await ExecuteWithRetryAsync(async () =>
             {
-                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
-            }
+                EnsureConnected();
+                using var response = await _http.GetAsync(ServerUrl + path);
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                }
 
-            var responseContent = await response.Content.ReadAsStringAsync();
-            if (!response.IsSuccessStatusCode)
-            {
-                TailscaleDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
-                var httpEx = new HttpRequestException(
-                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
-                    null,
-                    response.StatusCode);
-                httpEx.Data["ResponseContent"] = responseContent;
-                httpEx.Data["RequestPath"] = path;
-                throw httpEx;
-            }
+                var responseContent = await response.Content.ReadAsStringAsync();
+                if (!response.IsSuccessStatusCode)
+                {
+                    TailscaleDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
+                    var httpEx = new HttpRequestException(
+                        $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                        null,
+                        response.StatusCode);
+                    httpEx.Data["ResponseContent"] = responseContent;
+                    httpEx.Data["RequestPath"] = path;
+                    throw httpEx;
+                }
 
-            return responseContent;
+                return responseContent;
+            }, path);
         }
 
         public async Task<string> PostAsync(string path, object body)
@@ -109,24 +122,27 @@ namespace JellyfinTizen.Core
 
         public async Task PostAsync(string path)
         {
-            EnsureConnected();
-            using var response = await _http.PostAsync(ServerUrl + path, null);
-            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            await ExecuteWithRetryAsync(async () =>
             {
-                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
-            }
-            
-            if (!response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException(
-                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
-                    null,
-                    response.StatusCode);
-                httpEx.Data["ResponseContent"] = responseContent;
-                httpEx.Data["RequestPath"] = path;
-                throw httpEx;
-            }
+                EnsureConnected();
+                using var response = await _http.PostAsync(ServerUrl + path, null);
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                }
+                
+                if (!response.IsSuccessStatusCode)
+                {
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var httpEx = new HttpRequestException(
+                        $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                        null,
+                        response.StatusCode);
+                    httpEx.Data["ResponseContent"] = responseContent;
+                    httpEx.Data["RequestPath"] = path;
+                    throw httpEx;
+                }
+            }, path);
         }
 
         public async Task<List<JellyfinUser>> GetPublicUsersAsync()
@@ -240,30 +256,33 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body, bool useCamelCase)
         {
-            EnsureConnected();
-            var json = SerializeJson(body, useCamelCase);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-            using var response = await _http.PostAsync(ServerUrl + path, content);
-
-            if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+            return await ExecuteWithRetryAsync(async () =>
             {
-                UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
-            }
+                EnsureConnected();
+                var json = SerializeJson(body, useCamelCase);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            if (!response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException(
-                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
-                    null,
-                    response.StatusCode);
-                httpEx.Data["ResponseContent"] = responseContent;
-                httpEx.Data["RequestPath"] = path;
-                throw httpEx;
-            }
+                using var response = await _http.PostAsync(ServerUrl + path, content);
 
-            return await response.Content.ReadAsStringAsync();
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var httpEx = new HttpRequestException(
+                        $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                        null,
+                        response.StatusCode);
+                    httpEx.Data["ResponseContent"] = responseContent;
+                    httpEx.Data["RequestPath"] = path;
+                    throw httpEx;
+                }
+
+                return await response.Content.ReadAsStringAsync();
+            }, path);
         }
 
         private static bool IsAuthenticationRejection(HttpStatusCode? statusCode)
@@ -275,30 +294,33 @@ namespace JellyfinTizen.Core
 
         private async Task<string> PostAuthenticateByNameAsync(Dictionary<string, string> body)
         {
-            EnsureConnected();
-            var json = SerializeJson(body, useCamelCase: false);
-            using var request = new HttpRequestMessage(HttpMethod.Post, ServerUrl + AuthenticateByNamePath)
+            return await ExecuteWithRetryAsync(async () =>
             {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
+                EnsureConnected();
+                var json = SerializeJson(body, useCamelCase: false);
+                using var request = new HttpRequestMessage(HttpMethod.Post, ServerUrl + AuthenticateByNamePath)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
 
-            request.Headers.TryAddWithoutValidation("Accept", AuthenticateAcceptHeader);
-            request.Headers.TryAddWithoutValidation("Authorization", BuildAuthorizationHeader(string.Empty));
+                request.Headers.TryAddWithoutValidation("Accept", AuthenticateAcceptHeader);
+                request.Headers.TryAddWithoutValidation("Authorization", BuildAuthorizationHeader(string.Empty));
 
-            using var response = await _http.SendAsync(request);
-            if (!response.IsSuccessStatusCode)
-            {
-                var responseContent = await response.Content.ReadAsStringAsync();
-                var httpEx = new HttpRequestException(
-                    $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
-                    null,
-                    response.StatusCode);
-                httpEx.Data["ResponseContent"] = responseContent;
-                httpEx.Data["RequestPath"] = AuthenticateByNamePath;
-                throw httpEx;
-            }
+                using var response = await _http.SendAsync(request);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var httpEx = new HttpRequestException(
+                        $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
+                        null,
+                        response.StatusCode);
+                    httpEx.Data["ResponseContent"] = responseContent;
+                    httpEx.Data["RequestPath"] = AuthenticateByNamePath;
+                    throw httpEx;
+                }
 
-            return await response.Content.ReadAsStringAsync();
+                return await response.Content.ReadAsStringAsync();
+            }, AuthenticateByNamePath);
         }
 
         private void EnsureConnected()
@@ -1288,6 +1310,116 @@ namespace JellyfinTizen.Core
             }
 
             return null;
+        }
+
+        private static int _consecutiveFailures = 0;
+        private static DateTime _circuitBreakerOpenUntil = DateTime.MinValue;
+        private static readonly object CircuitLock = new();
+
+        private static bool IsCircuitOpen()
+        {
+            lock (CircuitLock)
+            {
+                return DateTime.UtcNow < _circuitBreakerOpenUntil;
+            }
+        }
+
+        private static void RecordSuccess()
+        {
+            lock (CircuitLock)
+            {
+                _consecutiveFailures = 0;
+            }
+        }
+
+        private static void RecordFailure()
+        {
+            lock (CircuitLock)
+            {
+                _consecutiveFailures++;
+                if (_consecutiveFailures >= 5)
+                {
+                    _circuitBreakerOpenUntil = DateTime.UtcNow.AddSeconds(10);
+                    TailscaleDebugLog.Add($"Jellyfin server circuit breaker OPEN until {_circuitBreakerOpenUntil}");
+                }
+            }
+        }
+
+        private async Task<T> ExecuteWithRetryAsync<T>(Func<Task<T>> action, string path)
+        {
+            if (IsCircuitOpen())
+            {
+                throw new HttpRequestException("Jellyfin server circuit breaker is open. Request blocked.");
+            }
+
+            int attempt = 0;
+            while (true)
+            {
+                attempt++;
+                try
+                {
+                    var result = await action();
+                    RecordSuccess();
+                    return result;
+                }
+                catch (Exception ex) when (IsTransient(ex) && attempt < 3)
+                {
+                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/3): {ex.Message} for path={path}");
+                    await Task.Delay(attempt * 500);
+                }
+                catch (Exception)
+                {
+                    RecordFailure();
+                    throw;
+                }
+            }
+        }
+
+        private async Task ExecuteWithRetryAsync(Func<Task> action, string path)
+        {
+            if (IsCircuitOpen())
+            {
+                throw new HttpRequestException("Jellyfin server circuit breaker is open. Request blocked.");
+            }
+
+            int attempt = 0;
+            while (true)
+            {
+                attempt++;
+                try
+                {
+                    await action();
+                    RecordSuccess();
+                    return;
+                }
+                catch (Exception ex) when (IsTransient(ex) && attempt < 3)
+                {
+                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/3): {ex.Message} for path={path}");
+                    await Task.Delay(attempt * 500);
+                }
+                catch (Exception)
+                {
+                    RecordFailure();
+                    throw;
+                }
+            }
+        }
+
+        private static bool IsTransient(Exception ex)
+        {
+            if (ex is TaskCanceledException || ex is TimeoutException)
+                return true;
+
+            if (ex is HttpRequestException httpEx)
+            {
+                if (httpEx.StatusCode == null)
+                    return true;
+                
+                int code = (int)httpEx.StatusCode;
+                return code >= 500 || code == 408;
+            }
+
+            return false;
         }
 
         private static string TrimForDebug(string value, int maxLength)

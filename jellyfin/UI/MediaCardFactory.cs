@@ -6,6 +6,48 @@ namespace JellyfinTizen.UI
 {
     public static class MediaCardFactory
     {
+        // Text height estimation
+        private const int MinTextHeightCandidate = 48;
+        private const int MaxTextHeightBuffer = 32;
+        private const int TextHeightStepIncrement = 8;
+
+        // CreateImageCard defaults
+        private const int DefaultFocusBorder = 5;
+        private const int DefaultTitlePointSize = 26;
+        private const int DefaultSubtitlePointSize = 20;
+
+        // Layout padding/margins
+        private const int FramePadding = 2;
+        private const int TextContainerPaddingLeftRight = 8;
+        private const int TextContainerPaddingTop = 16;
+        private const int TextContainerPaddingBottom = 12;
+        private const int SubtitleCellPadding = 4;
+        private const int NoSubtitleCellPadding = 0;
+
+        // Text measurement
+        private const int MinSafeWidth = 120;
+        private const int SafeWidthMargin = 16;
+        private const float TitleLineHeightMultiplier = 1.28f;
+        private const float SubtitleLineHeightMultiplier = 1.30f;
+        private const int ContentGapWithSubtitle = 4;
+        private const int VerticalPadding = 28;
+
+        // Adaptive title sizing
+        private const int SubtitleReserveHeight = 30;
+        private const int MinAvailableTitleHeight = 36;
+        private const float MinPointSizeReduction = 10f;
+        private const float AbsoluteMinPointSize = 18f;
+        private const float PointSizeStepDecrement = 2f;
+
+        // Wrapped line estimation
+        private const float MinCharWidthMultiplier = 6f;
+        private const float CharWidthRatio = 0.54f;
+        private const int MinMaxCharsPerLine = 8;
+        private const int MinLineCount = 1;
+
+        // ImageContainer background
+        private static readonly Color ImageContainerBackground = new Color(0.12f, 0.12f, 0.12f, 1f);
+
         public static int GetRecommendedTextHeight(
             int width,
             int preferredTextHeight,
@@ -15,8 +57,8 @@ namespace JellyfinTizen.UI
             int subtitlePoint = 20)
         {
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
-            int candidate = Math.Max(48, preferredTextHeight);
-            int maxTextHeight = candidate + Math.Max(32, preferredTextHeight / 2);
+            int candidate = Math.Max(MinTextHeightCandidate, preferredTextHeight);
+            int maxTextHeight = candidate + Math.Max(MaxTextHeightBuffer, preferredTextHeight / 2);
 
             while (candidate <= maxTextHeight)
             {
@@ -30,7 +72,7 @@ namespace JellyfinTizen.UI
                 if (EstimateRequiredTextHeight(title, subtitle, width, adaptiveTitlePoint, subtitlePoint) <= candidate)
                     return candidate;
 
-                candidate += 8;
+                candidate += TextHeightStepIncrement;
             }
 
             return maxTextHeight;
@@ -44,9 +86,9 @@ namespace JellyfinTizen.UI
             string subtitle,
             string imageUrl,
             out ImageView imageView,
-            int focusBorder = 5,
-            int titlePoint = 26,
-            int subtitlePoint = 20,
+            int focusBorder = DefaultFocusBorder,
+            int titlePoint = DefaultTitlePointSize,
+            int subtitlePoint = DefaultSubtitlePointSize,
             float? progressRatio = null)
         {
             _ = focusBorder;
@@ -82,7 +124,7 @@ namespace JellyfinTizen.UI
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
                 BackgroundColor = Color.Transparent,
                 ClippingMode = ClippingModeType.ClipChildren,
-                Padding = new Extents(2, 2, 2, 2),
+                Padding = new Extents(FramePadding, FramePadding, FramePadding, FramePadding),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal
@@ -97,7 +139,7 @@ namespace JellyfinTizen.UI
                 ClippingMode = ClippingModeType.ClipChildren,
                 CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BackgroundColor = new Color(0.12f, 0.12f, 0.12f, 1f)
+                BackgroundColor = ImageContainerBackground
             };
 
             imageView = new ImageView
@@ -149,11 +191,11 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = textHeight,
                 BackgroundColor = Color.Transparent,
-                Padding = new Extents(8, 8, 16, 12),
+                Padding = new Extents(TextContainerPaddingLeftRight, TextContainerPaddingLeftRight, TextContainerPaddingTop, TextContainerPaddingBottom),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, hasSubtitle ? 4 : 0)
+                    CellPadding = new Size2D(0, hasSubtitle ? SubtitleCellPadding : NoSubtitleCellPadding)
                 }
             };
 
@@ -198,14 +240,14 @@ namespace JellyfinTizen.UI
             float subtitlePointSize)
         {
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
-            int safeWidth = Math.Max(120, availableWidth - 16);
+            int safeWidth = Math.Max(MinSafeWidth, availableWidth - SafeWidthMargin);
             int lineCount = EstimateWrappedLineCount(title, safeWidth, titlePointSize);
-            int titleHeight = (int)Math.Ceiling(lineCount * (titlePointSize * 1.28f));
+            int titleHeight = (int)Math.Ceiling(lineCount * (titlePointSize * TitleLineHeightMultiplier));
             int subtitleHeight = hasSubtitle
-                ? (int)Math.Ceiling(subtitlePointSize * 1.30f)
+                ? (int)Math.Ceiling(subtitlePointSize * SubtitleLineHeightMultiplier)
                 : 0;
-            int contentGap = hasSubtitle ? 4 : 0;
-            int verticalPadding = 28;
+            int contentGap = hasSubtitle ? ContentGapWithSubtitle : 0;
+            int verticalPadding = VerticalPadding;
 
             return verticalPadding + titleHeight + contentGap + subtitleHeight;
         }
@@ -220,21 +262,21 @@ namespace JellyfinTizen.UI
             if (string.IsNullOrWhiteSpace(title))
                 return preferredPointSize;
 
-            int safeWidth = Math.Max(120, availableWidth - 16);
-            int subtitleReserve = hasSubtitle ? 30 : 0;
-            int verticalPadding = 28;
-            int availableTitleHeight = Math.Max(36, textHeight - verticalPadding - subtitleReserve);
+            int safeWidth = Math.Max(MinSafeWidth, availableWidth - SafeWidthMargin);
+            int subtitleReserve = hasSubtitle ? SubtitleReserveHeight : 0;
+            int verticalPadding = VerticalPadding;
+            int availableTitleHeight = Math.Max(MinAvailableTitleHeight, textHeight - verticalPadding - subtitleReserve);
             float pointSize = preferredPointSize;
-            float minimumPointSize = Math.Max(18f, preferredPointSize - 10f);
+            float minimumPointSize = Math.Max(AbsoluteMinPointSize, preferredPointSize - MinPointSizeReduction);
 
             while (pointSize > minimumPointSize)
             {
                 int estimatedLineCount = EstimateWrappedLineCount(title, safeWidth, pointSize);
-                float estimatedHeight = estimatedLineCount * (pointSize * 1.28f);
+                float estimatedHeight = estimatedLineCount * (pointSize * TitleLineHeightMultiplier);
                 if (estimatedHeight <= availableTitleHeight)
                     break;
 
-                pointSize -= 2f;
+                pointSize -= PointSizeStepDecrement;
             }
 
             return Math.Max(minimumPointSize, pointSize);
@@ -243,17 +285,17 @@ namespace JellyfinTizen.UI
         private static int EstimateWrappedLineCount(string text, int availableWidth, float pointSize)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return 1;
+                return MinLineCount;
 
-            float approximateCharWidth = Math.Max(6f, pointSize * 0.54f);
-            int maxCharsPerLine = Math.Max(8, (int)Math.Floor(availableWidth / approximateCharWidth));
+            float approximateCharWidth = Math.Max(MinCharWidthMultiplier, pointSize * CharWidthRatio);
+            int maxCharsPerLine = Math.Max(MinMaxCharsPerLine, (int)Math.Floor(availableWidth / approximateCharWidth));
             int lineCount = 0;
 
             foreach (var paragraph in text.Split('\n'))
             {
                 if (string.IsNullOrWhiteSpace(paragraph))
                 {
-                    lineCount++;
+                    lineCount += MinLineCount;
                     continue;
                 }
 
@@ -263,7 +305,7 @@ namespace JellyfinTizen.UI
                     int wordLength = word.Length;
                     if (currentLineLength == 0)
                     {
-                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        lineCount += Math.Max(MinLineCount, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
                         currentLineLength = wordLength % maxCharsPerLine;
                         if (currentLineLength == 0 && wordLength > 0)
                             currentLineLength = maxCharsPerLine;
@@ -278,7 +320,7 @@ namespace JellyfinTizen.UI
                     }
 
                     int overflowLength = wordLength;
-                    lineCount++;
+                    lineCount += MinLineCount;
                     currentLineLength = 0;
 
                     if (overflowLength >= maxCharsPerLine)
@@ -296,10 +338,10 @@ namespace JellyfinTizen.UI
                 }
 
                 if (currentLineLength == 0)
-                    lineCount++;
+                    lineCount += MinLineCount;
             }
 
-            return Math.Max(1, lineCount);
+            return Math.Max(MinLineCount, lineCount);
         }
     }
 }

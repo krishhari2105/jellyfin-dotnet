@@ -23,7 +23,7 @@ namespace JellyfinTizen.Core
 
 
         public static readonly Dictionary<string, bool> GrabbedKeys = new();
-        public static readonly List<string> KeyDebugLogs = new();
+        private static readonly List<string> _keyDebugLogs = new();
 
         public static void DebugLog(string message)
         {
@@ -32,11 +32,19 @@ namespace JellyfinTizen.Core
 
             string msg = $"{DateTime.Now:HH:mm:ss} | {message}";
             Tizen.Log.Info("Jellyfin", msg);
-            lock (KeyDebugLogs)
+            lock (_keyDebugLogs)
             {
-                KeyDebugLogs.Add(msg);
-                if (KeyDebugLogs.Count > 40)
-                    KeyDebugLogs.RemoveAt(0);
+                _keyDebugLogs.Add(msg);
+                if (_keyDebugLogs.Count > 40)
+                    _keyDebugLogs.RemoveAt(0);
+            }
+        }
+
+        public static IReadOnlyList<string> GetDebugLogs()
+        {
+            lock (_keyDebugLogs)
+            {
+                return _keyDebugLogs.ToArray();
             }
         }
 

@@ -16,6 +16,7 @@ namespace JellyfinTizen
         protected override void OnPause()
         {
             base.OnPause();
+            AppLifecycle.TransitionToSuspended();
             NavigationService.NotifyAppTerminating();
         }
 
@@ -34,12 +35,7 @@ namespace JellyfinTizen
 
         protected override void OnTerminate()
         {
-            try
-            {
-                AppState.TailscaleProxy?.Stop();
-                AppState.Tailscale?.Stop();
-            }
-            catch { }
+            AppState.Shutdown();
             NavigationService.NotifyAppTerminating();
             base.OnTerminate();
         }

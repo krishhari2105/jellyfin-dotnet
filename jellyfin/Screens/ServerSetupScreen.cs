@@ -24,6 +24,8 @@ namespace JellyfinTizen.Screens
         private TextLabel _errorLabel;
         private bool _continueInProgress;
         private System.Threading.Timer _errorTimer;
+        private HttpClient _probeHttpClient;
+        private View _serverInputShell;
 
         public ServerSetupScreen()
         {
@@ -32,7 +34,7 @@ namespace JellyfinTizen.Screens
             panel.Add(MonochromeAuthFactory.CreateTitle("Connect To Your Jellyfin Server"));
             panel.Add(MonochromeAuthFactory.CreateSubtitle("Enter your server URL to continue."));
 
-            var serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
+            _serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
             _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _);
             if (AppState.Tailscale != null)
             {
@@ -40,7 +42,7 @@ namespace JellyfinTizen.Screens
             }
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
-            panel.Add(serverInputShell);
+            panel.Add(_serverInputShell);
             panel.Add(_continueButton);
             if (_tailscaleButton != null)
             {
@@ -73,6 +75,9 @@ namespace JellyfinTizen.Screens
         {
             _continueInProgress = false;
             DisposeTimer(ref _errorTimer);
+            _probeHttpClient?.Dispose();
+            _probeHttpClient = null;
+            MonochromeAuthFactory.DisposeInputFieldShell(_serverInputShell);
             base.OnHide(); // calls HideDebugOverlay()
         }
 
@@ -127,7 +132,7 @@ namespace JellyfinTizen.Screens
                 case AppKey.Enter:
                     if (focused == _continueButton)
                     {
-                        FireAndForget(OnContinueAsync());
+                        FireAndForget(OnContinueAsync(), nameof(OnContinueAsync));
                         return;
                     }
                     else if (focused == _tailscaleButton)
@@ -251,15 +256,16 @@ namespace JellyfinTizen.Screens
             try
             {
                 Core.TailscaleDebugLog.Add($"ResolveServerBaseUrl: {url}");
-                var handler = new HttpClientHandler
+                _probeHttpClient ??= new HttpClient(new HttpClientHandler
                 {
                     Proxy = new TailscaleWebProxy(),
                     UseProxy = true,
-                    // Don't follow redirects automatically so we capture final URL properly
                     AllowAutoRedirect = true,
+                })
+                {
+                    Timeout = TimeSpan.FromSeconds(8)
                 };
-                using var httpClient = new System.Net.Http.HttpClient(handler);
-                httpClient.Timeout = System.TimeSpan.FromSeconds(8);
+                var httpClient = _probeHttpClient;
                 var normalizedInput = url.TrimEnd('/');
                 var targetUrl = normalizedInput + "/System/Info/Public";
                 Core.TailscaleDebugLog.Add($"GET {targetUrl}");
@@ -298,7 +304,6 @@ namespace JellyfinTizen.Screens
                     }
                 }
 
-                // Capture the final URL after redirects (http->https, reverse proxy path rewrites, etc).
                 var finalUri = response.RequestMessage?.RequestUri;
                 if (finalUri == null)
                 {

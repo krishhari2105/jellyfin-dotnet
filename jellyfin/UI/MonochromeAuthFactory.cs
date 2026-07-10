@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 // Alias the UI Timer to avoid ambiguity with System.Threading.Timer
@@ -9,6 +11,8 @@ namespace JellyfinTizen.UI
 {
     public static class MonochromeAuthFactory
     {
+        private static readonly ConditionalWeakTable<View, Timer> _inputFieldTimers = new();
+
         private const int HiddenCursorWidth = 0;
         private const int VisibleCursorWidth = 2;
         private const int AuthPlaceholderCursorHeight = 30;
@@ -162,6 +166,9 @@ namespace JellyfinTizen.UI
                 return true;
             };
 
+            // Store timer on shell for later disposal
+            _inputFieldTimers.Add(shell, placeholderCursorBlinkTimer);
+
             bool isFocused = false;
             void SyncInputVisualState()
             {
@@ -210,6 +217,16 @@ namespace JellyfinTizen.UI
             shell.Add(input);
             shell.Add(placeholderCursor);
             return shell;
+        }
+
+        public static void DisposeInputFieldShell(View shell)
+        {
+            if (shell != null && _inputFieldTimers.TryGetValue(shell, out var timer))
+            {
+                try { timer.Stop(); } catch { }
+                try { timer.Dispose(); } catch { }
+                _inputFieldTimers.Remove(shell);
+            }
         }
 
         public static View CreateButton(string text, out TextLabel label)

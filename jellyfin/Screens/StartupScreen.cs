@@ -31,12 +31,13 @@ namespace JellyfinTizen.Screens
             }
 
             _loaded = true;
-            FireAndForget(LoadAsync());
+            FireAndForget(LoadAsync(), nameof(LoadAsync));
         }
 
         public override void OnHide()
         {
             _loadingVisual?.Stop();
+            _loadingVisual?.Dispose();
             _fallbackTimer?.Dispose();
             _fallbackTimer = null;
         }
@@ -66,10 +67,7 @@ namespace JellyfinTizen.Screens
                         if (Uri.TryCreate(active.Url, UriKind.Absolute, out var uri))
                         {
                             string host = uri.Host;
-                            bool isTailscaleServer = host.StartsWith("100.") ||
-                                                     host.StartsWith("127.0.") ||
-                                                     host.StartsWith("fd") ||
-                                                     host.Equals("localhost-tailscaled", StringComparison.OrdinalIgnoreCase);
+                            bool isTailscaleServer = AppState.IsTailscaleUrl(active.Url);
 
                             if (isTailscaleServer && AppState.TailscaleReadyTask != null)
                             {
@@ -77,12 +75,17 @@ namespace JellyfinTizen.Screens
                                 // Wait for Tailscale daemon and proxy to be ready
                                 await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
 
-                                // Wait for Tailscale backend connection to be Running (online)
-                                if (AppState.Tailscale != null)
+                                // If Tailscale startup failed, don't wait for backend — skip to server entry
+                                if (AppState.TailscaleStartupFailed || AppState.Tailscale == null)
                                 {
-                                    await AppState.Tailscale.WaitForBackendRunningAsync(10000);
+                                    _loadingVisual.SetMessage("Loading...");
                                 }
-                                _loadingVisual.SetMessage("Loading...");
+                                else if (AppState.Tailscale != null)
+                                {
+                                    // Wait for Tailscale backend connection to be Running (online)
+                                    await AppState.Tailscale.WaitForBackendRunningAsync(10000);
+                                    _loadingVisual.SetMessage("Loading...");
+                                }
                             }
                         }
                     }
@@ -116,7 +119,7 @@ namespace JellyfinTizen.Screens
                             addToStack: false
                         );
                     }
-                }, null, 12000, Timeout.Infinite);
+                }, null, AppState.StartupFallbackTimeoutMs, Timeout.Infinite);
 
                 if (await TryResumeSavedTokenSessionAsync())
                 {
@@ -124,16 +127,43 @@ namespace JellyfinTizen.Screens
                     {
                         _navigated = true;
                         _fallbackTimer?.Dispose();
-                        NavigationService.Navigate(
-                            new HomeLoadingScreen(),
-                            addToStack: false
-                        );
+                        
+                        // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
+                        if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
+                        {
+                            NavigationService.Navigate(
+                                new TailscaleAuthScreen(),
+                                addToStack: false
+                            );
+                        }
+                        else
+                        {
+                            NavigationService.Navigate(
+                                new HomeLoadingScreen(),
+                                addToStack: false
+                            );
+                        }
                     }
                     return;
                 }
 
                 if (AppState.TryRestoreServer())
                 {
+                    // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
+                    if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
+                    {
+                        if (!_navigated)
+                        {
+                            _navigated = true;
+                            _fallbackTimer?.Dispose();
+                            NavigationService.Navigate(
+                                new TailscaleAuthScreen(),
+                                addToStack: false
+                            );
+                        }
+                        return;
+                    }
+
                     if (!_navigated)
                     {
                         NavigationService.Navigate(

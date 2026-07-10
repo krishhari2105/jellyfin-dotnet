@@ -314,6 +314,7 @@ namespace JellyfinTizen.Core
                 return;
 
             Stop();
+            _forwardClient?.Dispose();
             _disposed = true;
         }
 
