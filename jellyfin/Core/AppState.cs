@@ -43,6 +43,7 @@ namespace JellyfinTizen.Core
         public static HttpClient HttpClient { get; private set; }
         public static int MaxStoredServers => MaxStoredServersCount;
         public static List<JellyfinTizen.Models.JellyfinUser> CachedPublicUsers { get; set; }
+        public static TailscaleConnectionMonitor ConnectionMonitor { get; private set; }
 
         public sealed class StoredServer
         {
@@ -78,6 +79,7 @@ namespace JellyfinTizen.Core
 
             // Create Tailscale service instance (UI will show it if binary is present)
             Tailscale = new TailscaleService();
+            ConnectionMonitor = new TailscaleConnectionMonitor();
 
             // Initialize lifecycle state machine
             AppLifecycle.Transition(AppLifecycleState.NotStarted, AppLifecycleState.ProcessLaunch);
@@ -1212,6 +1214,15 @@ namespace JellyfinTizen.Core
                 $"?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
 
             return RewriteImageUrlForTailscale(url);
+        }
+
+        public static void Shutdown()
+        {
+            try
+            {
+                ConnectionMonitor?.Dispose();
+            }
+            catch { }
         }
 
         private static HttpClient CreateHttpClient()
