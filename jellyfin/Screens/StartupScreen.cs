@@ -119,7 +119,7 @@ namespace JellyfinTizen.Screens
                             addToStack: false
                         );
                     }
-                }, null, 12000, Timeout.Infinite);
+                }, null, AppState.StartupFallbackTimeoutMs, Timeout.Infinite);
 
                 if (await TryResumeSavedTokenSessionAsync())
                 {

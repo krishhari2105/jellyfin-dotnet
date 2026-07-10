@@ -1216,6 +1216,12 @@ namespace JellyfinTizen.Core
             return RewriteImageUrlForTailscale(url);
         }
 
+        public static int PlayerBufferInitialMs { get; set; } = 6000;
+        public static int PlayerBufferResumeMs { get; set; } = 4000;
+        public static int TailscaleSocketWaitSeconds { get; set; } = 30;
+        public static int StartupFallbackTimeoutMs { get; set; } = 12000;
+        public static int HomeLoadingFallbackTimeoutMs { get; set; } = 25000;
+
         public static void Shutdown()
         {
             try

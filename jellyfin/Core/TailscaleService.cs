@@ -299,7 +299,8 @@ namespace JellyfinTizen.Core
                 throw new InvalidOperationException("tailscaled is not running and socket does not exist.");
 
             int attempts = 0;
-            while (attempts < 30)
+            int maxAttempts = AppState.TailscaleSocketWaitSeconds;
+            while (attempts < maxAttempts)
             {
                 if (File.Exists(_socket))
                     return;

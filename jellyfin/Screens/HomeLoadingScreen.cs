@@ -127,7 +127,7 @@ namespace JellyfinTizen.Screens
                         addToStack: false
                     );
                 });
-            }, null, 25000, Timeout.Infinite);
+            }, null, AppState.HomeLoadingFallbackTimeoutMs, Timeout.Infinite);
 
             try
             {

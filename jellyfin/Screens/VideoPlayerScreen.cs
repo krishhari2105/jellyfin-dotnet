@@ -213,8 +213,8 @@ namespace JellyfinTizen.Screens
         //   - reBufferMillisecond  : buffer required to resume after stall/seek (ms)
         // Values match litefin's proven stable configuration (6s initial / 4s resume)
         // which follows Samsung's recommended minimum of 4 seconds for setBufferingParam.
-        private const int PlayerBufferInitialMs = 6000;        // 6s initial buffer (matches litefin tizenInitialBuffer)
-        private const int PlayerBufferResumeMs = 4000;         // 4s resume buffer (matches litefin tizenResumeBuffer)
+        private static int PlayerBufferInitialMs => AppState.PlayerBufferInitialMs;        // 6s initial buffer (matches litefin tizenInitialBuffer)
+        private static int PlayerBufferResumeMs => AppState.PlayerBufferResumeMs;         // 4s resume buffer (matches litefin tizenResumeBuffer)
         // Post-seek safety net: if the pipeline stalls in READY after a seek without
         // firing buffering events (a known Tizen firmware issue), re-assert Start().
         private const int SeekSafetyNetMs = 250;
