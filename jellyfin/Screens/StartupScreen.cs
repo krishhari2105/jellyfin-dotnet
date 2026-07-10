@@ -127,16 +127,43 @@ namespace JellyfinTizen.Screens
                     {
                         _navigated = true;
                         _fallbackTimer?.Dispose();
-                        NavigationService.Navigate(
-                            new HomeLoadingScreen(),
-                            addToStack: false
-                        );
+                        
+                        // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
+                        if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
+                        {
+                            NavigationService.Navigate(
+                                new TailscaleAuthScreen(),
+                                addToStack: false
+                            );
+                        }
+                        else
+                        {
+                            NavigationService.Navigate(
+                                new HomeLoadingScreen(),
+                                addToStack: false
+                            );
+                        }
                     }
                     return;
                 }
 
                 if (AppState.TryRestoreServer())
                 {
+                    // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
+                    if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
+                    {
+                        if (!_navigated)
+                        {
+                            _navigated = true;
+                            _fallbackTimer?.Dispose();
+                            NavigationService.Navigate(
+                                new TailscaleAuthScreen(),
+                                addToStack: false
+                            );
+                        }
+                        return;
+                    }
+
                     if (!_navigated)
                     {
                         NavigationService.Navigate(

@@ -178,13 +178,27 @@ namespace JellyfinTizen.Screens
                     AppState.Username
                 );
 
+                var isTailscaleUrl = AppState.IsTailscaleUrl(AppState.Jellyfin.ServerUrl);
+                var isTailscaleConnected = isTailscaleUrl && await AppState.IsTailscaleConnectedAsync();
+
                 RunOnUiThread(() =>
                 {
                     NavigationService.ClearStack();
-                    NavigationService.Navigate(
-                        new HomeLoadingScreen(),
-                        addToStack: false
-                    );
+                    // If the server is a Tailscale URL and not connected, go through Tailscale auth first
+                    if (isTailscaleUrl && !isTailscaleConnected)
+                    {
+                        NavigationService.Navigate(
+                            new TailscaleAuthScreen(),
+                            addToStack: false
+                        );
+                    }
+                    else
+                    {
+                        NavigationService.Navigate(
+                            new HomeLoadingScreen(),
+                            addToStack: false
+                        );
+                    }
                 });
             }
             catch (HttpRequestException ex)

@@ -14,7 +14,6 @@ namespace JellyfinTizen.Core
         public static Task TailscaleReadyTask { get; private set; }
 
         public static bool TailscaleStartupFailed { get; private set; } = false;
-        private static bool _resumeInProgress = false;
         private const string KeyServerUrl = "jf_server_url";
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
@@ -43,6 +42,7 @@ namespace JellyfinTizen.Core
         public static TailscaleProxyService TailscaleProxy { get; private set; }
         public static HttpClient HttpClient { get; private set; }
         public static int MaxStoredServers => MaxStoredServersCount;
+        public static List<JellyfinTizen.Models.JellyfinUser> CachedPublicUsers { get; set; }
 
         public sealed class StoredServer
         {
@@ -78,7 +78,11 @@ namespace JellyfinTizen.Core
 
             // Create Tailscale service instance (UI will show it if binary is present)
             Tailscale = new TailscaleService();
-            
+
+            // Initialize lifecycle state machine
+            AppLifecycle.Transition(AppLifecycleState.NotStarted, AppLifecycleState.ProcessLaunch);
+            AppLifecycle.Transition(AppLifecycleState.ProcessLaunch, AppLifecycleState.TailscaleStaging);
+
             // Start tailscaled in background - don't block app initialization
             // If it fails, the UI will show the error state
             TailscaleReadyTask = System.Threading.Tasks.Task.Run(async () =>
@@ -88,11 +92,15 @@ namespace JellyfinTizen.Core
                     await Tailscale.StageAndStart();
                     TailscaleStartupFailed = false;
 
+                    _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.TailscaleStaging, AppLifecycleState.TailscaleStagingSucceeded);
+
                     bool reachable = Tailscale.IsRunning || Tailscale.IsSocketReachable;
                     if (reachable)
                     {
                         // Wait for daemon to be ready to handle local API calls
                         try { await Tailscale.WaitForReadyAsync(); } catch { }
+
+                        _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.TailscaleStagingSucceeded, AppLifecycleState.ProxyStarting);
 
                         try
                         {
@@ -100,22 +108,38 @@ namespace JellyfinTizen.Core
                             TailscaleProxy = new TailscaleProxyService(HttpClient);
                             TailscaleProxy.Start();
 
-                            // Give the proxy time to start its listener
-                            // Increased from 100ms to 500ms to prevent race conditions
-                            // that cause image loading failures and black screens on Tizen TV
-                            await Task.Delay(500);
+                            bool listenerReady = await AppLifecycle.WaitForProxyListenerReadyAsync(
+                                TailscaleProxyService.LocalProxyPort,
+                                TimeSpan.FromSeconds(5));
+
+                            if (listenerReady)
+                            {
+                                _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.ProxyStarting, AppLifecycleState.ProxyListeningConfirmed);
+                            }
+                            else
+                            {
+                                Tizen.Log.Warn("AppState", "Tailscale proxy listener not ready after 5s");
+                                TailscaleProxy = null;
+                                _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.ProxyStarting, AppLifecycleState.ProxyStartFailed);
+                            }
                         }
                         catch (Exception ex)
                         {
                             Tizen.Log.Warn("AppState", $"Failed to start Tailscale proxy: {ex.Message}");
                             TailscaleProxy = null;
+                            _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.ProxyStarting, AppLifecycleState.ProxyStartFailed);
                         }
+                    }
+                    else
+                    {
+                        _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.TailscaleStagingSucceeded, AppLifecycleState.TailscaleStagingFailed);
                     }
                 }
                 catch (Exception ex)
                 {
                     Tizen.Log.Warn("AppState", $"Tailscale not available: {ex.Message}");
                     TailscaleStartupFailed = true;
+                    _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.TailscaleStaging, AppLifecycleState.TailscaleStagingFailed);
                 }
             });
 
@@ -369,6 +393,7 @@ namespace JellyfinTizen.Core
                 AccessToken = null;
                 UserId = null;
                 Username = null;
+                CachedPublicUsers = null;
 
                 Jellyfin?.ClearAuthToken();
                 Jellyfin?.SetUserId(null);
@@ -831,12 +856,15 @@ namespace JellyfinTizen.Core
         {
             try
             {
-                if (Tailscale == null || !Tailscale.IsRunning)
+                if (Tailscale == null)
                     return false;
 
-                // Quick sync check - if we can get status and Online is true
+                // Quick sync check - if we can get status and Online is true or BackendState is Running
                 var status = await Tailscale.GetStatusAsync();
-                return status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
+                var backendState = status?["BackendState"]?.ToString();
+                var online = status?["Self"]?["Online"]?.GetValue<bool>() ?? false;
+
+                return online || string.Equals(backendState, "Running", StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -906,12 +934,29 @@ namespace JellyfinTizen.Core
 
         public static async void OnAppResumed()
         {
-            if (_resumeInProgress)
+            if (AppLifecycle.IsResuming)
             {
-                TailscaleDebugLog.Add("OnAppResumed: reconnect already in progress, skipping.");
+                TailscaleDebugLog.Add("OnAppResumed: resume already in progress, skipping.");
                 return;
             }
-            _resumeInProgress = true;
+
+            AppLifecycleState state = AppLifecycleState.NotStarted;
+            int attempts = 0;
+
+            var initialState = AppLifecycle.State;
+            if (initialState != AppLifecycleState.Suspended)
+            {
+                TailscaleDebugLog.Add($"OnAppResumed: expected Suspended, actual={initialState}; aborting resume");
+                await AppLifecycle.TryTransitionAsync(initialState, AppLifecycleState.ResumeFailed);
+                return;
+            }
+
+            if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.Suspended, AppLifecycleState.Resuming))
+            {
+                TailscaleDebugLog.Add($"OnAppResumed: failed to transition Suspended->Resuming, actual={AppLifecycle.State}");
+                return;
+            }
+
             TailscaleDebugLog.Add("App resumed. Checking Tailscale and proxy service status...");
 
             try
@@ -925,92 +970,181 @@ namespace JellyfinTizen.Core
                 TailscaleDebugLog.Add($"Error clearing caches on resume: {ex.Message}");
             }
 
-            try
+            // 2. Check if Tailscale needs restart
+            bool tailscaleRunning = Tailscale != null && (Tailscale.IsRunning || Tailscale.IsSocketReachable);
+
+            if (!tailscaleRunning)
             {
-                if (Tailscale != null && !Tailscale.IsRunning)
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.Resuming, AppLifecycleState.ResumeRestartingTailscale))
                 {
-                    TailscaleDebugLog.Add("Tailscale process is not running on resume. Attempting restart...");
+                    TailscaleDebugLog.Add($"OnAppResumed: expected Resuming, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
+                }
+
+                try
+                {
                     await Tailscale.StageAndStart();
+                    TailscaleStartupFailed = false;
+                    TailscaleDebugLog.Add("Tailscale restarted on resume");
                 }
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"Error restarting Tailscale on resume: {ex.Message}");
-            }
-
-            try
-            {
-                if (TailscaleProxy != null)
+                catch (Exception ex)
                 {
-                    TailscaleDebugLog.Add("Stopping existing Tailscale proxy...");
-                    TailscaleProxy.Stop();
-                    TailscaleProxy.Dispose();
-                    TailscaleProxy = null;
+                    TailscaleDebugLog.Add($"Error restarting Tailscale on resume: {ex.Message}");
+                    TailscaleStartupFailed = true;
                 }
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"Error stopping proxy on resume: {ex.Message}");
-            }
 
-            try
-            {
-                bool reachable = (Tailscale != null) && (Tailscale.IsRunning || Tailscale.IsSocketReachable);
-                if (reachable)
+                var nextStage = TailscaleStartupFailed
+                    ? AppLifecycleState.ResumeTailscaleStagingFailed
+                    : AppLifecycleState.ResumeTailscaleStagingSucceeded;
+
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeRestartingTailscale, nextStage))
                 {
-                    TailscaleDebugLog.Add("Starting Tailscale proxy...");
-                    TailscaleProxyService.LocalProxyPort = TailscaleService.GetFreePort(8123);
-                    if (TailscaleProxy == null)
-                    {
-                        TailscaleProxy = new TailscaleProxyService(HttpClient);
-                    }
-                    TailscaleProxy.Start();
+                    TailscaleDebugLog.Add($"OnAppResumed: expected ResumeRestartingTailscale, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
                 }
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"Error restarting proxy on resume: {ex.Message}");
-            }
-
-            if (IsTailscaleUrl(ServerUrl))
-            {
-                NavigationService.ShowReconnectOverlay("Re-establishing Tailscale connection...");
-                System.Threading.Tasks.Task.Run(async () =>
-                {
-                    try
-                    {
-                        int attempts = 0;
-                        bool connected = false;
-                        while (attempts < 15)
-                        {
-                            try
-                            {
-                                if (await IsTailscaleConnectedAsync())
-                                {
-                                    TailscaleStartupFailed = false;
-                                    connected = true;
-                                    break;
-                                }
-                            }
-                            catch { }
-
-                            await Task.Delay(1000);
-                            attempts++;
-                        }
-
-                        TailscaleDebugLog.Add($"Tailscale reconnection status after resume: connected={connected} (attempts={attempts})");
-                        NavigationService.HideReconnectOverlay();
-                    }
-                    finally
-                    {
-                        _resumeInProgress = false;
-                    }
-                });
             }
             else
             {
-                // Not a Tailscale URL — no background task started, reset flag immediately
-                _resumeInProgress = false;
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.Resuming, AppLifecycleState.ResumeProxyStarting))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected Resuming, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
+                }
+            }
+
+            // 3. Start proxy (side effect FIRST, then transition on success)
+            if (Tailscale != null && (Tailscale.IsRunning || Tailscale.IsSocketReachable))
+            {
+                try
+                {
+                    TailscaleDebugLog.Add("Starting Tailscale proxy on resume...");
+                    TailscaleProxyService.LocalProxyPort = TailscaleService.GetFreePort(8123);
+
+                    if (TailscaleProxy != null)
+                    {
+                        TailscaleProxy.Stop();
+                        TailscaleProxy.Dispose();
+                    }
+                    TailscaleProxy = new TailscaleProxyService(HttpClient);
+                    TailscaleProxy.Start();
+
+                    bool listenerReady = await AppLifecycle.WaitForProxyListenerReadyAsync(
+                        TailscaleProxyService.LocalProxyPort,
+                        TimeSpan.FromSeconds(5));
+
+                    if (!listenerReady)
+                        throw new TimeoutException("Proxy listener not ready after Start()");
+                }
+                catch (Exception ex)
+                {
+                    TailscaleDebugLog.Add($"Error starting proxy on resume: {ex.Message}");
+
+                    state = AppLifecycle.State;
+                    if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeProxyStarting, AppLifecycleState.ResumeProxyStartFailed))
+                    {
+                        TailscaleDebugLog.Add($"OnAppResumed: expected ResumeProxyStarting, actual={state}; aborting resume");
+                        await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    }
+                    return;
+                }
+
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeProxyStarting, AppLifecycleState.ResumeProxyListeningConfirmed))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected ResumeProxyStarting, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
+                }
+            }
+            else
+            {
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.Resuming, AppLifecycleState.ResumeCompleted))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected Resuming, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                }
+                return;
+            }
+
+            // 4. If server URL is Tailscale-based, wait for tailnet reconnection
+            if (IsTailscaleUrl(ServerUrl))
+            {
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeProxyListeningConfirmed, AppLifecycleState.ResumeWaitingForTailnet))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected ResumeProxyListeningConfirmed, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
+                }
+
+                NavigationService.ShowReconnectOverlay("Re-establishing Tailscale connection...");
+
+                bool connected = false;
+                try
+                {
+                    attempts = 0;
+                    while (attempts < 15)
+                    {
+                        try
+                        {
+                            if (await IsTailscaleConnectedAsync())
+                            {
+                                TailscaleStartupFailed = false;
+                                connected = true;
+                                break;
+                            }
+                        }
+                        catch { }
+                        await Task.Delay(1000);
+                        attempts++;
+                    }
+                }
+                finally
+                {
+                    NavigationService.HideReconnectOverlay();
+                }
+
+                TailscaleDebugLog.Add($"Tailscale reconnection status after resume: connected={connected} (attempts={attempts})");
+
+                var tailnetNext = connected
+                    ? AppLifecycleState.ResumeTailnetReconnected
+                    : AppLifecycleState.ResumeTailnetTimeout;
+
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeWaitingForTailnet, tailnetNext))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected ResumeWaitingForTailnet, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                    return;
+                }
+            }
+            else
+            {
+                state = AppLifecycle.State;
+                if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeProxyListeningConfirmed, AppLifecycleState.ResumeCompleted))
+                {
+                    TailscaleDebugLog.Add($"OnAppResumed: expected ResumeProxyListeningConfirmed, actual={state}; aborting resume");
+                    await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+                }
+                return;
+            }
+
+            // 5. ResumeCompleted -> restore to pre-suspend state (or its phase entry)
+            var resumeTarget = AppLifecycle.GetResumeTargetState();
+            var phaseEntry = AppLifecycle.GetPhaseEntryState(resumeTarget);
+
+            state = AppLifecycle.State;
+            if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.ResumeCompleted, phaseEntry))
+            {
+                TailscaleDebugLog.Add($"OnAppResumed: expected ResumeCompleted, actual={state}; aborting resume");
+                await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
             }
         }
 

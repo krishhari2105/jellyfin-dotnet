@@ -23,7 +23,8 @@ namespace JellyfinTizen.Screens
         private TextLabel _skipLabel;
         private bool _isLoading;
         private CancellationTokenSource _busCts;
-private CancellationTokenSource _refreshCts;
+        private CancellationTokenSource _refreshCts;
+        private CancellationTokenSource _authUrlTimeoutCts;
 
         public TailscaleAuthScreen()
         {
@@ -146,6 +147,10 @@ private CancellationTokenSource _refreshCts;
             FocusManager.Instance.SetCurrentFocusView(_skipButton);
             _ = CheckCurrentStatusAsync();
 
+            // Start 10s timeout for auth URL appearance
+            _authUrlTimeoutCts = new CancellationTokenSource();
+            _ = WatchForAuthUrlTimeoutAsync(_authUrlTimeoutCts.Token);
+
             // Start periodic refresh to handle slow Tailscale service startup
             StartPeriodicRefresh();
         }
@@ -153,6 +158,7 @@ private CancellationTokenSource _refreshCts;
         public override void OnHide()
         {
             _busCts?.Cancel();
+            _authUrlTimeoutCts?.Cancel();
             UnsubscribeAuthUrlEvents();
             base.OnHide(); // calls HideDebugOverlay()
         }
@@ -289,8 +295,10 @@ private CancellationTokenSource _refreshCts;
         {
             try
             {
-                TailscaleDebugLog.Add("Starting authentication completion polling");
-                while (!token.IsCancellationRequested)
+                TailscaleDebugLog.Add("Starting authentication completion polling with 60s timeout");
+                var deadline = DateTime.UtcNow.AddSeconds(60);
+                
+                while (!token.IsCancellationRequested && DateTime.UtcNow < deadline)
                 {
                     await Task.Delay(2000, token);
 
@@ -329,11 +337,64 @@ private CancellationTokenSource _refreshCts;
                         return;
                     }
                 }
+
+                // 60s elapsed without connection
+                TailscaleDebugLog.Add("TailscaleAuthTimeout: 60s elapsed without BackendState=Running");
+                RunOnUiThread(() =>
+                {
+                    _statusLabel.Text = "Authentication timed out (60s).\nContinuing without Tailscale — images may not load.";
+                    _loginButton.Opacity = 0.4f;
+                    _loginButton.Focusable = false;
+                    _skipLabel.Text = "Continue to Server Setup";
+                    _skipButton.Opacity = 1.0f;
+                    _skipButton.Focusable = true;
+                    FocusManager.Instance.SetCurrentFocusView(_skipButton);
+                    _isLoading = false;
+                    _qrImageView.Hide();
+                    _qrImageView.ExcludeLayouting = true;
+                    
+                    // Fire state transition
+                    AppLifecycle.Transition(AppLifecycleState.TailscaleAuthPolling, AppLifecycleState.TailscaleAuthTimeout);
+                    
+                    // Navigate using the central ContinueNavigation function
+                    ContinueNavigation();
+                });
+                _busCts?.Cancel();
             }
             catch (OperationCanceledException)
             {
                 TailscaleDebugLog.Add("Authentication completion polling cancelled");
             }
+        }
+
+        private async Task WatchForAuthUrlTimeoutAsync(CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(10), token);
+                if (!_isLoading && string.IsNullOrWhiteSpace(AppState.Tailscale?.LastAuthUrl))
+                {
+                    TailscaleDebugLog.Add("TailscaleAuthTimeout: 10s no AuthURL");
+                    RunOnUiThread(() =>
+                    {
+                        _statusLabel.Text = "No login URL received (10s).\nContinuing without Tailscale.";
+                        _loginButton.Opacity = 0.4f;
+                        _loginButton.Focusable = false;
+                        _skipLabel.Text = "Continue to Server Setup";
+                        _skipButton.Opacity = 1.0f;
+                        _skipButton.Focusable = true;
+                        FocusManager.Instance.SetCurrentFocusView(_skipButton);
+                        _isLoading = false;
+                        _qrImageView.Hide();
+                        _qrImageView.ExcludeLayouting = true;
+                        AppLifecycle.Transition(AppLifecycleState.TailscaleAuthWaitingForQR, AppLifecycleState.TailscaleAuthTimeout);
+
+                        // Navigate using the central ContinueNavigation function
+                        ContinueNavigation();
+                    });
+                }
+            }
+            catch (OperationCanceledException) { }
         }
 
         private async Task<bool> CheckConnectionStatusSilently()
@@ -449,6 +510,16 @@ private CancellationTokenSource _refreshCts;
             FocusManager.Instance.SetCurrentFocusView(_skipButton);
             _qrImageView.Hide();
             _qrImageView.ExcludeLayouting = true;
+
+            // Navigate using the central ContinueNavigation function after brief confirmation display
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(1500);
+                RunOnUiThread(() =>
+                {
+                    ContinueNavigation();
+                });
+            });
         }
 
         private void SubscribeAuthUrlEvents()
@@ -535,9 +606,45 @@ private CancellationTokenSource _refreshCts;
             }
         }
 
+        private void ContinueNavigation()
+        {
+            if (!string.IsNullOrWhiteSpace(AppState.ServerUrl))
+            {
+                if (!string.IsNullOrWhiteSpace(AppState.AccessToken))
+                {
+                    NavigationService.Navigate(new HomeLoadingScreen(), addToStack: false);
+                }
+                else
+                {
+                    NavigationService.Navigate(new LoadingScreen("Fetching users..."), addToStack: false);
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var users = await AppState.Jellyfin.GetPublicUsersAsync();
+                            RunOnUiThread(() => NavigationService.Navigate(new UserSelectScreen(users), addToStack: false));
+                        }
+                        catch
+                        {
+                            RunOnUiThread(() => NavigationService.Navigate(
+                                AppState.HasStoredServers() ? (ScreenBase)new ServerPickerScreen() : new ServerSetupScreen(),
+                                addToStack: false));
+                        }
+                    });
+                }
+            }
+            else
+            {
+                var target = AppState.HasStoredServers()
+                    ? (ScreenBase)new ServerPickerScreen()
+                    : new ServerSetupScreen();
+                NavigationService.Navigate(target, addToStack: false);
+            }
+        }
+
         private void SkipAuthentication()
         {
-            NavigationService.Navigate(new ServerSetupScreen(), addToStack: true);
+            ContinueNavigation();
         }
 
         public void HandleKey(AppKey key)
@@ -545,7 +652,7 @@ private CancellationTokenSource _refreshCts;
             switch (key)
             {
                 case AppKey.Back:
-                    NavigationService.NavigateBack();
+                    ContinueNavigation();
                     break;
 
                 case AppKey.Up:
