@@ -134,13 +134,26 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        protected void FireAndForget(Task task)
+        protected void FireAndForget(Task task, string operationName = null)
         {
             if (task == null)
                 return;
 
             task.ContinueWith(
-                faultedTask => { _ = faultedTask.Exception; },
+                faultedTask =>
+                {
+                    var ex = faultedTask.Exception?.Flatten();
+                    if (ex != null)
+                    {
+                        var name = operationName ?? task.GetType().Name;
+                        TailscaleDebugLog.Add($"[FireAndForget:{name}] Unhandled exception: {ex.Message}");
+                        foreach (var inner in ex.InnerExceptions)
+                        {
+                            TailscaleDebugLog.Add($"[FireAndForget:{name}]   -> {inner.GetType().Name}: {inner.Message}");
+                            Tizen.Log.Warn("FireAndForget", $"{name}: {inner}");
+                        }
+                    }
+                },
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
                 TaskScheduler.Default);

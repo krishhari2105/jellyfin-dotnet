@@ -486,7 +486,7 @@ namespace JellyfinTizen.Screens
 
             if (row.Kind == HomeRowKind.Libraries && item.Library != null)
             {
-                FireAndForget(OpenLibraryAsync(item.Library));
+                FireAndForget(OpenLibraryAsync(item.Library), nameof(OpenLibraryAsync));
                 return;
             }
 
@@ -655,7 +655,7 @@ namespace JellyfinTizen.Screens
 
             if (_settingsIndex == 1)
             {
-                FireAndForget(LogoutAsync());
+                FireAndForget(LogoutAsync(), nameof(LogoutAsync));
                 return;
             }
 

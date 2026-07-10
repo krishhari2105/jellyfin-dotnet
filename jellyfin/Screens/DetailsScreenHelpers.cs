@@ -501,5 +501,19 @@ namespace JellyfinTizen.Screens
 
             return char.ToUpper(trimmed[0], CultureInfo.InvariantCulture) + trimmed.Substring(1);
         }
+
+        public static string BuildEpisodeTitle(JellyfinMovie episode)
+        {
+            if (episode == null)
+                return string.Empty;
+
+            if (episode.ParentIndexNumber > 0 && episode.IndexNumber > 0)
+                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber} - {episode.Name}";
+
+            if (episode.IndexNumber > 0)
+                return $"E{episode.IndexNumber} - {episode.Name}";
+
+            return episode.Name ?? string.Empty;
+        }
     }
 }

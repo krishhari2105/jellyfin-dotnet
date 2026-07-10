@@ -5,7 +5,7 @@ using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.UI
 {
-    public sealed class AppleTvLoadingVisual
+    public sealed class AppleTvLoadingVisual : IDisposable
     {
         private readonly View _root;
         private readonly View _panel;
@@ -192,6 +192,11 @@ namespace JellyfinTizen.UI
                 _loaderDots[i].Scale = Vector3.One;
                 _loaderDots[i].Opacity = DotIdleOpacity;
             }
+        }
+
+        public void Dispose()
+        {
+            Stop();
         }
 
         private void StartPanelBreathing(bool grow)

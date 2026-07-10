@@ -31,12 +31,13 @@ namespace JellyfinTizen.Screens
             }
 
             _loaded = true;
-            FireAndForget(LoadAsync());
+            FireAndForget(LoadAsync(), nameof(LoadAsync));
         }
 
         public override void OnHide()
         {
             _loadingVisual?.Stop();
+            _loadingVisual?.Dispose();
             _fallbackTimer?.Dispose();
             _fallbackTimer = null;
         }

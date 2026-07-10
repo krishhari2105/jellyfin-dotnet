@@ -567,7 +567,7 @@ private CancellationTokenSource _refreshCts;
                     if (focused == _skipButton)
                         SkipAuthentication();
                     else if (!_isLoading && focused == _loginButton && _loginButton.Opacity > 0.5f)
-                        FireAndForget(LoginAsync());
+                        FireAndForget(LoginAsync(), nameof(LoginAsync));
                     break;
             }
         }

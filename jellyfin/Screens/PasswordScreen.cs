@@ -16,6 +16,7 @@ namespace JellyfinTizen.Screens
         private TextLabel _errorLabel;
         private bool _loginInProgress;
         private System.Threading.Timer _errorTimer;
+        private View _passwordInputShell;
 
         public PasswordScreen(string username)
         {
@@ -26,7 +27,7 @@ namespace JellyfinTizen.Screens
             panel.Add(MonochromeAuthFactory.CreateTitle($"Sign In As {username}"));
             panel.Add(MonochromeAuthFactory.CreateSubtitle("Enter your password to continue."));
 
-            var passwordInputShell = MonochromeAuthFactory.CreateInputFieldShell("Password", out _passwordInput);
+            _passwordInputShell = MonochromeAuthFactory.CreateInputFieldShell("Password", out _passwordInput);
 
             var hiddenInput = new PropertyMap();
             hiddenInput.Add(HiddenInputProperty.Mode, new PropertyValue((int)HiddenInputModeType.ShowLastCharacter));
@@ -39,7 +40,7 @@ namespace JellyfinTizen.Screens
             _loginButton = MonochromeAuthFactory.CreateButton("Login", out _);
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
-            panel.Add(passwordInputShell);
+            panel.Add(_passwordInputShell);
             panel.Add(_loginButton);
             panel.Add(_errorLabel);
             root.Add(panel);
@@ -60,6 +61,7 @@ namespace JellyfinTizen.Screens
         {
             _loginInProgress = false;
             DisposeTimer(ref _errorTimer);
+            MonochromeAuthFactory.DisposeInputFieldShell(_passwordInputShell);
         }
 
         private void ConfigurePasswordImeLayout()
@@ -118,7 +120,7 @@ namespace JellyfinTizen.Screens
 
                 case AppKey.Enter:
                     if (_loginFocused)
-                        FireAndForget(LoginAsync());
+                        FireAndForget(LoginAsync(), nameof(LoginAsync));
                     break;
             }
         }

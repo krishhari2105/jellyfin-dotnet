@@ -21,7 +21,8 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            _loadingVisual.Stop();
+            _loadingVisual?.Stop();
+            _loadingVisual?.Dispose();
         }
 
         public void HandleKey(AppKey key)

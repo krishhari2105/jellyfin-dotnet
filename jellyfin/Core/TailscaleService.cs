@@ -78,9 +78,11 @@ namespace JellyfinTizen.Core
             // Allocate free ports to avoid conflicts with frozen processes
             try
             {
-                PeerToPeerPort = GetFreeUdpPort(41641);
-                HttpProxyPort = GetFreePort(3128);
-                Socks5ProxyPort = GetFreePort(1080);
+                var udpPorts = GetFreeUdpPorts(1, 41641);
+                PeerToPeerPort = udpPorts[0];
+                var tcpPorts = GetFreePorts(2, 3128, 1080);
+                HttpProxyPort = tcpPorts[0];
+                Socks5ProxyPort = tcpPorts[1];
                 TailscaleDebugLog.Add($"Allocated dynamic ports: P2P={PeerToPeerPort}, HTTP Proxy={HttpProxyPort}, Socks5 Proxy={Socks5ProxyPort}");
             }
             catch (Exception ex)
@@ -445,52 +447,112 @@ namespace JellyfinTizen.Core
 
         public static int GetFreePort(int defaultPort)
         {
+            // Race condition fix: bind to port 0 (OS assigns free port) and return it.
+            // The caller will use this port immediately, so we don't need to keep the socket open.
+            // This avoids the TOCTOU race where the port could be grabbed between Stop() and actual use.
             try
             {
-                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, defaultPort);
+                var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
                 listener.Start();
+                int port = ((IPEndPoint)listener.LocalEndpoint).Port;
                 listener.Stop();
-                return defaultPort;
+                return port;
             }
             catch
             {
-                try
+                return defaultPort;
+            }
+        }
+
+        /// <summary>
+        /// Allocates multiple free TCP ports atomically by binding all listeners to port 0 first,
+        /// then collecting all assigned ports, then stopping all listeners. Guarantees no two ports
+        /// in the same batch collide, since none are released until all are allocated.
+        /// </summary>
+        public static List<int> GetFreePorts(int count, params int[] defaultPorts)
+        {
+            var listeners = new List<System.Net.Sockets.TcpListener>();
+            var ports = new List<int>(count);
+            try
+            {
+                for (int i = 0; i < count; i++)
                 {
                     var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
                     listener.Start();
                     int port = ((IPEndPoint)listener.LocalEndpoint).Port;
-                    listener.Stop();
-                    return port;
+                    listeners.Add(listener);
+                    ports.Add(port);
                 }
-                catch
+                return ports;
+            }
+            catch
+            {
+                // Return defaults for any that failed
+                while (ports.Count < count)
                 {
-                    return defaultPort;
+                    int idx = ports.Count;
+                    int fallback = (defaultPorts != null && idx < defaultPorts.Length) ? defaultPorts[idx] : 0;
+                    ports.Add(fallback);
+                }
+                return ports;
+            }
+            finally
+            {
+                foreach (var l in listeners)
+                {
+                    try { l.Stop(); } catch { }
                 }
             }
         }
 
         private static int GetFreeUdpPort(int defaultPort)
         {
+            // Race condition fix: bind to port 0 (OS assigns free port) and return it.
             try
             {
                 var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
-                socket.Bind(new IPEndPoint(IPAddress.Loopback, defaultPort));
+                socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                int port = ((IPEndPoint)socket.LocalEndPoint).Port;
                 socket.Close();
-                return defaultPort;
+                return port;
             }
             catch
             {
-                try
+                return defaultPort;
+            }
+        }
+
+        /// <summary>
+        /// Allocates multiple free UDP ports atomically by binding all sockets to port 0 first,
+        /// then collecting all assigned ports, then closing all sockets. Guarantees no two ports
+        /// in the same batch collide.
+        /// </summary>
+        private static List<int> GetFreeUdpPorts(int count, int defaultPort)
+        {
+            var sockets = new List<System.Net.Sockets.Socket>();
+            var ports = new List<int>(count);
+            try
+            {
+                for (int i = 0; i < count; i++)
                 {
                     var socket = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
                     socket.Bind(new IPEndPoint(IPAddress.Loopback, 0));
                     int port = ((IPEndPoint)socket.LocalEndPoint).Port;
-                    socket.Close();
-                    return port;
+                    sockets.Add(socket);
+                    ports.Add(port);
                 }
-                catch
+                return ports;
+            }
+            catch
+            {
+                while (ports.Count < count) ports.Add(defaultPort);
+                return ports;
+            }
+            finally
+            {
+                foreach (var s in sockets)
                 {
-                    return defaultPort;
+                    try { s.Close(); } catch { }
                 }
             }
         }

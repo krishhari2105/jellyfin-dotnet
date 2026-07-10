@@ -225,7 +225,7 @@ namespace JellyfinTizen.Screens
                     if (_cardsFocused)
                     {
                         if (_cards.Count > 0)
-                            FireAndForget(SelectServerAsync(_cards[_selectedCardIndex].Server));
+                            FireAndForget(SelectServerAsync(_cards[_selectedCardIndex].Server), nameof(SelectServerAsync));
                     }
                     else
                     {

@@ -21,9 +21,6 @@ namespace JellyfinTizen.Screens
         private const int PosterHeight = 630;
         private const float EpisodeFocusScale = 1.03f;
         private const int FixedTopContentHeight = 500;
-        private const int FixedOverviewViewportHeight = 240;
-        private const int OverviewScrollStepPx = 70;
-        private const int OverviewScrollTailPx = 28;
         private const int TitleLogoMaxWidth = 720;
         private const int TitleLogoQuality = 76;
         private const int TitleLogoDisplayWidth = 720;
@@ -34,16 +31,6 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _episodeViews = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
-        private View _metadataContainer;
-        private View _metadataSummaryRow;
-        private TextLabel _metadataSummaryLabel;
-        private View _metadataRatingGroup;
-        private TextLabel _metadataRatingLabel;
-        private View _metadataTagRow;
-        private View _overviewViewport;
-        private TextLabel _overviewLabel;
-        private int _overviewScrollOffset;
-        private int _overviewMaxScroll;
 
         public bool UsesImageLogoTitle =>
             _mediaItem != null &&
@@ -118,7 +105,7 @@ namespace JellyfinTizen.Screens
                 }
             };
             var titleText = _mediaItem.IsEpisode
-                ? BuildEpisodeTitle(_mediaItem)
+                ? DetailsScreenHelpers.BuildEpisodeTitle(_mediaItem)
                 : _mediaItem.Name;
             var title = CreateDetailsTitleView(titleText);
             _metadataContainer = CreateMetadataView();
@@ -321,19 +308,6 @@ namespace JellyfinTizen.Screens
             };
         }
 
-        private static string BuildEpisodeTitle(JellyfinMovie episode)
-        {
-            if (episode == null)
-                return string.Empty;
-
-            if (episode.ParentIndexNumber > 0 && episode.IndexNumber > 0)
-                return $"S{episode.ParentIndexNumber}:E{episode.IndexNumber} - {episode.Name}";
-
-            if (episode.IndexNumber > 0)
-                return $"E{episode.IndexNumber} - {episode.Name}";
-
-            return episode.Name ?? string.Empty;
-        }
         private async Task LoadEpisodesAsync()
         {
             var loading = new TextLabel("Loading episodes...")
@@ -389,7 +363,6 @@ namespace JellyfinTizen.Screens
                 var episodeLabel = new TextLabel($"{episode.IndexNumber}. {episode.Name}")
                 {
                     PointSize = 30,
-                    TextColor = Color.White,
                     WidthResizePolicy = ResizePolicyType.FillToParent,
                     HeightResizePolicy = ResizePolicyType.FillToParent,
                     VerticalAlignment = VerticalAlignment.Center
@@ -468,67 +441,6 @@ namespace JellyfinTizen.Screens
             });
         }
 
-        private void RefreshOverviewScrollBounds()
-        {
-            if (_overviewViewport == null || _overviewLabel == null)
-                return;
-
-            int viewportHeight = (int)Math.Round(_overviewViewport.SizeHeight);
-            if (viewportHeight <= 0)
-                viewportHeight = FixedOverviewViewportHeight;
-
-            int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
-            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
-            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
-            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
-
-            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
-            _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
-            _overviewLabel.PositionY = -_overviewScrollOffset;
-        }
-
-        private void ScrollOverview(int delta)
-        {
-            if (_overviewLabel == null)
-                return;
-
-            // Recompute on each input so late layout updates can expand the reachable range.
-            RefreshOverviewScrollBounds();
-
-            int nextOffset = Math.Clamp(_overviewScrollOffset + delta, 0, _overviewMaxScroll);
-            if (nextOffset == _overviewScrollOffset)
-                return;
-
-            _overviewScrollOffset = nextOffset;
-            _overviewLabel.PositionY = -_overviewScrollOffset;
-        }
-
-        private int EstimateOverviewContentHeight(int viewportWidth)
-        {
-            string text = _overviewLabel?.Text ?? string.Empty;
-            if (string.IsNullOrEmpty(text))
-                return 0;
-
-            float pointSize = _overviewLabel.PointSize > 0 ? _overviewLabel.PointSize : 31f;
-            int safeWidth = viewportWidth > 0 ? viewportWidth : 960;
-            int charsPerLine = Math.Max(12, (int)Math.Floor(safeWidth / Math.Max(1f, pointSize * 0.56f)));
-            int lineCount = 0;
-
-            foreach (var paragraph in text.Split('\n'))
-            {
-                if (paragraph.Length == 0)
-                {
-                    lineCount += 1;
-                    continue;
-                }
-
-                lineCount += (int)Math.Ceiling(paragraph.Length / (double)charsPerLine);
-            }
-
-            int lineHeight = (int)Math.Ceiling(pointSize * 1.55f);
-            return Math.Max(0, lineCount * lineHeight);
-        }
-
         private void HandleEpisodeKey(AppKey key)
         {
             switch (key)
@@ -586,219 +498,6 @@ namespace JellyfinTizen.Screens
                     GetSelectedSubtitleCodec()
                 )
             );
-        }
-
-        private View CreateMetadataView()
-        {
-            var container = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 114,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 10)
-                }
-            };
-
-            _metadataSummaryRow = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 38,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(18, 0)
-                }
-            };
-
-            _metadataSummaryLabel = new TextLabel
-            {
-                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
-                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                PointSize = 28,
-                TextColor = new Color(0.88f, 0.88f, 0.88f, 1f),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            var ratingStar = new TextLabel("★")
-            {
-                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
-                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                PointSize = 32,
-                TextColor = new Color(0.95f, 0.78f, 0.29f, 1f),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            _metadataRatingLabel = new TextLabel
-            {
-                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
-                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                PointSize = 28,
-                TextColor = new Color(0.92f, 0.92f, 0.92f, 1f),
-                VerticalAlignment = VerticalAlignment.Center
-            };
-
-            _metadataRatingGroup = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FitToChildren,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(8, 0)
-                }
-            };
-
-            _metadataRatingGroup.Add(ratingStar);
-            _metadataRatingGroup.Add(_metadataRatingLabel);
-
-            _metadataSummaryRow.Add(_metadataSummaryLabel);
-            _metadataSummaryRow.Add(_metadataRatingGroup);
-
-            _metadataTagRow = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 56,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(12, 0),
-                    HorizontalAlignment = HorizontalAlignment.Begin
-                }
-            };
-
-            container.Add(_metadataSummaryRow);
-            container.Add(_metadataTagRow);
-            return container;
-        }
-
-        private void UpdateMetadataView()
-        {
-            if (_metadataContainer == null || _metadataSummaryLabel == null || _metadataTagRow == null)
-                return;
-
-            var summaryText = DetailsScreenHelpers.BuildSummaryText(_mediaItem);
-            _metadataSummaryLabel.Text = string.IsNullOrWhiteSpace(summaryText) ? " " : summaryText;
-
-            if (_mediaItem.CommunityRating.HasValue && _mediaItem.CommunityRating.Value > 0)
-            {
-                _metadataRatingLabel.Text = _mediaItem.CommunityRating.Value.ToString("0.0", CultureInfo.InvariantCulture);
-                _metadataRatingGroup.Show();
-            }
-            else
-            {
-                _metadataRatingGroup.Hide();
-            }
-
-            var tags = DetailsScreenHelpers.BuildTechnicalTags(GetSelectedMediaSource(), useFallbackForResolution: true);
-            RebuildMetadataTags(tags);
-
-            _metadataSummaryRow.Show();
-            _metadataTagRow.Show();
-            _metadataContainer.Show();
-        }
-
-        private void RebuildMetadataTags(List<string> tags)
-        {
-            DisposeRowChildren(_metadataTagRow);
-
-            if (tags == null || tags.Count == 0)
-                return;
-
-            foreach (var tag in tags)
-            {
-                var chip = CreateMetadataChip(tag);
-                _metadataTagRow.Add(chip);
-            }
-        }
-
-        private static void DisposeRowChildren(View row)
-        {
-            while (row != null && row.ChildCount > 0)
-            {
-                var child = row.GetChildAt(0);
-                row.Remove(child);
-                try { child.Dispose(); } catch { }
-            }
-        }
-
-        private static View CreateMetadataChip(string text)
-        {
-            bool isDolbyVisionChip =
-                string.Equals(text, DetailsScreenHelpers.DolbyVisionChipToken, StringComparison.Ordinal) ||
-                string.Equals(text?.Trim(), "Dolby Vision", StringComparison.OrdinalIgnoreCase);
-            bool isDolbyAudioChip = !isDolbyVisionChip &&
-                !string.IsNullOrWhiteSpace(text) &&
-                text.StartsWith(DetailsScreenHelpers.DolbyAudioChipPrefix, StringComparison.Ordinal);
-            string chipLabelText = isDolbyAudioChip
-                ? text.Substring(DetailsScreenHelpers.DolbyAudioChipPrefix.Length).Trim()
-                : text;
-
-            var chip = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FitToChildren,
-                HeightSpecification = 48,
-                BackgroundColor = UiTheme.DetailsChipSurface,
-                CornerRadius = 12.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                ClippingMode = ClippingModeType.ClipChildren,
-                Padding = new Extents(12, 12, 8, 8),
-                Margin = new Extents(0, 0, 2, 2),
-                BorderlineWidth = 1.0f,
-                BorderlineColor = new Color(1f, 1f, 1f, 0.14f),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    VerticalAlignment = VerticalAlignment.Center
-                }
-            };
-
-            bool hasIcon = false;
-            if (isDolbyVisionChip || isDolbyAudioChip)
-            {
-                string iconFile = isDolbyVisionChip ? "dolby_vision.svg" : "dolby_audio.svg";
-                string iconPath = IOPath.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, iconFile);
-                if (File.Exists(iconPath))
-                {
-                    int iconWidth = isDolbyVisionChip ? 124 : 24;
-                    int iconHeight = isDolbyVisionChip ? 22 : 20;
-                    chip.Add(new ImageView
-                    {
-                        WidthSpecification = iconWidth,
-                        HeightSpecification = iconHeight,
-                        ResourceUrl = iconPath,
-                        PreMultipliedAlpha = false,
-                        FittingMode = FittingModeType.ShrinkToFit,
-                        SamplingMode = SamplingModeType.BoxThenLanczos,
-                        Margin = isDolbyVisionChip ? new Extents(0, 0, 0, 0) : new Extents(0, 8, 0, 0)
-                    });
-                    hasIcon = true;
-                }
-            }
-
-            if (isDolbyVisionChip)
-            {
-                chip.Padding = new Extents(10, 10, 8, 8);
-                if (hasIcon)
-                    return chip;
-                chipLabelText = "Dolby Vision";
-            }
-
-            var label = new TextLabel(chipLabelText)
-            {
-                WidthResizePolicy = ResizePolicyType.UseNaturalSize,
-                HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                PointSize = 20,
-                TextColor = new Color(0.98f, 0.98f, 0.98f, 1f),
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-            label.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
-
-            chip.Add(label);
-            return chip;
         }
     }
 }
