@@ -1227,6 +1227,16 @@ namespace JellyfinTizen.Core
             try
             {
                 ConnectionMonitor?.Dispose();
+                TailscaleProxy?.Stop();
+                TailscaleProxy?.Dispose();
+                Tailscale?.Stop();
+                Jellyfin?.Dispose();
+                HttpClient?.Dispose();
+
+                // Clear static caches
+                CachedPublicUsers = null;
+                TailscaleProxyService.ClearCache();
+                JellyfinTizen.Utils.CacheHelper.Clear();
             }
             catch { }
         }
