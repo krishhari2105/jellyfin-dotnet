@@ -229,6 +229,7 @@ namespace JellyfinTizen.Screens
         {
             UiAnimator.StopAndDisposeAll(_focusAnimations);
             HideSelectionPanel();
+            base.OnHide();
         }
 
         private async Task LoadMediaSourcesAndSubtitlesAsync()
@@ -240,38 +241,41 @@ namespace JellyfinTizen.Screens
             {
                 var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
                 _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
-            }
-            catch
-            {
-                _mediaSources = new List<MediaSourceInfo>();
-            }
 
-            if (_mediaSources.Count == 0)
-            {
-                _mediaSources.Add(new MediaSourceInfo
+                if (_mediaSources.Count == 0)
                 {
-                    Id = _episode.Id,
-                    Name = "Default"
-                });
+                    _mediaSources.Add(new MediaSourceInfo
+                    {
+                        Id = _episode.Id,
+                        Name = "Default"
+                    });
+                }
+
+                _mediaSourcesLoaded = true;
+                _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
+
+                var currentSource = _mediaSources[_selectedMediaSourceIndex];
+                _subtitleStreams = currentSource?.MediaStreams?
+                    .Where(s => s.Type == "Subtitle")
+                    .ToList() ?? new List<MediaStream>();
+                _subtitleStreamsLoaded = true;
+
+                NormalizeSelectionStateForCurrentMediaSource();
+                RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
+                UpdateVersionButtonText();
+                UpdateMetadataView();
+                ScheduleActionButtonReflow();
+
+                if (_buttons.Count > 0)
+                    FocusButton(_buttonIndex);
             }
-
-            _mediaSourcesLoaded = true;
-            _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
-
-            var currentSource = _mediaSources[_selectedMediaSourceIndex];
-            _subtitleStreams = currentSource?.MediaStreams?
-                .Where(s => s.Type == "Subtitle")
-                .ToList() ?? new List<MediaStream>();
-            _subtitleStreamsLoaded = true;
-
-            NormalizeSelectionStateForCurrentMediaSource();
-            RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
-            UpdateVersionButtonText();
-            UpdateMetadataView();
-            ScheduleActionButtonReflow();
-
-            if (_buttons.Count > 0)
-                FocusButton(_buttonIndex);
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"EpisodeDetailsScreen: Failed to load media sources on load/retry: {ex.Message}");
+                _mediaSourcesLoaded = false;
+                _subtitleStreamsLoaded = false;
+                throw;
+            }
         }
 
         private void ScheduleActionButtonReflow()
@@ -329,8 +333,31 @@ namespace JellyfinTizen.Screens
 
         protected override JellyfinMovie GetMediaItem() => _episode;
 
-        protected override void PlayMedia(JellyfinMovie media, int startPositionMs)
+        protected override async void PlayMedia(JellyfinMovie media, int startPositionMs)
         {
+            if (!_mediaSourcesLoaded)
+            {
+                try
+                {
+                    NavigationService.ShowReconnectOverlay("Retrieving media details...");
+                    await LoadMediaSourcesAndSubtitlesAsync();
+                }
+                catch (Exception ex)
+                {
+                    TailscaleDebugLog.Add($"PlayMedia: Retry failed: {ex.Message}");
+                }
+                finally
+                {
+                    NavigationService.HideReconnectOverlay();
+                }
+            }
+
+            if (!_mediaSourcesLoaded || _mediaSources == null || _mediaSources.Count == 0)
+            {
+                ShowErrorMessage("Server unreachable. Check connection and try again.");
+                return;
+            }
+
             NavigationService.Navigate(
                 new VideoPlayerScreen(
                     media,

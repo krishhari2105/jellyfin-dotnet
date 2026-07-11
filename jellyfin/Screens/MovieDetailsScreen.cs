@@ -213,6 +213,7 @@ namespace JellyfinTizen.Screens
         {
             UiAnimator.StopAndDisposeAll(_focusAnimations);
             HideSelectionPanel();
+            base.OnHide();
         }
 
         public override void HandleKey(AppKey key)
@@ -385,39 +386,42 @@ namespace JellyfinTizen.Screens
             {
                 var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id, subtitleHandlingDisabled: true);
                 _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
-            }
-            catch
-            {
-                _mediaSources = new List<MediaSourceInfo>();
-            }
 
-            if (_mediaSources.Count == 0)
-            {
-                _mediaSources.Add(new MediaSourceInfo
+                if (_mediaSources.Count == 0)
                 {
-                    Id = _mediaItem.Id,
-                    Name = "Default"
-                });
+                    _mediaSources.Add(new MediaSourceInfo
+                    {
+                        Id = _mediaItem.Id,
+                        Name = "Default"
+                    });
+                }
+
+                _mediaSourcesLoaded = true;
+                _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
+
+                // Extract subtitle streams from selected media source to avoid redundant API call
+                var currentSource = _mediaSources[_selectedMediaSourceIndex];
+                _subtitleStreams = currentSource?.MediaStreams?
+                    .Where(s => s.Type == "Subtitle")
+                    .ToList() ?? new List<MediaStream>();
+                _subtitleStreamsLoaded = true;
+
+                NormalizeSelectionStateForCurrentMediaSource();
+                RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
+                UpdateVersionButtonText();
+                UpdateMetadataView();
+                ScheduleActionButtonReflow();
+
+                if (_buttons.Count > 0)
+                    FocusButton(_buttonIndex);
             }
-
-            _mediaSourcesLoaded = true;
-            _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
-
-            // Extract subtitle streams from selected media source to avoid redundant API call
-            var currentSource = _mediaSources[_selectedMediaSourceIndex];
-            _subtitleStreams = currentSource?.MediaStreams?
-                .Where(s => s.Type == "Subtitle")
-                .ToList() ?? new List<MediaStream>();
-            _subtitleStreamsLoaded = true;
-
-            NormalizeSelectionStateForCurrentMediaSource();
-            RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
-            UpdateVersionButtonText();
-            UpdateMetadataView();
-            ScheduleActionButtonReflow();
-
-            if (_buttons.Count > 0)
-                FocusButton(_buttonIndex);
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"MovieDetailsScreen: Failed to load media sources on load/retry: {ex.Message}");
+                _mediaSourcesLoaded = false;
+                _subtitleStreamsLoaded = false;
+                throw;
+            }
         }
 
         private void ScheduleActionButtonReflow()
@@ -485,8 +489,31 @@ namespace JellyfinTizen.Screens
         protected override JellyfinMovie GetMediaItem() => _mediaItem;
         protected override int ThumbnailWidthForLayout => PosterWidth;
         protected override bool UseFallbackForResolution => true;
-        protected override void PlayMedia(JellyfinMovie media, int startPositionMs)
+        protected override async void PlayMedia(JellyfinMovie media, int startPositionMs)
         {
+            if (!_mediaSourcesLoaded)
+            {
+                try
+                {
+                    NavigationService.ShowReconnectOverlay("Retrieving media details...");
+                    await LoadMediaSourcesAndSubtitlesAsync();
+                }
+                catch (Exception ex)
+                {
+                    TailscaleDebugLog.Add($"PlayMedia: Retry failed: {ex.Message}");
+                }
+                finally
+                {
+                    NavigationService.HideReconnectOverlay();
+                }
+            }
+
+            if (!_mediaSourcesLoaded || _mediaSources == null || _mediaSources.Count == 0)
+            {
+                ShowErrorMessage("Server unreachable. Check connection and try again.");
+                return;
+            }
+
             NavigationService.Navigate(
                 new VideoPlayerScreen(
                     media,

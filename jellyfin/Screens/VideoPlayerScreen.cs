@@ -28,6 +28,9 @@ namespace JellyfinTizen.Screens
         private Player _player;
         private JellyfinMovie _movie;
         private int _startPositionMs;
+        private TextLabel _errorLabel;
+        private bool _playbackFailed;
+        private bool _isStartingPlayback;
         private bool _initialSeekDone = false;
         private View _osd;
         private View _topOsd;
@@ -368,10 +371,17 @@ namespace JellyfinTizen.Screens
 
         private async Task StartPlaybackAsync()
         {
+            if (_isStartingPlayback)
+                return;
+
+            _isStartingPlayback = true;
             int playbackToken = ++_playbackToken;
             var playbackMovie = _movie;
             if (playbackMovie == null || string.IsNullOrWhiteSpace(playbackMovie.Id))
+            {
+                _isStartingPlayback = false;
                 return;
+            }
 
             try
             {
@@ -490,7 +500,7 @@ namespace JellyfinTizen.Screens
 
                 streamUrl = RewriteStreamUrlForTailscale(streamUrl);
 
-                PreparePlayerAsync(streamUrl, playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, playbackToken);
+                await PreparePlayerAsync(streamUrl, playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, playbackToken);
                 if (playbackToken != _playbackToken)
                     return;
                 ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
@@ -520,8 +530,41 @@ namespace JellyfinTizen.Screens
             {
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Exception", ex.Message);
                 if (playbackToken == _playbackToken)
+                {
                     ClearReportingContext();
+                    ShowPlaybackError(ex.Message);
+                }
             }
+            finally
+            {
+                _isStartingPlayback = false;
+            }
+        }
+
+        private void ShowPlaybackError(string message)
+        {
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                if (_errorLabel == null)
+                {
+                    _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
+                    _errorLabel.PositionX = (Window.Default.Size.Width - 1400) / 2;
+                    _errorLabel.PositionY = (Window.Default.Size.Height - 200) / 2;
+                    _errorLabel.WidthSpecification = 1400;
+                    _errorLabel.HeightSpecification = 200;
+                    _errorLabel.PointSize = 26;
+                    _errorLabel.HorizontalAlignment = HorizontalAlignment.Center;
+                    _errorLabel.VerticalAlignment = VerticalAlignment.Center;
+                    _errorLabel.TextColor = Color.Red;
+                    Add(_errorLabel);
+                }
+
+                _errorLabel.Text = $"{message}\n\nPress ENTER to retry, or BACK to return to details.";
+                _errorLabel.RaiseToTop();
+                _errorLabel.Show();
+                
+                _playbackFailed = true;
+            });
         }
 
         private void ResetPlaybackState(bool hasSelectedSubtitle, int? requestedSubtitleStreamIndex, int playbackToken, bool preferNativeEmbeddedOnStart)
@@ -874,7 +917,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private void PreparePlayerAsync(
+        private async Task PreparePlayerAsync(
             string streamUrl,
             string playbackMovieId,
             string playSessionId,
@@ -886,11 +929,25 @@ namespace JellyfinTizen.Screens
             SetReportingContext(playbackMovieId, playSessionId, mediaSourceId, reportedPlayMethod);
             _player.SetSource(source);
 
-            _ = _player.PrepareAsync();
+            await WithTimeout(_player.PrepareAsync(), 15000);
             if (playbackToken != _playbackToken)
                 return;
 
+            if (_player.State != PlayerState.Ready)
+            {
+                throw new InvalidOperationException($"Player not in Ready state after preparation. Current state: {_player.State}");
+            }
+
             ApplyDisplayModeForCurrentVideo();
+        }
+
+        private static async Task WithTimeout(Task task, int timeoutMs)
+        {
+            var delayTask = Task.Delay(timeoutMs);
+            var completedTask = await Task.WhenAny(task, delayTask);
+            if (completedTask == delayTask)
+                throw new TimeoutException("Player preparation timed out.");
+            await task;
         }
 
         private async Task<(int? pendingStartupNativeEmbeddedSubtitleIndex, MediaStream pendingStartupNativeEmbeddedSubtitleStream, MediaStream pendingStartupParsedSubtitleStream)> ConfigureSubtitlesPreparedAsync(
@@ -6307,6 +6364,24 @@ namespace JellyfinTizen.Screens
         public void HandleKey(AppKey key)
         {
             if (key == AppKey.Unknown) return;
+            if (_playbackFailed)
+            {
+                if (key == AppKey.Back)
+                {
+                    _playbackFailed = false;
+                    _errorLabel?.Hide();
+                    NavigationService.NavigateBack();
+                    return;
+                }
+                if (key == AppKey.Enter)
+                {
+                    _playbackFailed = false;
+                    _errorLabel?.Hide();
+                    StartPlayback();
+                    return;
+                }
+                return;
+            }
             if (DebugSwitches.EnablePlaybackDebugOverlay)
             {
                 CaptureStreamDebugEvent("KeyPressed", $"key={key}");
