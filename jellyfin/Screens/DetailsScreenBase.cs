@@ -12,6 +12,7 @@ using JellyfinTizen.Models;
 using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 using IOPath = System.IO.Path;
+using ThreadingTimer = System.Threading.Timer;
 
 namespace JellyfinTizen.Screens
 {
@@ -86,6 +87,8 @@ namespace JellyfinTizen.Screens
         protected DetailsSelectionPanel _selectionPanel;
         protected DetailsPanelMode _selectionPanelMode;
         protected bool _actionButtonReflowScheduled;
+        protected TextLabel _errorLabel;
+        protected ThreadingTimer _errorTimer;
 
         // =====================================================================
         // METADATA UI FIELDS (moved from both derived screens)
@@ -112,6 +115,14 @@ namespace JellyfinTizen.Screens
         {
             _resumeAvailable = mediaItem.PlaybackPositionTicks > 0;
             _selectionPanel = new DetailsSelectionPanel(this);
+            _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
+            _errorLabel.PositionX = Math.Max(0, (Window.Default.Size.Width - 1200) / 2);
+            _errorLabel.PositionY = Math.Max(0, Window.Default.Size.Height - 120);
+            _errorLabel.WidthSpecification = 1200;
+            _errorLabel.HeightSpecification = 60;
+            _errorLabel.HorizontalAlignment = HorizontalAlignment.Center;
+            _errorLabel.VerticalAlignment = VerticalAlignment.Center;
+            this.Add(_errorLabel);
             // NormalizeSelectionStateForCurrentMediaSource() is called by derived constructors after their field init
         }
 
@@ -1025,6 +1036,17 @@ namespace JellyfinTizen.Screens
             foreach (var existing in parent.Children)
                 if (ReferenceEquals(existing, child)) return true;
             return false;
+        }
+
+        public override void OnHide()
+        {
+            DisposeTimer(ref _errorTimer);
+            base.OnHide();
+        }
+
+        protected void ShowErrorMessage(string message)
+        {
+            ShowTransientMessage(_errorLabel, message, ref _errorTimer);
         }
     }
 }
