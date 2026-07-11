@@ -30,6 +30,7 @@ namespace JellyfinTizen.Screens
         private int _startPositionMs;
         private TextLabel _errorLabel;
         private bool _playbackFailed;
+        private bool _isStartingPlayback;
         private bool _initialSeekDone = false;
         private View _osd;
         private View _topOsd;
@@ -370,10 +371,17 @@ namespace JellyfinTizen.Screens
 
         private async Task StartPlaybackAsync()
         {
+            if (_isStartingPlayback)
+                return;
+
+            _isStartingPlayback = true;
             int playbackToken = ++_playbackToken;
             var playbackMovie = _movie;
             if (playbackMovie == null || string.IsNullOrWhiteSpace(playbackMovie.Id))
+            {
+                _isStartingPlayback = false;
                 return;
+            }
 
             try
             {
@@ -526,6 +534,10 @@ namespace JellyfinTizen.Screens
                     ClearReportingContext();
                     ShowPlaybackError(ex.Message);
                 }
+            }
+            finally
+            {
+                _isStartingPlayback = false;
             }
         }
 
