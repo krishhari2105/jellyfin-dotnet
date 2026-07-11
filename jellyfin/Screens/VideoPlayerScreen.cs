@@ -500,7 +500,7 @@ namespace JellyfinTizen.Screens
 
                 streamUrl = RewriteStreamUrlForTailscale(streamUrl);
 
-                PreparePlayerAsync(streamUrl, playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, playbackToken);
+                await PreparePlayerAsync(streamUrl, playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, playbackToken);
                 if (playbackToken != _playbackToken)
                     return;
                 ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
@@ -917,7 +917,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private void PreparePlayerAsync(
+        private async Task PreparePlayerAsync(
             string streamUrl,
             string playbackMovieId,
             string playSessionId,
@@ -929,11 +929,25 @@ namespace JellyfinTizen.Screens
             SetReportingContext(playbackMovieId, playSessionId, mediaSourceId, reportedPlayMethod);
             _player.SetSource(source);
 
-            _ = _player.PrepareAsync();
+            await WithTimeout(_player.PrepareAsync(), 15000);
             if (playbackToken != _playbackToken)
                 return;
 
+            if (_player.State != PlayerState.Ready)
+            {
+                throw new InvalidOperationException($"Player not in Ready state after preparation. Current state: {_player.State}");
+            }
+
             ApplyDisplayModeForCurrentVideo();
+        }
+
+        private static async Task WithTimeout(Task task, int timeoutMs)
+        {
+            var delayTask = Task.Delay(timeoutMs);
+            var completedTask = await Task.WhenAny(task, delayTask);
+            if (completedTask == delayTask)
+                throw new TimeoutException("Player preparation timed out.");
+            await task;
         }
 
         private async Task<(int? pendingStartupNativeEmbeddedSubtitleIndex, MediaStream pendingStartupNativeEmbeddedSubtitleStream, MediaStream pendingStartupParsedSubtitleStream)> ConfigureSubtitlesPreparedAsync(
