@@ -111,6 +111,7 @@ namespace JellyfinTizen.UI
                 : Math.Clamp(selectedIndex, 0, _options.Count - 1);
             UpdateVisuals();
             ScrollSelectionIntoView();
+            _overlay.RaiseToTop();
             _overlay.Show();
             IsVisible = true;
         }
