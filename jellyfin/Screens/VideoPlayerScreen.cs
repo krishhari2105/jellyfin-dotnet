@@ -28,6 +28,8 @@ namespace JellyfinTizen.Screens
         private Player _player;
         private JellyfinMovie _movie;
         private int _startPositionMs;
+        private TextLabel _errorLabel;
+        private bool _playbackFailed;
         private bool _initialSeekDone = false;
         private View _osd;
         private View _topOsd;
@@ -520,8 +522,37 @@ namespace JellyfinTizen.Screens
             {
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Exception", ex.Message);
                 if (playbackToken == _playbackToken)
+                {
                     ClearReportingContext();
+                    ShowPlaybackError(ex.Message);
+                }
             }
+        }
+
+        private void ShowPlaybackError(string message)
+        {
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                if (_errorLabel == null)
+                {
+                    _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
+                    _errorLabel.PositionX = (Window.Default.Size.Width - 1400) / 2;
+                    _errorLabel.PositionY = (Window.Default.Size.Height - 200) / 2;
+                    _errorLabel.WidthSpecification = 1400;
+                    _errorLabel.HeightSpecification = 200;
+                    _errorLabel.PointSize = 26;
+                    _errorLabel.HorizontalAlignment = HorizontalAlignment.Center;
+                    _errorLabel.VerticalAlignment = VerticalAlignment.Center;
+                    _errorLabel.TextColor = Color.Red;
+                    Add(_errorLabel);
+                }
+
+                _errorLabel.Text = $"{message}\n\nPress ENTER to retry, or BACK to return to details.";
+                _errorLabel.RaiseToTop();
+                _errorLabel.Show();
+                
+                _playbackFailed = true;
+            });
         }
 
         private void ResetPlaybackState(bool hasSelectedSubtitle, int? requestedSubtitleStreamIndex, int playbackToken, bool preferNativeEmbeddedOnStart)
@@ -6307,6 +6338,24 @@ namespace JellyfinTizen.Screens
         public void HandleKey(AppKey key)
         {
             if (key == AppKey.Unknown) return;
+            if (_playbackFailed)
+            {
+                if (key == AppKey.Back)
+                {
+                    _playbackFailed = false;
+                    _errorLabel?.Hide();
+                    NavigationService.NavigateBack();
+                    return;
+                }
+                if (key == AppKey.Enter)
+                {
+                    _playbackFailed = false;
+                    _errorLabel?.Hide();
+                    StartPlayback();
+                    return;
+                }
+                return;
+            }
             if (DebugSwitches.EnablePlaybackDebugOverlay)
             {
                 CaptureStreamDebugEvent("KeyPressed", $"key={key}");
