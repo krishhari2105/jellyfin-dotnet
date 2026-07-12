@@ -10,6 +10,7 @@ namespace JellyfinTizen.Utils
         public const int FocusDurationMs = 120;
         public const int ScrollDurationMs = 160;
         public const int PanelDurationMs = 200;
+        public const int FadeInDurationMs = 150;
 
         private static readonly object _sync = new();
         private static readonly HashSet<Animation> _activeAnimations = new();
@@ -88,6 +89,38 @@ namespace JellyfinTizen.Utils
             }
 
             try { animation.Dispose(); } catch { }
+        }
+
+        public static void FadeInOnImageReady(ImageView imageView, string resourceUrl, int durationMs = FadeInDurationMs)
+        {
+            if (imageView == null)
+                return;
+
+            imageView.Opacity = 0.0f;
+
+            if (string.IsNullOrWhiteSpace(resourceUrl))
+            {
+                imageView.Opacity = 1.0f;
+                imageView.ResourceUrl = null;
+                return;
+            }
+
+            EventHandler<ImageView.ResourceReadyEventArgs> handler = null;
+            handler = (sender, e) =>
+            {
+                try
+                {
+                    imageView.ResourceReady -= handler;
+                    _ = AnimateTo(imageView, "Opacity", 1.0f, durationMs);
+                }
+                catch
+                {
+                    // Fail-safe
+                }
+            };
+
+            imageView.ResourceReady += handler;
+            imageView.ResourceUrl = resourceUrl;
         }
     }
 }

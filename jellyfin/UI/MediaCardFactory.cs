@@ -1,6 +1,7 @@
 using System;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.UI
 {
@@ -149,9 +150,9 @@ namespace JellyfinTizen.UI
                 Name = "CardImage",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = imageUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(imageView, imageUrl);
             imageContainer.Add(imageView);
 
             playedBadge = new View
