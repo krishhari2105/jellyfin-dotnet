@@ -622,5 +622,53 @@ namespace JellyfinTizen.Core
             });
         }
 
+        // Modular full-screen loading overlay reusing the SAME design language as
+        // LoadingScreen (the AppleTvLoadingVisual shown for "Loading library...",
+        // "Loading items...", etc.), so any screen can show a consistent full-screen loading
+        // state in-place (without navigating to a separate LoadingScreen). Show/Hide are the
+        // in-place equivalents of navigating to a LoadingScreen and back.
+        private static View _loadingOverlay;
+        private static AppleTvLoadingVisual _loadingVisual;
+
+        public static void ShowLoadingOverlay(string message)
+        {
+            if (_window == null) return;
+
+            // Runs synchronously on the UI thread (called as the first statement of a
+            // screen's OnShow). Attaching immediately — rather than via CoreApplication.Post
+            // — guarantees the overlay paints in the same frame the screen is (re)shown, so a
+            // re-shown cached screen's stale child views never paint underneath it first.
+            // (HideLoadingOverlay keeps its Post because it is invoked from post-await
+            // continuations that may resume off the UI thread.)
+            if (_loadingVisual != null || _loadingOverlay != null)
+            {
+                try { _loadingVisual?.Stop(); } catch { }
+                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
+                try { _loadingVisual?.Dispose(); } catch { }
+                _loadingVisual = null;
+                _loadingOverlay = null;
+            }
+
+            _loadingVisual = new AppleTvLoadingVisual(message);
+            _loadingOverlay = _loadingVisual.Root;
+            _window.Add(_loadingOverlay);
+            _loadingOverlay.RaiseToTop();
+            _loadingVisual.Start();
+        }
+
+        public static void HideLoadingOverlay()
+        {
+            if (_loadingOverlay == null && _loadingVisual == null) return;
+
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                try { _loadingVisual?.Stop(); } catch { }
+                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
+                try { _loadingVisual?.Dispose(); } catch { }
+                _loadingVisual = null;
+                _loadingOverlay = null;
+            });
+        }
+
     }
 }

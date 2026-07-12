@@ -998,7 +998,12 @@ namespace JellyfinTizen.Screens
         {
             var mediaItem = GetMediaItem();
             if (mediaItem == null || string.IsNullOrWhiteSpace(mediaItem.Id))
+            {
+                // Overlay was already shown by OnShow before this method ran, so this early
+                // exit must hide it to stay balanced.
+                NavigationService.HideLoadingOverlay();
                 return;
+            }
 
             JellyfinMovie serverItem;
             try
@@ -1008,11 +1013,15 @@ namespace JellyfinTizen.Screens
             catch (Exception ex)
             {
                 TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: fetch failed (screen={GetType().Name}): {ex.Message}");
+                NavigationService.HideLoadingOverlay();
                 return;
             }
 
             if (serverItem == null)
+            {
+                NavigationService.HideLoadingOverlay();
                 return;
+            }
 
             long serverTicks = serverItem.PlaybackPositionTicks;
 
@@ -1042,6 +1051,10 @@ namespace JellyfinTizen.Screens
                 catch
                 {
                     // Screen may have been navigated away/disposed between fetch and continuation.
+                }
+                finally
+                {
+                    NavigationService.HideLoadingOverlay();
                 }
             });
         }

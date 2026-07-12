@@ -217,6 +217,11 @@ namespace JellyfinTizen.Screens
         }
         public override void OnShow()
         {
+            // Show the full-screen loading overlay synchronously as the very first thing, so
+            // it paints in the same frame this (cached) screen is re-attached — before any
+            // stale child views can render. HideLoadingOverlay runs when the refresh below
+            // completes (RefreshResumeStateFromServerAsync's catch/null/finally paths).
+            NavigationService.ShowLoadingOverlay("Loading details...");
             if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
                 _ = LoadMediaSourcesAndSubtitlesAsync();
             // Litefin-style: always re-fetch server-truth resume state on every OnShow.

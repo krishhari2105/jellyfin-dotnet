@@ -92,6 +92,12 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            // Show the full-screen loading overlay synchronously as the very first thing, so
+            // it paints in the same frame this long-lived screen is re-shown — before any
+            // stale row/card views render. HideLoadingOverlay runs when the refresh below
+            // completes (RefreshContinueWatchingFromServerAsync's catch/finally paths).
+            NavigationService.ShowLoadingOverlay("Loading...");
+
             // Litefin-style "server is truth": always re-fetch the Continue Watching row fresh
             // from the server on every OnShow. HomeScreen is a long-lived, reused instance, so
             // this runs each time Home becomes active again, not just on first construction.
@@ -389,6 +395,7 @@ namespace JellyfinTizen.Screens
             catch (System.Exception ex)
             {
                 TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: fetch failed: {ex.Message}");
+                NavigationService.HideLoadingOverlay();
                 return;
             }
 
@@ -403,6 +410,10 @@ namespace JellyfinTizen.Screens
                 catch
                 {
                     // Screen may have been navigated away/disposed between fetch and continuation.
+                }
+                finally
+                {
+                    NavigationService.HideLoadingOverlay();
                 }
             });
         }
