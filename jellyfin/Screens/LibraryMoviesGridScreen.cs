@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
@@ -48,6 +49,7 @@ namespace JellyfinTizen.Screens
         private readonly int _sidePadding;
 
         private readonly List<List<View>> _grid = new();
+        private readonly List<View> _playedBadges = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
         private readonly Dictionary<int, List<PosterEntry>> _posterEntriesByRow = new();
@@ -187,8 +189,9 @@ namespace JellyfinTizen.Screens
                 int rowNumber = _grid.Count;
                 for (int i = 0; i < _moviesPerRow && _nextMovieIndexToBuild < _movies.Count; i++, _nextMovieIndexToBuild++)
                 {
-                    var card = CreatePosterCard(_movies[_nextMovieIndexToBuild], rowNumber);
+                    var card = CreatePosterCard(_movies[_nextMovieIndexToBuild], rowNumber, out var playedBadge);
                     row.Add(card);
+                    _playedBadges.Add(playedBadge);
                     rowContainer.Add(card);
                 }
 
@@ -221,6 +224,10 @@ namespace JellyfinTizen.Screens
             if (_grid.Count == 0)
             {
                 BuildGridBatch(1);
+            }
+            else
+            {
+                _ = RefreshPlayedStatesFromServerAsync();
             }
             if (_grid.Count == 0 || _grid[0].Count == 0)
                 return;
@@ -256,6 +263,67 @@ namespace JellyfinTizen.Screens
             catch
             {
                 FocusManager.Instance.SetCurrentFocusView(_grid[_rowIndex][_colIndex]);
+            }
+        }
+
+        private async Task RefreshPlayedStatesFromServerAsync()
+        {
+            if (_movies == null || _movies.Count == 0 || _nextMovieIndexToBuild <= 0)
+                return;
+
+            try
+            {
+                var builtMovieIds = new List<string>();
+                int countToRefresh = Math.Min(_nextMovieIndexToBuild, _movies.Count);
+                for (int i = 0; i < countToRefresh; i++)
+                {
+                    var m = _movies[i];
+                    if (m != null && !string.IsNullOrWhiteSpace(m.Id))
+                    {
+                        builtMovieIds.Add(m.Id);
+                    }
+                }
+
+                if (builtMovieIds.Count == 0)
+                    return;
+
+                var serverMovies = await AppState.Jellyfin.GetItemsByIdsAsync(builtMovieIds);
+                if (serverMovies == null || serverMovies.Count == 0)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < countToRefresh; i++)
+                        {
+                            var movie = _movies[i];
+                            if (movie == null || string.IsNullOrWhiteSpace(movie.Id))
+                                continue;
+
+                            var serverMovie = serverMovies.Find(m => m != null && m.Id == movie.Id);
+                            if (serverMovie != null)
+                            {
+                                movie.Played = serverMovie.Played;
+                                if (i < _playedBadges.Count && _playedBadges[i] != null)
+                                {
+                                    if (movie.Played)
+                                        _playedBadges[i].Show();
+                                    else
+                                        _playedBadges[i].Hide();
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync UI update error: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync fetch error: {ex.Message}");
             }
         }
 
@@ -311,7 +379,7 @@ namespace JellyfinTizen.Screens
             return maxTextHeight;
         }
 
-        private View CreatePosterCard(JellyfinMovie movie, int rowNumber)
+        private View CreatePosterCard(JellyfinMovie movie, int rowNumber, out View playedBadge)
         {
             BuildPosterUrls(movie, out var posterLowUrl, out var posterHighUrl);
 
@@ -323,9 +391,11 @@ namespace JellyfinTizen.Screens
                 subtitle: null,
                 imageUrl: null,
                 out var poster,
+                out playedBadge,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                played: movie.Played
             );
 
             var state = new PosterLoadState

@@ -363,9 +363,11 @@ namespace JellyfinTizen.Screens
                 subtitle: null,
                 imageUrl: imageUrl,
                 out _,
+                out _,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                played: season.Played
             );
         }
 

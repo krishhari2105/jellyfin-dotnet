@@ -21,6 +21,7 @@ namespace JellyfinTizen.Screens
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
+        private readonly List<View> _recentlyAddedBadges = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _rowViewports = new();
         private readonly List<View> _rowBlocks = new();
@@ -102,6 +103,7 @@ namespace JellyfinTizen.Screens
             // from the server on every OnShow. HomeScreen is a long-lived, reused instance, so
             // this runs each time Home becomes active again, not just on first construction.
             _ = RefreshContinueWatchingFromServerAsync();
+            _ = RefreshRecentlyAddedPlayedStateAsync();
 
             if (_rows.Count == 0 || _rowCards.Count == 0 || _rowCards[0].Count == 0)
                 return;
@@ -233,11 +235,20 @@ namespace JellyfinTizen.Screens
 
             var cards = new List<View>();
 
+            if (row.Kind == HomeRowKind.RecentlyAdded)
+            {
+                _recentlyAddedBadges.Clear();
+            }
+
             foreach (var item in row.Items)
             {
-                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight);
+                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight, out var playedBadge);
                 cards.Add(card);
                 rowContainer.Add(card);
+                if (row.Kind == HomeRowKind.RecentlyAdded)
+                {
+                    _recentlyAddedBadges.Add(playedBadge);
+                }
             }
 
             viewport.Add(rowContainer);
@@ -319,26 +330,49 @@ namespace JellyfinTizen.Screens
             };
         }
 
-        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight)
+        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight, out View playedBadge)
         {
             var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
             var progressRatio = kind == HomeRowKind.ContinueWatching
                 ? GetPlaybackProgressRatio(item?.Media)
                 : null;
 
-            return MediaCardFactory.CreateImageCard(
-                width,
-                imageHeight,
-                textHeight,
-                item.Title,
-                hasSubtitle ? item.Subtitle : null,
-                item.ImageUrl,
-                out _,
-                focusBorder: FocusBorder,
-                titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
-                progressRatio: progressRatio
-            );
+            if (kind == HomeRowKind.RecentlyAdded)
+            {
+                return MediaCardFactory.CreateImageCard(
+                    width,
+                    imageHeight,
+                    textHeight,
+                    item.Title,
+                    hasSubtitle ? item.Subtitle : null,
+                    item.ImageUrl,
+                    out _,
+                    out playedBadge,
+                    focusBorder: FocusBorder,
+                    titlePoint: (int)UiTheme.MediaCardTitle,
+                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                    progressRatio: progressRatio,
+                    played: item?.Media?.Played ?? false
+                );
+            }
+            else
+            {
+                return MediaCardFactory.CreateImageCard(
+                    width,
+                    imageHeight,
+                    textHeight,
+                    item.Title,
+                    hasSubtitle ? item.Subtitle : null,
+                    item.ImageUrl,
+                    out _,
+                    out playedBadge,
+                    focusBorder: FocusBorder,
+                    titlePoint: (int)UiTheme.MediaCardTitle,
+                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                    progressRatio: progressRatio,
+                    played: item?.Media?.Played ?? false
+                );
+            }
         }
 
         private static float? GetPlaybackProgressRatio(JellyfinMovie media)
@@ -418,6 +452,70 @@ namespace JellyfinTizen.Screens
             });
         }
 
+        private async Task RefreshRecentlyAddedPlayedStateAsync()
+        {
+            int raIdx = _rows.FindIndex(r => r != null && r.Kind == HomeRowKind.RecentlyAdded);
+            if (raIdx < 0)
+                return;
+
+            var row = _rows[raIdx];
+            if (row == null || row.Items == null || row.Items.Count == 0)
+                return;
+
+            try
+            {
+                var itemIds = new List<string>();
+                foreach (var item in row.Items)
+                {
+                    if (item?.Media != null && !string.IsNullOrWhiteSpace(item.Media.Id))
+                    {
+                        itemIds.Add(item.Media.Id);
+                    }
+                }
+
+                if (itemIds.Count == 0)
+                    return;
+
+                var serverMovies = await AppState.Jellyfin.GetItemsByIdsAsync(itemIds);
+                if (serverMovies == null || serverMovies.Count == 0)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < row.Items.Count; i++)
+                        {
+                            var item = row.Items[i];
+                            if (item?.Media == null || string.IsNullOrWhiteSpace(item.Media.Id))
+                                continue;
+
+                            var serverMovie = serverMovies.Find(m => m != null && m.Id == item.Media.Id);
+                            if (serverMovie != null)
+                            {
+                                item.Media.Played = serverMovie.Played;
+                                if (i < _recentlyAddedBadges.Count && _recentlyAddedBadges[i] != null)
+                                {
+                                    if (item.Media.Played)
+                                        _recentlyAddedBadges[i].Show();
+                                    else
+                                        _recentlyAddedBadges[i].Hide();
+                                }
+                            }
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync UI update error: {ex.Message}");
+                    }
+                });
+            }
+            catch (System.Exception ex)
+            {
+                TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync fetch error: {ex.Message}");
+            }
+        }
+
         // Reconciles the on-screen Continue Watching row to exactly match the server's list:
         // removes the row if the server returns nothing, inserts a fresh row if the server has
         // items but none is shown, or replaces the row's cards in place (preserving row index /
@@ -476,7 +574,7 @@ namespace JellyfinTizen.Screens
             var newCards = new List<View>();
             foreach (var item in items)
             {
-                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight);
+                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight, out _);
                 newCards.Add(card);
                 rowContainer.Add(card);
             }

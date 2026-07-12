@@ -31,6 +31,7 @@ namespace JellyfinTizen.Screens
         private View _episodeRowContainer;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
+        private readonly List<View> _episodeBadges = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
         private bool _isEpisodeLoadInProgress;
@@ -169,7 +170,13 @@ namespace JellyfinTizen.Screens
             }
 
             if (_episodes == null || _episodes.Count == 0)
+            {
                 _ = LoadEpisodesAsync();
+            }
+            else
+            {
+                _ = RefreshEpisodesPlayedStateFromServerAsync();
+            }
         }
 
         private async Task LoadEpisodesAsync()
@@ -238,6 +245,53 @@ namespace JellyfinTizen.Screens
             _ = LoadMoreEpisodesAsync(force: false);
         }
 
+        private async Task RefreshEpisodesPlayedStateFromServerAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_season.SeriesId) || string.IsNullOrWhiteSpace(_season.Id))
+                return;
+
+            try
+            {
+                var serverEpisodes = await AppState.Jellyfin.GetEpisodesAsync(_season.SeriesId, _season.Id, lightweight: true);
+                if (serverEpisodes == null || serverEpisodes.Count == 0)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < _episodes.Count; i++)
+                        {
+                            var episode = _episodes[i];
+                            if (episode == null || string.IsNullOrWhiteSpace(episode.Id))
+                                continue;
+
+                            var serverEp = serverEpisodes.Find(e => e != null && e.Id == episode.Id);
+                            if (serverEp != null)
+                            {
+                                episode.Played = serverEp.Played;
+                                if (i < _episodeBadges.Count && _episodeBadges[i] != null)
+                                {
+                                    if (episode.Played)
+                                        _episodeBadges[i].Show();
+                                    else
+                                        _episodeBadges[i].Hide();
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync UI update error: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync fetch error: {ex.Message}");
+            }
+        }
+
         private void ResetEpisodeSection()
         {
             if (_episodeRowContainer != null)
@@ -255,6 +309,7 @@ namespace JellyfinTizen.Screens
             }
 
             _episodeViews.Clear();
+            _episodeBadges.Clear();
             _episodes = new List<JellyfinMovie>();
             _episodeIndex = -1;
         }
@@ -317,6 +372,7 @@ namespace JellyfinTizen.Screens
             _episodeLoadingText.Hide();
 
             _episodeViews.Clear();
+            _episodeBadges.Clear();
 
             _episodeViewport.Add(_episodeRowContainer);
             _infoColumn.Add(episodesTitle);
@@ -337,8 +393,9 @@ namespace JellyfinTizen.Screens
 
                 _episodes.Add(episode);
 
-                var card = CreateEpisodeCard(episode);
+                var card = CreateEpisodeCard(episode, out var playedBadge);
                 _episodeViews.Add(card);
+                _episodeBadges.Add(playedBadge);
                 _episodeRowContainer.Add(card);
             }
 
@@ -435,7 +492,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private View CreateEpisodeCard(JellyfinMovie episode)
+        private View CreateEpisodeCard(JellyfinMovie episode, out View playedBadge)
         {
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -472,9 +529,11 @@ namespace JellyfinTizen.Screens
                 subtitle: null,
                 imageUrl: imageUrl,
                 out _,
+                out playedBadge,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                played: episode.Played
             );
         }
 

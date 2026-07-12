@@ -94,6 +94,7 @@ namespace JellyfinTizen.Screens
         // METADATA UI FIELDS (moved from both derived screens)
         // =====================================================================
         protected View _metadataContainer;
+        protected ImageView _watchedIndicator;
         protected View _metadataSummaryRow;
         protected TextLabel _metadataSummaryLabel;
         protected View _metadataRatingGroup;
@@ -696,9 +697,21 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
                     CellPadding = new Size2D(18, 0)
                 }
             };
+
+            _watchedIndicator = new ImageView
+            {
+                WidthSpecification = 30,
+                HeightSpecification = 30,
+                ResourceUrl = IOPath.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, "check_circle.svg"),
+                PreMultipliedAlpha = false,
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+            _watchedIndicator.Hide();
 
             _metadataSummaryLabel = new TextLabel
             {
@@ -741,6 +754,7 @@ namespace JellyfinTizen.Screens
             _metadataRatingGroup.Add(ratingStar);
             _metadataRatingGroup.Add(_metadataRatingLabel);
 
+            _metadataSummaryRow.Add(_watchedIndicator);
             _metadataSummaryRow.Add(_metadataSummaryLabel);
             _metadataSummaryRow.Add(_metadataRatingGroup);
 
@@ -769,6 +783,14 @@ namespace JellyfinTizen.Screens
             var mediaItem = GetMediaItem();
             var summaryText = DetailsScreenHelpers.BuildSummaryText(mediaItem);
             _metadataSummaryLabel.Text = string.IsNullOrWhiteSpace(summaryText) ? " " : summaryText;
+
+            if (_watchedIndicator != null)
+            {
+                if (mediaItem != null && mediaItem.Played)
+                    _watchedIndicator.Show();
+                else
+                    _watchedIndicator.Hide();
+            }
 
             if (mediaItem.CommunityRating.HasValue && mediaItem.CommunityRating.Value > 0)
             {
@@ -1024,6 +1046,7 @@ namespace JellyfinTizen.Screens
             }
 
             long serverTicks = serverItem.PlaybackPositionTicks;
+            bool serverPlayed = serverItem.Played;
 
             RunOnUiThread(() =>
             {
@@ -1037,9 +1060,11 @@ namespace JellyfinTizen.Screens
                     // the freshly-fetched server value BEFORE re-deriving, so this render is
                     // driven purely by the server's answer.
                     item.PlaybackPositionTicks = serverTicks;
-                    TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks} (screen={GetType().Name}), reconciling");
+                    item.Played = serverPlayed;
+                    TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks}, Played={serverPlayed} (screen={GetType().Name}), reconciling");
 
                     ReconcileResumeButtonFromMediaItem();
+                    UpdateMetadataView();
 
                     if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
                         return;
