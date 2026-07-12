@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using System.Runtime.CompilerServices;
 
 namespace JellyfinTizen.Utils
 {
@@ -14,6 +15,7 @@ namespace JellyfinTizen.Utils
 
         private static readonly object _sync = new();
         private static readonly HashSet<Animation> _activeAnimations = new();
+        private static readonly ConditionalWeakTable<ImageView, EventHandler<ImageView.ResourceReadyEventArgs>> _pendingFades = new();
 
         public static Animation Start(int durationMs, Action<Animation> configure, Action onFinished = null)
         {
@@ -91,10 +93,31 @@ namespace JellyfinTizen.Utils
             try { animation.Dispose(); } catch { }
         }
 
+        public static void CancelFadeIn(ImageView imageView)
+        {
+            if (imageView == null)
+                return;
+
+            if (_pendingFades.TryGetValue(imageView, out var handler))
+            {
+                try
+                {
+                    imageView.ResourceReady -= handler;
+                }
+                catch
+                {
+                    // Fail-safe
+                }
+                _pendingFades.Remove(imageView);
+            }
+        }
+
         public static void FadeInOnImageReady(ImageView imageView, string resourceUrl, int durationMs = FadeInDurationMs)
         {
             if (imageView == null)
                 return;
+
+            CancelFadeIn(imageView);
 
             imageView.Opacity = 0.0f;
 
@@ -110,6 +133,7 @@ namespace JellyfinTizen.Utils
             {
                 try
                 {
+                    _pendingFades.Remove(imageView);
                     imageView.ResourceReady -= handler;
                     _ = AnimateTo(imageView, "Opacity", 1.0f, durationMs);
                 }
@@ -119,6 +143,7 @@ namespace JellyfinTizen.Utils
                 }
             };
 
+            _pendingFades.Add(imageView, handler);
             imageView.ResourceReady += handler;
             imageView.ResourceUrl = resourceUrl;
         }

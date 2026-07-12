@@ -583,7 +583,7 @@ namespace JellyfinTizen.Screens
 
                 if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
                 {
-                    image.ResourceUrl = state.LowUrl;
+                    UiAnimator.FadeInOnImageReady(image, state.LowUrl);
                     state.Quality = PosterQuality.Low;
                 }
 
@@ -614,7 +614,7 @@ namespace JellyfinTizen.Screens
                 }
                 else if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
                 {
-                    image.ResourceUrl = state.LowUrl;
+                    UiAnimator.FadeInOnImageReady(image, state.LowUrl);
                     state.Quality = PosterQuality.Low;
                 }
             }
@@ -633,6 +633,7 @@ namespace JellyfinTizen.Screens
                 if (state.Quality == PosterQuality.Unloaded)
                     continue;
 
+                UiAnimator.CancelFadeIn(image);
                 image.ResourceUrl = null;
                 state.Quality = PosterQuality.Unloaded;
             }
