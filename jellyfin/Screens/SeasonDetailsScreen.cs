@@ -59,9 +59,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
 
             var dimOverlay = new View
             {
@@ -99,9 +99,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
 
             posterFrame.Add(poster);
 
@@ -483,7 +483,7 @@ namespace JellyfinTizen.Screens
                 RunOnUiThread(() =>
                 {
                     if (_backdropView != null)
-                        _backdropView.ResourceUrl = backdropUrl;
+                        UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
                 });
             }
             catch

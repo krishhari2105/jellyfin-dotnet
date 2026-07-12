@@ -12,6 +12,8 @@ namespace JellyfinTizen.Utils
         public const int ScrollDurationMs = 160;
         public const int PanelDurationMs = 200;
         public const int FadeInDurationMs = 150;
+        public const int HeroFadeInDurationMs = 300;
+        public const int BackdropFadeInDurationMs = 1000;
 
         private static readonly object _sync = new();
         private static readonly HashSet<Animation> _activeAnimations = new();

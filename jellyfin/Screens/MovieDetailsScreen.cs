@@ -54,9 +54,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
             var dimOverlay = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -90,9 +90,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
             posterFrame.Add(poster);
             _infoColumn = new View
             {
@@ -294,11 +294,11 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = TitleLogoDisplayWidth,
                 HeightSpecification = TitleLogoDisplayHeight,
-                ResourceUrl = logoUrl,
                 PreMultipliedAlpha = false,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.Linear
             };
+            UiAnimator.FadeInOnImageReady(logo, logoUrl, UiAnimator.BackdropFadeInDurationMs);
 
             logoContainer.Add(logo);
             return logoContainer;
