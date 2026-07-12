@@ -323,8 +323,9 @@ namespace JellyfinTizen.UI
         private static int EstimatePillWidth(string text)
         {
             int length = string.IsNullOrWhiteSpace(text) ? 8 : text.Trim().Length;
-            int estimated = 130 + (length * 24);
-            return Math.Clamp(estimated, 220, 620);
+            // Tighter padding and character sizing to avoid overflow in horizontal layouts.
+            int estimated = 80 + (length * 16);
+            return Math.Clamp(estimated, 200, 620);
         }
 
         private static void ApplyTextColor(View view, Color color)

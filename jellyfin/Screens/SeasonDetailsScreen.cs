@@ -23,12 +23,14 @@ namespace JellyfinTizen.Screens
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int EpisodePageSize = 40;
         private const int EpisodePrefetchThreshold = 8;
+        private const int FixedTopContentHeight = 370;
 
         private readonly JellyfinMovie _season;
         private readonly ImageView _backdropView;
         private View _infoColumn;
         private View _episodeViewport;
         private View _episodeRowContainer;
+        private View _overviewViewport;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
         private readonly List<View> _episodeBadges = new();
@@ -74,7 +76,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 80, 80),
+                Padding = new Extents(90, 90, 60, 40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -112,7 +114,7 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
+                    CellPadding = new Size2D(0, 12)
                 }
             };
 
@@ -125,10 +127,19 @@ namespace JellyfinTizen.Screens
                 LineWrapMode = LineWrapMode.Word
             };
 
-            var overviewViewport = new View
+            int titleHeight = 80;
+            int topGaps = 2 * 12;
+            int estimatedOverviewHeight = EstimateOverviewHeight(_season.Overview, 1260, 32);
+            int overviewHeight = Math.Clamp(
+                estimatedOverviewHeight,
+                40,
+                Math.Max(40, FixedTopContentHeight - (titleHeight + topGaps))
+            );
+
+            _overviewViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 260,
+                HeightSpecification = overviewHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
@@ -147,10 +158,10 @@ namespace JellyfinTizen.Screens
                 Ellipsis = false
             };
 
-            overviewViewport.Add(overview);
+            _overviewViewport.Add(overview);
 
             _infoColumn.Add(title);
-            _infoColumn.Add(overviewViewport);
+            _infoColumn.Add(_overviewViewport);
 
             content.Add(posterFrame);
             content.Add(_infoColumn);
@@ -319,8 +330,7 @@ namespace JellyfinTizen.Screens
             if (_episodeViewport == null)
                 return;
 
-            int cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
-            _episodeViewport.HeightSpecification = cardHeight + (FocusPad * 2);
+            _episodeViewport.HeightSpecification = 390;
         }
 
         private void EnsureEpisodeSection()
@@ -332,25 +342,25 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
-                PointSize = 32,
+                Margin = new Extents(0, 0, 14, 0),
+                PointSize = 34,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 Ellipsis = false
             };
-
-            var cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
+            episodesTitle.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
             _episodeViewport = new View
             {
+                PositionX = -12,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = cardHeight + (FocusPad * 2),
+                HeightSpecification = 390,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _episodeRowContainer = new View
             {
-                PositionX = FocusPad,
+                PositionX = 12,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -666,7 +676,7 @@ namespace JellyfinTizen.Screens
 
             if (_episodeIndex == 0)
             {
-                AnimateEpisodeRowTo(FocusPad);
+                AnimateEpisodeRowTo(12);
                 return;
             }
 
@@ -704,5 +714,54 @@ namespace JellyfinTizen.Screens
             _episodeRowContainer.PositionX = targetX;
         }
 
+        private static int EstimateOverviewHeight(string text, int width, float pointSize)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 40;
+
+            float approximateCharWidth = pointSize * 0.54f;
+            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(paragraph))
+                {
+                    lineCount++;
+                    continue;
+                }
+
+                int currentLineLength = 0;
+                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int wordLength = word.Length;
+                    if (currentLineLength == 0)
+                    {
+                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        currentLineLength = wordLength % maxCharsPerLine;
+                        if (currentLineLength == 0 && wordLength > 0)
+                            currentLineLength = maxCharsPerLine;
+                        continue;
+                    }
+
+                    int requiredLength = currentLineLength + 1 + wordLength;
+                    if (requiredLength <= maxCharsPerLine)
+                    {
+                        currentLineLength = requiredLength;
+                        continue;
+                    }
+
+                    lineCount++;
+                    currentLineLength = wordLength % maxCharsPerLine;
+                    if (currentLineLength == 0 && wordLength > 0)
+                        currentLineLength = maxCharsPerLine;
+                }
+                if (currentLineLength == 0)
+                    lineCount++;
+            }
+
+            float lineHeight = pointSize * 1.35f;
+            return (int)Math.Ceiling(lineCount * lineHeight);
+        }
     }
 }
