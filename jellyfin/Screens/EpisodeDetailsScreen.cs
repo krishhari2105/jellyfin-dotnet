@@ -219,6 +219,8 @@ namespace JellyfinTizen.Screens
         {
             if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
                 _ = LoadMediaSourcesAndSubtitlesAsync();
+            // Litefin-style: always re-fetch server-truth resume state on every OnShow.
+            _ = RefreshResumeStateFromServerAsync();
             if (_buttons.Count > 0)
                 FocusButton(0);
             RunOnUiThread(RefreshOverviewScrollBounds);
@@ -261,6 +263,11 @@ namespace JellyfinTizen.Screens
                 _subtitleStreamsLoaded = true;
 
                 NormalizeSelectionStateForCurrentMediaSource();
+                // Re-derive Resume button state from the authoritative
+                // GetMediaItem().PlaybackPositionTicks BEFORE repainting, so this
+                // network-fetch-completion path cannot stomp an optimistic local update with
+                // stale field state. RebuildActionButtons is only the dumb repaint step.
+                ReconcileResumeButtonFromMediaItem();
                 RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
                 UpdateVersionButtonText();
                 UpdateMetadataView();
@@ -291,6 +298,11 @@ namespace JellyfinTizen.Screens
                     _actionButtonReflowScheduled = false;
                     if (_buttonGroup == null)
                         return;
+
+                    // Re-derive Resume button state from the current authoritative
+                    // mediaItem.PlaybackPositionTicks before rebuilding, so this reflow does
+                    // not repaint stale button state.
+                    ReconcileResumeButtonFromMediaItem();
 
                     RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
                     if (_buttons.Count > 0)

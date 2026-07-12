@@ -958,6 +958,94 @@ namespace JellyfinTizen.Screens
         // =====================================================================
         protected abstract void PlayMedia(JellyfinMovie media, int startPositionMs);
 
+        // Single source of truth for "should the Resume button exist right now" — derives
+        // _resumeAvailable/_resumeButton purely from the CURRENT authoritative value of
+        // GetMediaItem().PlaybackPositionTicks. Called by RefreshResumeStateFromServerAsync
+        // (the OnShow server-truth fetch) and by the action-button reflow / media-source load
+        // paths, so button state is always recomputed from the live mediaItem field rather
+        // than from a stale field snapshot.
+        protected void ReconcileResumeButtonFromMediaItem()
+        {
+            var mediaItem = GetMediaItem();
+            if (mediaItem == null)
+                return;
+
+            _resumeAvailable = mediaItem.PlaybackPositionTicks > 0;
+
+            if (_resumeAvailable && _resumeButton == null)
+            {
+                _resumeButton = CreateActionButton(
+                    "Resume",
+                    isPrimary: false,
+                    iconFile: "resume.svg",
+                    width: null,
+                    iconSize: PlayActionButtonIconSize);
+            }
+            else if (!_resumeAvailable && _resumeButton != null)
+            {
+                _resumeButton = null;
+            }
+        }
+
+        // Litefin-style "server is truth" resume refresh. Called on every OnShow() (not just
+        // first load): always re-fetches this item's authoritative UserData/PlaybackPositionTicks
+        // from the server, then re-derives the Resume button from ONLY that freshly-fetched
+        // value. This deliberately overwrites any locally-cached/optimistically-written
+        // position so the rendered state matches the server exactly. Fully non-blocking: the
+        // fetch is awaited on a background continuation and the UI mutation is marshalled back
+        // onto the UI thread. Uses the same single-item GetItemAsync endpoint used elsewhere.
+        protected async Task RefreshResumeStateFromServerAsync()
+        {
+            var mediaItem = GetMediaItem();
+            if (mediaItem == null || string.IsNullOrWhiteSpace(mediaItem.Id))
+                return;
+
+            JellyfinMovie serverItem;
+            try
+            {
+                serverItem = await AppState.Jellyfin.GetItemAsync(mediaItem.Id);
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: fetch failed (screen={GetType().Name}): {ex.Message}");
+                return;
+            }
+
+            if (serverItem == null)
+                return;
+
+            long serverTicks = serverItem.PlaybackPositionTicks;
+
+            RunOnUiThread(() =>
+            {
+                try
+                {
+                    var item = GetMediaItem();
+                    if (item == null)
+                        return;
+
+                    // Server truth only: overwrite the local (possibly optimistic) value with
+                    // the freshly-fetched server value BEFORE re-deriving, so this render is
+                    // driven purely by the server's answer.
+                    item.PlaybackPositionTicks = serverTicks;
+                    TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks} (screen={GetType().Name}), reconciling");
+
+                    ReconcileResumeButtonFromMediaItem();
+
+                    if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
+                        return;
+
+                    RebuildActionButtons(includeVersionButton: (_mediaSources?.Count ?? 0) > 1);
+                    if (_buttons.Count > 0)
+                        FocusButton(Math.Clamp(_buttonIndex, 0, _buttons.Count - 1));
+                }
+                catch
+                {
+                    // Screen may have been navigated away/disposed between fetch and continuation.
+                }
+            });
+        }
+
         protected static int TicksToMs(long ticks)
         {
             if (ticks <= 0) return 0;

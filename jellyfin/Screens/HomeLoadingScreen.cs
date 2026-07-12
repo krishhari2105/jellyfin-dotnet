@@ -353,7 +353,7 @@ namespace JellyfinTizen.Screens
             return rows;
         }
 
-        private static string GetThumbOrBackdropUrl(
+        internal static string GetThumbOrBackdropUrl(
             JellyfinTizen.Models.JellyfinMovie item,
             string serverUrl,
             string apiKey,
@@ -391,7 +391,7 @@ namespace JellyfinTizen.Screens
             return string.Empty;
         }
 
-        private static string BuildCachedImageUrl(string key, Func<string> factory)
+        internal static string BuildCachedImageUrl(string key, Func<string> factory)
         {
             if (string.IsNullOrWhiteSpace(key) || factory == null)
                 return null;
