@@ -82,6 +82,8 @@ namespace JellyfinTizen.Core
             Jellyfin.DeviceId = DeviceId;
             BurnInSubtitles = false;
             ForceTsTranscoding = false;
+            PreviewAutoplayEnabled = false;
+            DetailsPreviewDelayMs = 1800;
 
             // Initialize lifecycle state machine
             AppLifecycle.Transition(AppLifecycleState.NotStarted, AppLifecycleState.ProcessLaunch);
@@ -1259,6 +1261,15 @@ namespace JellyfinTizen.Core
 
         public static int PlayerBufferInitialMs { get; set; } = 6000;
         public static int PlayerBufferResumeMs { get; set; } = 4000;
+
+        // Netflix-style background autoplay on the details/preview screen.
+        // PreviewAutoplayEnabled gates whether playable leaves (Movie/Episode/Video/
+        // MusicVideo) route into VideoPlayerScreen's preview mode instead of the standalone
+        // details screens. DetailsPreviewDelayMs is the debounce/delay window before the
+        // background video actually starts (also acts as the guard against kicking off
+        // GetPlaybackInfo/decoder work for titles the user only glances at).
+        public static bool PreviewAutoplayEnabled { get; set; } = false;
+        public static int DetailsPreviewDelayMs { get; set; } = 1800;
         public static int TailscaleSocketWaitSeconds { get; set; } = 30;
         public static int StartupFallbackTimeoutMs { get; set; } = 12000;
         public static int HomeLoadingFallbackTimeoutMs { get; set; } = 25000;
