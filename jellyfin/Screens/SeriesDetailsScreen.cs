@@ -23,7 +23,7 @@ namespace JellyfinTizen.Screens
         private const int SeasonRowTopInset = FocusPad;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int TitleLogoMaxWidth = 720;
-        private const int TitleLogoQuality = 76;
+        private const int TitleLogoQuality = 50;
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
         private const int FixedTopContentHeight = 370;
@@ -50,8 +50,7 @@ namespace JellyfinTizen.Screens
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
                 _series,
                 serverUrl,
-                apiKey,
-                maxWidth: 1920);
+                apiKey);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
@@ -80,7 +79,7 @@ namespace JellyfinTizen.Screens
 
             var posterUrl =
                 $"{serverUrl}/Items/{_series.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
@@ -357,14 +356,14 @@ namespace JellyfinTizen.Screens
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (season.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 

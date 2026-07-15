@@ -785,6 +785,7 @@ namespace JellyfinTizen.Screens
 
         private string RewriteStreamUrlForTailscale(string url)
         {
+#if TAILSCALE
             if (string.IsNullOrWhiteSpace(url))
                 return url;
 
@@ -811,6 +812,10 @@ namespace JellyfinTizen.Screens
             {
                 return url;
             }
+#else
+            // Standalone build: stream directly over http/https.
+            return url;
+#endif
         }
 
         private string BuildStreamUrl(

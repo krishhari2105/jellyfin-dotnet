@@ -53,8 +53,8 @@ namespace JellyfinTizen.Screens
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
             var backdropUrl = !string.IsNullOrWhiteSpace(_season.SeriesId)
-                ? JellyfinImageUrlBuilder.BuildImageUrl(serverUrl, _season.SeriesId, "Backdrop", 1920, 90, apiKey)
-                : JellyfinImageUrlBuilder.BuildBackdropUrl(_season, serverUrl, apiKey, maxWidth: 1920);
+                ? JellyfinImageUrlBuilder.BuildImageUrl(serverUrl, _season.SeriesId, "Backdrop", JellyfinImageUrlBuilder.DefaultBackdropMaxWidth, JellyfinImageUrlBuilder.DefaultBackdropQuality, apiKey)
+                : JellyfinImageUrlBuilder.BuildBackdropUrl(_season, serverUrl, apiKey);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
 
             _backdropView = new ImageView
@@ -86,7 +86,7 @@ namespace JellyfinTizen.Screens
 
             var posterUrl =
                 $"{serverUrl}/Items/{_season.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
@@ -485,7 +485,7 @@ namespace JellyfinTizen.Screens
                 var series = await AppState.Jellyfin.GetItemAsync(_season.SeriesId);
                 var apiKey = Uri.EscapeDataString(AppState.AccessToken);
                 var serverUrl = AppState.Jellyfin.ServerUrl;
-                var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(series, serverUrl, apiKey, maxWidth: 1920);
+                var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(series, serverUrl, apiKey);
 
                 if (string.IsNullOrWhiteSpace(backdropUrl))
                     return;
@@ -512,21 +512,21 @@ namespace JellyfinTizen.Screens
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Thumb/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Primary/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasBackdrop)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Backdrop/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=65&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 

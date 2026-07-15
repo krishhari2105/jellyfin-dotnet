@@ -22,7 +22,7 @@ namespace JellyfinTizen.Screens
         private const float EpisodeFocusScale = 1.03f;
         private const int FixedTopContentHeight = 500;
         private const int TitleLogoMaxWidth = 720;
-        private const int TitleLogoQuality = 76;
+        private const int TitleLogoQuality = 50;
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
         private readonly JellyfinMovie _mediaItem;
@@ -47,7 +47,6 @@ namespace JellyfinTizen.Screens
                 _mediaItem,
                 serverUrl,
                 apiKey,
-                maxWidth: 1920,
                 fallbackBackdropItemId: _mediaItem.IsEpisode ? _mediaItem.SeriesId : null);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
@@ -76,7 +75,7 @@ namespace JellyfinTizen.Screens
             };
             var posterUrl =
                 $"{serverUrl}/Items/{_mediaItem.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
             var posterFrame = new View
             {

@@ -3,6 +3,19 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net6.0-tizen9.0</TargetFramework>
+    <!-- Set to false (e.g. dotnet build -p:TailscaleEnabled=false) to produce a
+         standalone Jellyfin client with all Tailscale code, screens, the
+         tailscaled binary and the QRCoder dependency removed. -->
+    <TailscaleEnabled Condition=" '$(TailscaleEnabled)' == '' ">true</TailscaleEnabled>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(TailscaleEnabled)' == 'true' ">
+    <DefineConstants>$(DefineConstants);TAILSCALE</DefineConstants>
+  </PropertyGroup>
+
+  <!-- Each flavor must never glob the other flavor's generated files -->
+  <PropertyGroup>
+    <DefaultItemExcludes>$(DefaultItemExcludes);bin/**;obj/**;bin-standalone/**;obj-standalone/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
@@ -17,9 +30,27 @@
     <Folder Include="res\" />
   </ItemGroup>
 
+  <!-- Tailscale-only sources: compiled out of the standalone build -->
+  <ItemGroup Condition=" '$(TailscaleEnabled)' != 'true' ">
+    <Compile Remove="Core\TailscaleService.cs" />
+    <Compile Remove="Core\TailscaleProxyService.cs" />
+    <Compile Remove="Core\TailscaleWebProxy.cs" />
+    <Compile Remove="Core\TailscaleConnectionMonitor.cs" />
+    <Compile Remove="Screens\TailscaleAuthScreen.cs" />
+    <Compile Remove="Screens\TailscaleScreen.cs" />
+    <Compile Remove="Utils\QrCodeHelper.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Tizen.NET" Version="9.0.0.*" />
-    <PackageReference Include="QRCoder" Version="1.6.0" />
+    <PackageReference Include="QRCoder" Version="1.6.0" Condition=" '$(TailscaleEnabled)' == 'true' " />
+  </ItemGroup>
+
+  <!-- Keep the tailscaled binaries out of the standalone TPK
+       (TizenTpkUserExcludeFiles matches by file name during TPK packaging) -->
+  <ItemGroup Condition=" '$(TailscaleEnabled)' != 'true' ">
+    <TizenTpkUserExcludeFiles Include="tailscaled" />
+    <TizenTpkUserExcludeFiles Include="tailscaled-x86" />
   </ItemGroup>
 
 </Project>

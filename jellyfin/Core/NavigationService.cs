@@ -9,6 +9,7 @@ using Tizen.NUI.BaseComponents;
 using NColor = Tizen.NUI.Color;
 using JellyfinTizen.Screens;
 using JellyfinTizen.UI;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
@@ -363,8 +364,73 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
-            
+
+            // Restored screens have all images already loaded, so the per-image
+            // ResourceReady fades never re-fire. Play a lightweight fade-from-black
+            // transition to match the forward-navigation feel.
+            //
+            // We fade a single solid-black leaf overlay (opaque -> transparent) on
+            // top of everything, rather than animating the restored screen's own
+            // Opacity, for two reasons:
+            //   1. Performance: animating a heavyweight screen subtree's Opacity
+            //      forces DALi to render the whole tree (grids of cached posters,
+            //      backdrops, logos, ...) into an offscreen buffer every frame for
+            //      alpha compositing, which stutters/hangs on TV GPU hardware.
+            //      A leaf overlay needs no offscreen compositing, so it is cheap.
+            //   2. Consistency: several screens (Home, Movie/Episode details) show
+            //      the opaque full-screen loading overlay as the first statement of
+            //      OnShow(). Animating the screen's Opacity happened *behind* that
+            //      overlay and was therefore invisible, making the transition look
+            //      instant on those screens. A top-most overlay fades consistently
+            //      regardless of what OnShow() puts on screen.
+            PlayBackNavigationFade();
+
             try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
+        }
+
+        // Lightweight fade-from-black transition used by backward navigation. See the
+        // rationale in NavigateBackImmediate. The overlay is a single solid-black leaf
+        // view (no children) kept topmost, so its Opacity animation is cheap and always
+        // visible above whatever OnShow() attaches (including the loading overlay).
+        private static View _backFadeOverlay;
+        private static Animation _backFadeAnimation;
+
+        private static void PlayBackNavigationFade()
+        {
+            if (_window == null)
+                return;
+
+            if (_backFadeOverlay == null)
+            {
+                _backFadeOverlay = new View
+                {
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FillToParent,
+                    BackgroundColor = new NColor(0f, 0f, 0f, 1f),
+                    // Never participate in D-pad focus / key routing.
+                    Focusable = false
+                };
+            }
+
+            // Cancel any in-flight fade first. StopAndDispose stops the previous
+            // animation (whose onFinished removes the overlay); we then re-add it
+            // below, so the ordering stays correct even under rapid back presses.
+            UiAnimator.StopAndDispose(ref _backFadeAnimation);
+
+            _backFadeOverlay.Opacity = 1.0f;
+            try { _window.Remove(_backFadeOverlay); } catch { }
+            _window.Add(_backFadeOverlay);
+            _backFadeOverlay.RaiseToTop();
+
+            _backFadeAnimation = UiAnimator.AnimateTo(
+                _backFadeOverlay,
+                "Opacity",
+                0.0f,
+                UiAnimator.FadeInDurationMs,
+                () =>
+                {
+                    try { _window?.Remove(_backFadeOverlay); } catch { }
+                });
         }
 
         private static void EnsureExitConfirmationPopupCreated()

@@ -58,6 +58,7 @@ namespace JellyfinTizen.Screens
 
                 _loadingVisual.Start();
 
+#if TAILSCALE
                 // Detect if the active server uses Tailscale and wait for it to initialize
                 try
                 {
@@ -94,6 +95,7 @@ namespace JellyfinTizen.Screens
                 {
                     Tizen.Log.Warn("StartupScreen", $"Failed checking Tailscale status: {ex.Message}");
                 }
+#endif
 
                 // Safety fallback if network calls hang for any reason.
                 _fallbackTimer = new ThreadingTimer(_ =>
@@ -127,7 +129,8 @@ namespace JellyfinTizen.Screens
                     {
                         _navigated = true;
                         _fallbackTimer?.Dispose();
-                        
+
+#if TAILSCALE
                         // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
                         if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
                         {
@@ -137,6 +140,7 @@ namespace JellyfinTizen.Screens
                             );
                         }
                         else
+#endif
                         {
                             NavigationService.Navigate(
                                 new HomeLoadingScreen(),
@@ -149,6 +153,7 @@ namespace JellyfinTizen.Screens
 
                 if (AppState.TryRestoreServer())
                 {
+#if TAILSCALE
                     // If the restored server is a Tailscale URL and not connected, go through Tailscale auth first
                     if (AppState.IsTailscaleUrl(AppState.ServerUrl) && !await AppState.IsTailscaleConnectedAsync())
                     {
@@ -163,6 +168,7 @@ namespace JellyfinTizen.Screens
                         }
                         return;
                     }
+#endif
 
                     if (!_navigated)
                     {
@@ -238,13 +244,15 @@ namespace JellyfinTizen.Screens
 
         private static ScreenBase CreateServerEntryScreen()
         {
+#if TAILSCALE
             // Show Tailscale auth screen if daemon is running OR socket is reachable from a prior run
             if (AppState.Tailscale != null &&
                 (AppState.Tailscale.IsRunning || AppState.Tailscale.IsSocketReachable))
             {
                 return new TailscaleAuthScreen();
             }
-            
+#endif
+
             return AppState.HasStoredServers()
                 ? new ServerPickerScreen()
                 : new ServerSetupScreen();

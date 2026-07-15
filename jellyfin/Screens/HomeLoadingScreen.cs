@@ -226,8 +226,8 @@ namespace JellyfinTizen.Screens
                 {
                     var imageUrl = lib.HasPrimaryImage
                         ? BuildCachedImageUrl(
-                            $"library-primary:{lib.Id}:760:60:{apiKey}",
-                            () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth=760&quality=60&api_key={apiKey}"))
+                            $"library-primary:{lib.Id}:760:50:{apiKey}",
+                            () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth=760&quality=50&api_key={apiKey}"))
                         : null;
 
                     librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
@@ -265,8 +265,8 @@ namespace JellyfinTizen.Screens
                 {
                     var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 280);
                     imageUrl = BuildCachedImageUrl(
-                        $"nextup:{item.Id}:280:70:{apiKey}",
-                        () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=70")));
+                        $"nextup:{item.Id}:280:50:{apiKey}",
+                        () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=50")));
                     var episodePrefix = FormatEpisodeCode(item);
                     var title = string.IsNullOrWhiteSpace(episodePrefix)
                         ? item.Name
@@ -297,8 +297,8 @@ namespace JellyfinTizen.Screens
                 {
                     var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 280);
                     imageUrl = BuildCachedImageUrl(
-                        $"continue:{item.Id}:280:70:{apiKey}",
-                        () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=70")));
+                        $"continue:{item.Id}:280:50:{apiKey}",
+                        () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=50")));
 
                     continueRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
@@ -330,8 +330,8 @@ namespace JellyfinTizen.Screens
                 foreach (var item in recent)
                 {
                     var imageUrl = BuildCachedImageUrl(
-                        $"recent-primary:{item.Id}:280:70:{apiKey}",
-                        () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=280&quality=70&api_key={apiKey}"));
+                        $"recent-primary:{item.Id}:280:50:{apiKey}",
+                        () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=280&quality=50&api_key={apiKey}"));
 
                     recentRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
@@ -361,18 +361,18 @@ namespace JellyfinTizen.Screens
         {
             if (item.HasThumb)
                 return BuildCachedImageUrl(
-                    $"thumb:{item.Id}:{maxWidth}:70:{apiKey}",
-                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Thumb/0?maxWidth={maxWidth}&quality=70&api_key={apiKey}"));
+                    $"thumb:{item.Id}:{maxWidth}:50:{apiKey}",
+                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Thumb/0?maxWidth={maxWidth}&quality=50&api_key={apiKey}"));
 
             if (item.HasBackdrop)
                 return BuildCachedImageUrl(
-                    $"backdrop:{item.Id}:{maxWidth}:65:{apiKey}",
-                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Backdrop/0?maxWidth={maxWidth}&quality=65&api_key={apiKey}"));
+                    $"backdrop:{item.Id}:{maxWidth}:50:{apiKey}",
+                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Backdrop/0?maxWidth={maxWidth}&quality=50&api_key={apiKey}"));
 
             if (item.HasPrimary)
                 return BuildCachedImageUrl(
-                    $"primary:{item.Id}:{maxWidth}:70:{apiKey}",
-                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=70&api_key={apiKey}"));
+                    $"primary:{item.Id}:{maxWidth}:50:{apiKey}",
+                    () => AppState.RewriteImageUrlForTailscale($"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={maxWidth}&quality=50&api_key={apiKey}"));
 
             return null;
         }

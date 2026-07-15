@@ -37,7 +37,6 @@ namespace JellyfinTizen.Screens
         private const int PosterRefreshIntervalMs = 150;
         private const int PosterRefreshBurstTicks = 6;
         private const int BuildTickMs = 15;
-        private const int HighQualityDelayMs = 200;
 
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
 
@@ -72,31 +71,23 @@ namespace JellyfinTizen.Screens
         private int _settingsPanelBaseX;
         private Timer _buildTimer;
         private Timer _posterRefreshTimer;
-        private Timer _highQualityDelayTimer;
         private int _posterRefreshTicksRemaining;
         private int _nextMovieIndexToBuild;
         private int _nextRowY;
         private bool _isGridBuildCompleted;
-        private bool _allowHighQualityUpgrade;
 
         private sealed class PosterLoadState
         {
-            public string LowUrl;
-            public string HighUrl;
-            public PosterQuality Quality;
+            // Single display-size URL. Posters are fetched exactly once (no low->high
+            // upgrade), which halves the on-demand image resizes a weak server has to do.
+            public string Url;
+            public bool Loaded;
         }
 
         private sealed class PosterEntry
         {
             public ImageView Image;
             public PosterLoadState State;
-        }
-
-        private enum PosterQuality
-        {
-            Unloaded = 0,
-            Low = 1,
-            High = 2
         }
 
         public LibraryMoviesGridScreen(JellyfinLibrary library, List<JellyfinMovie> movies)
@@ -220,7 +211,6 @@ namespace JellyfinTizen.Screens
             if (_movies == null || _movies.Count == 0)
                 return;
 
-            _allowHighQualityUpgrade = false;
             if (_grid.Count == 0)
             {
                 BuildGridBatch(1);
@@ -249,7 +239,6 @@ namespace JellyfinTizen.Screens
             EnsureVisiblePostersLoaded();
             StartBuildTimer();
             StartPosterRefreshTimer();
-            StartHighQualityDelayTimer();
 
             try
             {
@@ -331,7 +320,6 @@ namespace JellyfinTizen.Screens
         {
             _buildTimer?.Stop();
             _posterRefreshTimer?.Stop();
-            _highQualityDelayTimer?.Stop();
             _posterRefreshTicksRemaining = 0;
         }
 
@@ -381,7 +369,7 @@ namespace JellyfinTizen.Screens
 
         private View CreatePosterCard(JellyfinMovie movie, int rowNumber, out View playedBadge)
         {
-            BuildPosterUrls(movie, out var posterLowUrl, out var posterHighUrl);
+            BuildPosterUrl(movie, out var posterUrl);
 
             var wrapper = MediaCardFactory.CreateImageCard(
                 _cardWidth,
@@ -400,9 +388,8 @@ namespace JellyfinTizen.Screens
 
             var state = new PosterLoadState
             {
-                LowUrl = posterLowUrl,
-                HighUrl = posterHighUrl,
-                Quality = PosterQuality.Unloaded
+                Url = posterUrl,
+                Loaded = false
             };
 
             if (!_posterEntriesByRow.TryGetValue(rowNumber, out var rowEntries))
@@ -420,10 +407,9 @@ namespace JellyfinTizen.Screens
             return wrapper;
         }
 
-        private void BuildPosterUrls(JellyfinMovie movie, out string lowUrl, out string highUrl)
+        private void BuildPosterUrl(JellyfinMovie movie, out string url)
         {
-            lowUrl = null;
-            highUrl = null;
+            url = null;
 
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -453,11 +439,12 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(basePath))
                 return;
 
-            int lowWidth = Math.Max(_useLandscapeCards ? 180 : 120, _cardWidth / 2);
-            // Lower quality (40) and smaller dimensions for faster initial load
-            lowUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={lowWidth}&quality=40&api_key={apiKey}");
-            // Reduce high quality from 90/85 to 70 for faster loading over Tailscale
-            highUrl = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality=70&api_key={apiKey}");
+            // Single fetch at the card's display size. We no longer request a low-quality
+            // placeholder first and upgrade later: on a weak server every distinct
+            // maxWidth/quality triggers a separate on-demand resize, so the old low->high
+            // scheme doubled the server's image work. quality=50 at the exact card width
+            // favours performance over fidelity per project preference.
+            url = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality=50&api_key={apiKey}");
         }
 
         private void StartBuildTimer()
@@ -510,23 +497,6 @@ namespace JellyfinTizen.Screens
             return true;
         }
 
-        private void StartHighQualityDelayTimer()
-        {
-            _highQualityDelayTimer ??= new Timer(HighQualityDelayMs);
-            _highQualityDelayTimer.Stop();
-            _highQualityDelayTimer.Tick -= OnHighQualityDelayTick;
-            _highQualityDelayTimer.Tick += OnHighQualityDelayTick;
-            _highQualityDelayTimer.Start();
-        }
-
-        private bool OnHighQualityDelayTick(object sender, Timer.TickEventArgs e)
-        {
-            _highQualityDelayTimer?.Stop();
-            _allowHighQualityUpgrade = true;
-            EnsureVisiblePostersLoaded();
-            return false;
-        }
-
         private void EnsureVisiblePostersLoaded()
         {
             if (_posterEntriesByRow.Count == 0 || _grid.Count == 0)
@@ -544,25 +514,20 @@ namespace JellyfinTizen.Screens
             int firstVisibleRow = Math.Max(0, (visibleTop / rowHeight) - PosterVisibleRowBuffer);
             int lastVisibleRow = Math.Min(_grid.Count - 1, (visibleBottom / rowHeight) + PosterVisibleRowBuffer);
 
-            int keepLowMin = Math.Max(0, firstVisibleRow - PosterKeepLowRowBuffer);
-            int keepLowMax = Math.Min(_grid.Count - 1, lastVisibleRow + PosterKeepLowRowBuffer);
+            // Keep a small buffer of off-screen rows loaded so scrolling back is instant;
+            // unload everything beyond it to cap memory. Posters are now a single quality
+            // tier, so "keep loaded" and "visible" are the same operation.
+            int keepLoadedMin = Math.Max(0, firstVisibleRow - PosterKeepLowRowBuffer);
+            int keepLoadedMax = Math.Min(_grid.Count - 1, lastVisibleRow + PosterKeepLowRowBuffer);
 
-            for (int row = firstVisibleRow; row <= lastVisibleRow; row++)
+            for (int row = keepLoadedMin; row <= keepLoadedMax; row++)
             {
-                UpgradeRowToVisibleQuality(row);
-            }
-
-            for (int row = keepLowMin; row <= keepLowMax; row++)
-            {
-                if (row >= firstVisibleRow && row <= lastVisibleRow)
-                    continue;
-
-                KeepRowAtLowQuality(row);
+                EnsureRowLoaded(row);
             }
 
             foreach (var rowEntry in _posterEntriesByRow)
             {
-                if (rowEntry.Key >= keepLowMin && rowEntry.Key <= keepLowMax)
+                if (rowEntry.Key >= keepLoadedMin && rowEntry.Key <= keepLoadedMax)
                     continue;
 
                 UnloadRow(rowEntry.Key);
@@ -571,51 +536,19 @@ namespace JellyfinTizen.Screens
             PerfTrace.End("LibraryMoviesGridScreen.EnsureVisiblePostersLoaded", timer);
         }
 
-        private void UpgradeRowToVisibleQuality(int row)
+        private void EnsureRowLoaded(int row)
         {
             if (!_posterEntriesByRow.TryGetValue(row, out var entries))
                 return;
 
             foreach (var entry in entries)
             {
-                var image = entry.Image;
                 var state = entry.State;
 
-                if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
+                if (!state.Loaded && !string.IsNullOrWhiteSpace(state.Url))
                 {
-                    UiAnimator.FadeInOnImageReady(image, state.LowUrl);
-                    state.Quality = PosterQuality.Low;
-                }
-
-                if (_allowHighQualityUpgrade &&
-                    state.Quality == PosterQuality.Low &&
-                    !string.IsNullOrWhiteSpace(state.HighUrl))
-                {
-                    image.ResourceUrl = state.HighUrl;
-                    state.Quality = PosterQuality.High;
-                }
-            }
-        }
-
-        private void KeepRowAtLowQuality(int row)
-        {
-            if (!_posterEntriesByRow.TryGetValue(row, out var entries))
-                return;
-
-            foreach (var entry in entries)
-            {
-                var image = entry.Image;
-                var state = entry.State;
-
-                if (state.Quality == PosterQuality.High && !string.IsNullOrWhiteSpace(state.LowUrl))
-                {
-                    image.ResourceUrl = state.LowUrl;
-                    state.Quality = PosterQuality.Low;
-                }
-                else if (state.Quality == PosterQuality.Unloaded && !string.IsNullOrWhiteSpace(state.LowUrl))
-                {
-                    UiAnimator.FadeInOnImageReady(image, state.LowUrl);
-                    state.Quality = PosterQuality.Low;
+                    UiAnimator.FadeInOnImageReady(entry.Image, state.Url);
+                    state.Loaded = true;
                 }
             }
         }
@@ -630,12 +563,12 @@ namespace JellyfinTizen.Screens
                 var image = entry.Image;
                 var state = entry.State;
 
-                if (state.Quality == PosterQuality.Unloaded)
+                if (!state.Loaded)
                     continue;
 
                 UiAnimator.CancelFadeIn(image);
                 image.ResourceUrl = null;
-                state.Quality = PosterQuality.Unloaded;
+                state.Loaded = false;
             }
         }
 
@@ -697,10 +630,6 @@ namespace JellyfinTizen.Screens
             var nextCol = Math.Clamp(_colIndex + colDelta, 0, _grid[nextRow].Count - 1);
             if (nextRow == _rowIndex && nextCol == _colIndex)
                 return;
-
-            // Keep navigation smooth by deferring high-quality upgrades until focus settles.
-            _allowHighQualityUpgrade = false;
-            StartHighQualityDelayTimer();
 
             Highlight(false);
 

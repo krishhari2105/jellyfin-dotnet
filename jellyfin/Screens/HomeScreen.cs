@@ -403,7 +403,7 @@ namespace JellyfinTizen.Screens
 
             return HomeLoadingScreen.BuildCachedImageUrl(
                 $"continue:{media.Id}:280:70:{apiKey}",
-                () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=70")));
+                () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=50")));
         }
 
         private int ComputeNextRowY()

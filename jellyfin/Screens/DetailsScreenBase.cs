@@ -711,6 +711,9 @@ namespace JellyfinTizen.Screens
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos
             };
+            // ExcludeLayouting must track visibility: on TV firmware a hidden
+            // view still occupies its LinearLayout cell, indenting the row.
+            _watchedIndicator.ExcludeLayouting = true;
             _watchedIndicator.Hide();
 
             _metadataSummaryLabel = new TextLabel
@@ -787,18 +790,26 @@ namespace JellyfinTizen.Screens
             if (_watchedIndicator != null)
             {
                 if (mediaItem != null && mediaItem.Played)
+                {
+                    _watchedIndicator.ExcludeLayouting = false;
                     _watchedIndicator.Show();
+                }
                 else
+                {
+                    _watchedIndicator.ExcludeLayouting = true;
                     _watchedIndicator.Hide();
+                }
             }
 
             if (mediaItem.CommunityRating.HasValue && mediaItem.CommunityRating.Value > 0)
             {
                 _metadataRatingLabel.Text = mediaItem.CommunityRating.Value.ToString("0.0", CultureInfo.InvariantCulture);
+                _metadataRatingGroup.ExcludeLayouting = false;
                 _metadataRatingGroup.Show();
             }
             else
             {
+                _metadataRatingGroup.ExcludeLayouting = true;
                 _metadataRatingGroup.Hide();
             }
 

@@ -11,9 +11,11 @@ namespace JellyfinTizen.Core
 {
     public static class AppState
     {
+#if TAILSCALE
         public static Task TailscaleReadyTask { get; private set; }
 
         public static bool TailscaleStartupFailed { get; private set; } = false;
+#endif
         private const string KeyServerUrl = "jf_server_url";
         private const string KeyAccessToken = "jf_access_token";
         private const string KeyUserId = "jf_user_id";
@@ -38,12 +40,16 @@ namespace JellyfinTizen.Core
         public static bool ForceTsTranscoding { get; set; }
 
         public static JellyfinService Jellyfin { get; private set; }
+#if TAILSCALE
         public static TailscaleService Tailscale { get; private set; }
         public static TailscaleProxyService TailscaleProxy { get; private set; }
+#endif
         public static HttpClient HttpClient { get; private set; }
         public static int MaxStoredServers => MaxStoredServersCount;
         public static List<JellyfinTizen.Models.JellyfinUser> CachedPublicUsers { get; set; }
+#if TAILSCALE
         public static TailscaleConnectionMonitor ConnectionMonitor { get; private set; }
+#endif
 
         public sealed class StoredServer
         {
@@ -77,12 +83,13 @@ namespace JellyfinTizen.Core
             BurnInSubtitles = false;
             ForceTsTranscoding = false;
 
+            // Initialize lifecycle state machine
+            AppLifecycle.Transition(AppLifecycleState.NotStarted, AppLifecycleState.ProcessLaunch);
+#if TAILSCALE
             // Create Tailscale service instance (UI will show it if binary is present)
             Tailscale = new TailscaleService();
             ConnectionMonitor = new TailscaleConnectionMonitor();
 
-            // Initialize lifecycle state machine
-            AppLifecycle.Transition(AppLifecycleState.NotStarted, AppLifecycleState.ProcessLaunch);
             AppLifecycle.Transition(AppLifecycleState.ProcessLaunch, AppLifecycleState.TailscaleStaging);
 
             // Start tailscaled in background - don't block app initialization
@@ -144,6 +151,7 @@ namespace JellyfinTizen.Core
                     _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.TailscaleStaging, AppLifecycleState.TailscaleStagingFailed);
                 }
             });
+#endif
 
             EnsureServersLoaded();
 
@@ -402,7 +410,9 @@ namespace JellyfinTizen.Core
 
                 try
                 {
+#if TAILSCALE
                     TailscaleProxyService.ClearCache();
+#endif
                     JellyfinTizen.Utils.CacheHelper.Clear();
                 }
                 catch { }
@@ -854,6 +864,7 @@ namespace JellyfinTizen.Core
             return !string.IsNullOrWhiteSpace(value) && Guid.TryParse(value.Trim(), out _);
         }
 
+#if TAILSCALE
         public static async Task<bool> IsTailscaleConnectedAsync()
         {
             try
@@ -873,6 +884,7 @@ namespace JellyfinTizen.Core
                 return false;
             }
         }
+#endif
 
         public static bool IsTailscaleUrl(string url)
         {
@@ -897,6 +909,7 @@ namespace JellyfinTizen.Core
 
         public static string RewriteImageUrlForTailscale(string url)
         {
+#if TAILSCALE
             if (string.IsNullOrWhiteSpace(url))
                 return url;
 
@@ -932,6 +945,10 @@ namespace JellyfinTizen.Core
             }
 
             return url;
+#else
+            // Standalone build: URLs are used as-is (plain http/https).
+            return url;
+#endif
         }
 
         public static async void OnAppResumed()
@@ -959,6 +976,29 @@ namespace JellyfinTizen.Core
                 return;
             }
 
+#if !TAILSCALE
+            // Standalone build: no daemon/proxy to restart. Clear caches and
+            // complete the resume, matching the non-Tailscale-server path of
+            // the full build (which also ends at ResumeCompleted).
+            try
+            {
+                JellyfinTizen.Utils.CacheHelper.Clear();
+                TailscaleDebugLog.Add("Cleared API caches on resume.");
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"Error clearing caches on resume: {ex.Message}");
+            }
+
+            state = AppLifecycle.State;
+            if (!await AppLifecycle.TryTransitionAsync(AppLifecycleState.Resuming, AppLifecycleState.ResumeCompleted))
+            {
+                TailscaleDebugLog.Add($"OnAppResumed: expected Resuming, actual={state}; aborting resume");
+                await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
+            }
+            _ = attempts; // unused in standalone build
+            return;
+#else
             TailscaleDebugLog.Add("App resumed. Checking Tailscale and proxy service status...");
 
             try
@@ -1148,6 +1188,7 @@ namespace JellyfinTizen.Core
                 TailscaleDebugLog.Add($"OnAppResumed: expected ResumeCompleted, actual={state}; aborting resume");
                 await AppLifecycle.TryTransitionAsync(state, AppLifecycleState.ResumeFailed);
             }
+#endif
         }
 
         public static bool? TryGetAspectMode(string itemId, string mediaSourceId)
@@ -1188,17 +1229,17 @@ namespace JellyfinTizen.Core
             var url =
                 $"{ServerUrl.TrimEnd('/')}/Users/{UserId}/Images/Primary" +
                 $"?width={size}&height={size}" +
-                $"&quality=95&v=2&api_key={apiKey}";
+                $"&quality=50&v=2&api_key={apiKey}";
 
             return RewriteImageUrlForTailscale(url);
         }
 
-        public static string GetItemLogoUrl(string itemId, int maxWidth = 900, int quality = 90)
+        public static string GetItemLogoUrl(string itemId, int maxWidth = 900, int quality = 50)
         {
             if (maxWidth <= 0)
                 maxWidth = 900;
             if (quality <= 0)
-                quality = 90;
+                quality = 50;
             quality = Math.Clamp(quality, 30, 100);
 
             if (string.IsNullOrWhiteSpace(itemId) ||
@@ -1226,16 +1267,20 @@ namespace JellyfinTizen.Core
         {
             try
             {
+#if TAILSCALE
                 ConnectionMonitor?.Dispose();
                 TailscaleProxy?.Stop();
                 TailscaleProxy?.Dispose();
                 Tailscale?.Stop();
+#endif
                 Jellyfin?.Dispose();
                 HttpClient?.Dispose();
 
                 // Clear static caches
                 CachedPublicUsers = null;
+#if TAILSCALE
                 TailscaleProxyService.ClearCache();
+#endif
                 JellyfinTizen.Utils.CacheHelper.Clear();
             }
             catch { }
@@ -1243,11 +1288,16 @@ namespace JellyfinTizen.Core
 
         private static HttpClient CreateHttpClient()
         {
+#if TAILSCALE
             var handler = new HttpClientHandler
             {
                 Proxy = new TailscaleWebProxy(),
                 UseProxy = true
             };
+#else
+            // Standalone build: direct http/https connections, no proxy routing.
+            var handler = new HttpClientHandler();
+#endif
             var client = new HttpClient(handler)
             {
                 Timeout = TimeSpan.FromSeconds(DefaultApiTimeoutSeconds)
