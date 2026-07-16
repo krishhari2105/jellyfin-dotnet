@@ -20,7 +20,11 @@ namespace JellyfinTizen.Screens
 
         private TextField _serverInput;
         private View _continueButton;
+#if TAILSCALE
         private View _tailscaleButton;
+#else
+        private readonly View _tailscaleButton = null; // no Tailscale UI in standalone build
+#endif
         private TextLabel _errorLabel;
         private bool _continueInProgress;
         private System.Threading.Timer _errorTimer;
@@ -36,10 +40,12 @@ namespace JellyfinTizen.Screens
 
             _serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
             _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _);
+#if TAILSCALE
             if (AppState.Tailscale != null)
             {
                 _tailscaleButton = MonochromeAuthFactory.CreateButton("Tailscale Settings", out _);
             }
+#endif
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(_serverInputShell);
@@ -137,7 +143,9 @@ namespace JellyfinTizen.Screens
                     }
                     else if (focused == _tailscaleButton)
                     {
+#if TAILSCALE
                         NavigationService.Navigate(new TailscaleScreen());
+#endif
                         return;
                     }
                     break;
@@ -168,7 +176,9 @@ namespace JellyfinTizen.Screens
             DisposeTimer(ref _errorTimer);
             _errorLabel.Text = string.Empty;
             Core.TailscaleDebugLog.Add($"Attempting to connect to: {url}");
+#if TAILSCALE
             Core.TailscaleDebugLog.Add($"Tailscale IsRunning={AppState.Tailscale?.IsRunning}, IsSocketReachable={AppState.Tailscale?.IsSocketReachable}");
+#endif
 
             try
             {
@@ -258,8 +268,10 @@ namespace JellyfinTizen.Screens
                 Core.TailscaleDebugLog.Add($"ResolveServerBaseUrl: {url}");
                 _probeHttpClient ??= new HttpClient(new HttpClientHandler
                 {
+#if TAILSCALE
                     Proxy = new TailscaleWebProxy(),
                     UseProxy = true,
+#endif
                     AllowAutoRedirect = true,
                 })
                 {

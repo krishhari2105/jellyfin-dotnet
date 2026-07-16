@@ -94,6 +94,7 @@ namespace JellyfinTizen.Screens
         // METADATA UI FIELDS (moved from both derived screens)
         // =====================================================================
         protected View _metadataContainer;
+        protected ImageView _watchedIndicator;
         protected View _metadataSummaryRow;
         protected TextLabel _metadataSummaryLabel;
         protected View _metadataRatingGroup;
@@ -696,9 +697,24 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
                     CellPadding = new Size2D(18, 0)
                 }
             };
+
+            _watchedIndicator = new ImageView
+            {
+                WidthSpecification = 30,
+                HeightSpecification = 30,
+                ResourceUrl = IOPath.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, "check_circle.svg"),
+                PreMultipliedAlpha = false,
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+            // ExcludeLayouting must track visibility: on TV firmware a hidden
+            // view still occupies its LinearLayout cell, indenting the row.
+            _watchedIndicator.ExcludeLayouting = true;
+            _watchedIndicator.Hide();
 
             _metadataSummaryLabel = new TextLabel
             {
@@ -741,6 +757,7 @@ namespace JellyfinTizen.Screens
             _metadataRatingGroup.Add(ratingStar);
             _metadataRatingGroup.Add(_metadataRatingLabel);
 
+            _metadataSummaryRow.Add(_watchedIndicator);
             _metadataSummaryRow.Add(_metadataSummaryLabel);
             _metadataSummaryRow.Add(_metadataRatingGroup);
 
@@ -770,13 +787,29 @@ namespace JellyfinTizen.Screens
             var summaryText = DetailsScreenHelpers.BuildSummaryText(mediaItem);
             _metadataSummaryLabel.Text = string.IsNullOrWhiteSpace(summaryText) ? " " : summaryText;
 
+            if (_watchedIndicator != null)
+            {
+                if (mediaItem != null && mediaItem.Played)
+                {
+                    _watchedIndicator.ExcludeLayouting = false;
+                    _watchedIndicator.Show();
+                }
+                else
+                {
+                    _watchedIndicator.ExcludeLayouting = true;
+                    _watchedIndicator.Hide();
+                }
+            }
+
             if (mediaItem.CommunityRating.HasValue && mediaItem.CommunityRating.Value > 0)
             {
                 _metadataRatingLabel.Text = mediaItem.CommunityRating.Value.ToString("0.0", CultureInfo.InvariantCulture);
+                _metadataRatingGroup.ExcludeLayouting = false;
                 _metadataRatingGroup.Show();
             }
             else
             {
+                _metadataRatingGroup.ExcludeLayouting = true;
                 _metadataRatingGroup.Hide();
             }
 
@@ -957,6 +990,110 @@ namespace JellyfinTizen.Screens
         // PLAYBACK (abstract — subclass provides media item)
         // =====================================================================
         protected abstract void PlayMedia(JellyfinMovie media, int startPositionMs);
+
+        // Single source of truth for "should the Resume button exist right now" — derives
+        // _resumeAvailable/_resumeButton purely from the CURRENT authoritative value of
+        // GetMediaItem().PlaybackPositionTicks. Called by RefreshResumeStateFromServerAsync
+        // (the OnShow server-truth fetch) and by the action-button reflow / media-source load
+        // paths, so button state is always recomputed from the live mediaItem field rather
+        // than from a stale field snapshot.
+        protected void ReconcileResumeButtonFromMediaItem()
+        {
+            var mediaItem = GetMediaItem();
+            if (mediaItem == null)
+                return;
+
+            _resumeAvailable = mediaItem.PlaybackPositionTicks > 0;
+
+            if (_resumeAvailable && _resumeButton == null)
+            {
+                _resumeButton = CreateActionButton(
+                    "Resume",
+                    isPrimary: false,
+                    iconFile: "resume.svg",
+                    width: null,
+                    iconSize: PlayActionButtonIconSize);
+            }
+            else if (!_resumeAvailable && _resumeButton != null)
+            {
+                _resumeButton = null;
+            }
+        }
+
+        // Litefin-style "server is truth" resume refresh. Called on every OnShow() (not just
+        // first load): always re-fetches this item's authoritative UserData/PlaybackPositionTicks
+        // from the server, then re-derives the Resume button from ONLY that freshly-fetched
+        // value. This deliberately overwrites any locally-cached/optimistically-written
+        // position so the rendered state matches the server exactly. Fully non-blocking: the
+        // fetch is awaited on a background continuation and the UI mutation is marshalled back
+        // onto the UI thread. Uses the same single-item GetItemAsync endpoint used elsewhere.
+        protected async Task RefreshResumeStateFromServerAsync()
+        {
+            var mediaItem = GetMediaItem();
+            if (mediaItem == null || string.IsNullOrWhiteSpace(mediaItem.Id))
+            {
+                // Overlay was already shown by OnShow before this method ran, so this early
+                // exit must hide it to stay balanced.
+                NavigationService.HideLoadingOverlay();
+                return;
+            }
+
+            JellyfinMovie serverItem;
+            try
+            {
+                serverItem = await AppState.Jellyfin.GetItemAsync(mediaItem.Id);
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: fetch failed (screen={GetType().Name}): {ex.Message}");
+                NavigationService.HideLoadingOverlay();
+                return;
+            }
+
+            if (serverItem == null)
+            {
+                NavigationService.HideLoadingOverlay();
+                return;
+            }
+
+            long serverTicks = serverItem.PlaybackPositionTicks;
+            bool serverPlayed = serverItem.Played;
+
+            RunOnUiThread(() =>
+            {
+                try
+                {
+                    var item = GetMediaItem();
+                    if (item == null)
+                        return;
+
+                    // Server truth only: overwrite the local (possibly optimistic) value with
+                    // the freshly-fetched server value BEFORE re-deriving, so this render is
+                    // driven purely by the server's answer.
+                    item.PlaybackPositionTicks = serverTicks;
+                    item.Played = serverPlayed;
+                    TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks}, Played={serverPlayed} (screen={GetType().Name}), reconciling");
+
+                    ReconcileResumeButtonFromMediaItem();
+                    UpdateMetadataView();
+
+                    if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
+                        return;
+
+                    RebuildActionButtons(includeVersionButton: (_mediaSources?.Count ?? 0) > 1);
+                    if (_buttons.Count > 0)
+                        FocusButton(Math.Clamp(_buttonIndex, 0, _buttons.Count - 1));
+                }
+                catch
+                {
+                    // Screen may have been navigated away/disposed between fetch and continuation.
+                }
+                finally
+                {
+                    NavigationService.HideLoadingOverlay();
+                }
+            });
+        }
 
         protected static int TicksToMs(long ticks)
         {

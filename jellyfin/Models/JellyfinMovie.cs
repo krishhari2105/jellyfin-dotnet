@@ -8,6 +8,7 @@ namespace JellyfinTizen.Models
         public string Name { get; set; }
         public string Overview { get; set; }
         public long PlaybackPositionTicks { get; set; }
+        public bool Played { get; set; }
         public long RunTimeTicks { get; set; }
         public int ProductionYear { get; set; }
         public string OfficialRating { get; set; }

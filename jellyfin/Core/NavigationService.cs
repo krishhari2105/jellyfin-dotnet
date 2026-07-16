@@ -9,6 +9,7 @@ using Tizen.NUI.BaseComponents;
 using NColor = Tizen.NUI.Color;
 using JellyfinTizen.Screens;
 using JellyfinTizen.UI;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Core
 {
@@ -363,8 +364,73 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
-            
+
+            // Restored screens have all images already loaded, so the per-image
+            // ResourceReady fades never re-fire. Play a lightweight fade-from-black
+            // transition to match the forward-navigation feel.
+            //
+            // We fade a single solid-black leaf overlay (opaque -> transparent) on
+            // top of everything, rather than animating the restored screen's own
+            // Opacity, for two reasons:
+            //   1. Performance: animating a heavyweight screen subtree's Opacity
+            //      forces DALi to render the whole tree (grids of cached posters,
+            //      backdrops, logos, ...) into an offscreen buffer every frame for
+            //      alpha compositing, which stutters/hangs on TV GPU hardware.
+            //      A leaf overlay needs no offscreen compositing, so it is cheap.
+            //   2. Consistency: several screens (Home, Movie/Episode details) show
+            //      the opaque full-screen loading overlay as the first statement of
+            //      OnShow(). Animating the screen's Opacity happened *behind* that
+            //      overlay and was therefore invisible, making the transition look
+            //      instant on those screens. A top-most overlay fades consistently
+            //      regardless of what OnShow() puts on screen.
+            PlayBackNavigationFade();
+
             try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
+        }
+
+        // Lightweight fade-from-black transition used by backward navigation. See the
+        // rationale in NavigateBackImmediate. The overlay is a single solid-black leaf
+        // view (no children) kept topmost, so its Opacity animation is cheap and always
+        // visible above whatever OnShow() attaches (including the loading overlay).
+        private static View _backFadeOverlay;
+        private static Animation _backFadeAnimation;
+
+        private static void PlayBackNavigationFade()
+        {
+            if (_window == null)
+                return;
+
+            if (_backFadeOverlay == null)
+            {
+                _backFadeOverlay = new View
+                {
+                    WidthResizePolicy = ResizePolicyType.FillToParent,
+                    HeightResizePolicy = ResizePolicyType.FillToParent,
+                    BackgroundColor = new NColor(0f, 0f, 0f, 1f),
+                    // Never participate in D-pad focus / key routing.
+                    Focusable = false
+                };
+            }
+
+            // Cancel any in-flight fade first. StopAndDispose stops the previous
+            // animation (whose onFinished removes the overlay); we then re-add it
+            // below, so the ordering stays correct even under rapid back presses.
+            UiAnimator.StopAndDispose(ref _backFadeAnimation);
+
+            _backFadeOverlay.Opacity = 1.0f;
+            try { _window.Remove(_backFadeOverlay); } catch { }
+            _window.Add(_backFadeOverlay);
+            _backFadeOverlay.RaiseToTop();
+
+            _backFadeAnimation = UiAnimator.AnimateTo(
+                _backFadeOverlay,
+                "Opacity",
+                0.0f,
+                UiAnimator.FadeInDurationMs,
+                () =>
+                {
+                    try { _window?.Remove(_backFadeOverlay); } catch { }
+                });
         }
 
         private static void EnsureExitConfirmationPopupCreated()
@@ -619,6 +685,54 @@ namespace JellyfinTizen.Core
             {
                 _reconnectOverlay.Hide();
                 try { _window.Remove(_reconnectOverlay); } catch { }
+            });
+        }
+
+        // Modular full-screen loading overlay reusing the SAME design language as
+        // LoadingScreen (the AppleTvLoadingVisual shown for "Loading library...",
+        // "Loading items...", etc.), so any screen can show a consistent full-screen loading
+        // state in-place (without navigating to a separate LoadingScreen). Show/Hide are the
+        // in-place equivalents of navigating to a LoadingScreen and back.
+        private static View _loadingOverlay;
+        private static AppleTvLoadingVisual _loadingVisual;
+
+        public static void ShowLoadingOverlay(string message)
+        {
+            if (_window == null) return;
+
+            // Runs synchronously on the UI thread (called as the first statement of a
+            // screen's OnShow). Attaching immediately — rather than via CoreApplication.Post
+            // — guarantees the overlay paints in the same frame the screen is (re)shown, so a
+            // re-shown cached screen's stale child views never paint underneath it first.
+            // (HideLoadingOverlay keeps its Post because it is invoked from post-await
+            // continuations that may resume off the UI thread.)
+            if (_loadingVisual != null || _loadingOverlay != null)
+            {
+                try { _loadingVisual?.Stop(); } catch { }
+                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
+                try { _loadingVisual?.Dispose(); } catch { }
+                _loadingVisual = null;
+                _loadingOverlay = null;
+            }
+
+            _loadingVisual = new AppleTvLoadingVisual(message);
+            _loadingOverlay = _loadingVisual.Root;
+            _window.Add(_loadingOverlay);
+            _loadingOverlay.RaiseToTop();
+            _loadingVisual.Start();
+        }
+
+        public static void HideLoadingOverlay()
+        {
+            if (_loadingOverlay == null && _loadingVisual == null) return;
+
+            Tizen.Applications.CoreApplication.Post(() =>
+            {
+                try { _loadingVisual?.Stop(); } catch { }
+                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
+                try { _loadingVisual?.Dispose(); } catch { }
+                _loadingVisual = null;
+                _loadingOverlay = null;
             });
         }
 

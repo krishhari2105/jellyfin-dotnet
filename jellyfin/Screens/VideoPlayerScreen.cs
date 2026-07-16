@@ -262,6 +262,15 @@ namespace JellyfinTizen.Screens
         {
             _movie = movie;
             _startPositionMs = startPositionMs;
+            // Seed _lastKnownPositionTicks from the actual starting/resume position right
+            // away, at construction time — not left at its field default (0). StartPlayback
+            // is async and only reaches SetReportingContext() after several awaited network
+            // calls (FetchInitialPlaybackInfoAsync, ResolveAndValidateMediaSourceAsync, etc.),
+            // so if the user presses Back before that point, the awaited stop-report in
+            // ReportStopThenNavigateBackAsync() still reports the correct resume position for
+            // an item that actually has progress > 0, instead of a stale 0. For a fresh item,
+            // startPositionMs is legitimately 0, so this preserves the correct behavior there.
+            _lastKnownPositionTicks = Math.Max(0, (long)startPositionMs) * 10000;
             _initialSubtitleIndex = subtitleStreamIndex;
             _initialSubtitleCodecHint = initialSubtitleCodec;
             _burnIn = burnIn;
@@ -776,6 +785,7 @@ namespace JellyfinTizen.Screens
 
         private string RewriteStreamUrlForTailscale(string url)
         {
+#if TAILSCALE
             if (string.IsNullOrWhiteSpace(url))
                 return url;
 
@@ -802,6 +812,10 @@ namespace JellyfinTizen.Screens
             {
                 return url;
             }
+#else
+            // Standalone build: stream directly over http/https.
+            return url;
+#endif
         }
 
         private string BuildStreamUrl(
@@ -6190,6 +6204,60 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        // Guards against a second exit being triggered while the awaited stop-report from a
+        // first exit is still in flight (the await introduces a window during which the
+        // player is still on-screen and could receive another Back/Stop press).
+        private bool _exitInProgress;
+
+        // Litefin-style ordering: await the server playback-stopped report BEFORE navigating
+        // back to the details screen, instead of firing it and navigating away immediately.
+        // The stop-report info is built synchronously (on the UI thread, while reporting
+        // context / player state are still valid), then the POST is awaited. NavigateBack is
+        // marshalled back onto the UI thread because the post-await continuation is not
+        // guaranteed to resume on it. _suppressStopReportOnce is set so the fire-and-forget
+        // stop report inside StopPlayback() (invoked by the resulting OnHide()) does not send
+        // a duplicate. This only changes ordering of the server report vs. navigation.
+        private async Task ReportStopThenNavigateBackAsync()
+        {
+            if (_exitInProgress)
+                return;
+            _exitInProgress = true;
+
+            PlaybackProgressInfo info = null;
+            try
+            {
+                if (_player != null && !_isFinished && !_completedForCurrentItem && !string.IsNullOrWhiteSpace(_activeReportItemId))
+                {
+                    long stopPositionTicks = _lastKnownPositionTicks > 0 ? _lastKnownPositionTicks : GetPlayPositionMs() * 10000;
+                    info = new PlaybackProgressInfo
+                    {
+                        ItemId = _activeReportItemId,
+                        PlaySessionId = _activeReportPlaySessionId,
+                        MediaSourceId = _activeReportMediaSourceId,
+                        PlayMethod = _activeReportPlayMethod,
+                        PositionTicks = stopPositionTicks,
+                        EventName = "Stop"
+                    };
+                }
+            }
+            catch
+            {
+            }
+
+            if (info != null)
+            {
+                await ReportPlaybackStoppedSafeAsync(info);
+            }
+
+            RunOnUiThread(() =>
+            {
+                // Prevent StopPlayback() (called from OnHide during NavigateBack) from sending
+                // a duplicate stop report — we already sent and awaited it above.
+                _suppressStopReportOnce = true;
+                NavigationService.NavigateBack();
+            });
+        }
+
         private void ReportProgressToServer(bool force = false)
         {
             if (_player == null || _isSeeking || _isFinished || _currentMediaSource == null) return;
@@ -6209,12 +6277,6 @@ namespace JellyfinTizen.Screens
             };
             _lastKnownPositionTicks = info.PositionTicks;
             _ = AppState.Jellyfin.ReportPlaybackProgressAsync(info);
-
-            if (((double)positionMs / durationMs) > 0.95 && !_isFinished)
-            {
-                if (!_completedForCurrentItem)
-                    FinalizeCurrentItemAsPlayed();
-            }
         }
 
         private void FinalizeCurrentItemAsPlayed()
@@ -6408,7 +6470,7 @@ namespace JellyfinTizen.Screens
                         if (_osdVisible || pausedNow) ShowOSD();
                     }
                     break;
-                case AppKey.MediaStop: NavigationService.NavigateBack(); break;
+                case AppKey.MediaStop: _ = ReportStopThenNavigateBackAsync(); break;
                 case AppKey.MediaNext: PlayNextEpisode(); break;
                 case AppKey.MediaRewind:
                     if (_osdVisible) Scrub(-30);
@@ -6562,7 +6624,7 @@ namespace JellyfinTizen.Screens
                         HideOSD();
                     }
                     else if (_osdVisible) HideOSD();
-                    else NavigationService.NavigateBack();
+                    else _ = ReportStopThenNavigateBackAsync();
                     break;
                 case AppKey.Red:
                     TogglePlaybackInfoOverlay();
@@ -6645,13 +6707,6 @@ namespace JellyfinTizen.Screens
             try
             {
                 _isEpisodeSwitchInProgress = true;
-                if (!_completedForCurrentItem)
-                {
-                    int durationMs = GetDuration();
-                    int positionMs = GetPlayPositionMs();
-                    if (durationMs > 0 && positionMs > 0 && ((double)positionMs / durationMs) > 0.95)
-                        FinalizeCurrentItemAsPlayed();
-                }
 
                 _suppressStopReportOnce = true;
                 StopPlayback();

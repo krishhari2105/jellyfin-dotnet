@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
@@ -20,8 +21,10 @@ namespace JellyfinTizen.Screens
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
+        private readonly List<View> _recentlyAddedBadges = new();
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _rowViewports = new();
+        private readonly List<View> _rowBlocks = new();
         private readonly List<int> _rowCardWidths = new();
         private readonly List<int> _rowSpacings = new();
         private readonly List<int> _rowTops = new();
@@ -90,6 +93,18 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            // Show the full-screen loading overlay synchronously as the very first thing, so
+            // it paints in the same frame this long-lived screen is re-shown — before any
+            // stale row/card views render. HideLoadingOverlay runs when the refresh below
+            // completes (RefreshContinueWatchingFromServerAsync's catch/finally paths).
+            NavigationService.ShowLoadingOverlay("Loading...");
+
+            // Litefin-style "server is truth": always re-fetch the Continue Watching row fresh
+            // from the server on every OnShow. HomeScreen is a long-lived, reused instance, so
+            // this runs each time Home becomes active again, not just on first construction.
+            _ = RefreshContinueWatchingFromServerAsync();
+            _ = RefreshRecentlyAddedPlayedStateAsync();
+
             if (_rows.Count == 0 || _rowCards.Count == 0 || _rowCards[0].Count == 0)
                 return;
 
@@ -144,69 +159,113 @@ namespace JellyfinTizen.Screens
                 if (row.Items == null || row.Items.Count == 0)
                     continue;
 
-                var rowInfo = GetRowStyle(row.Kind);
-                var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
-                var cardHeight = rowInfo.CardHeight + textHeight;
-                var rowHeight = rowInfo.RowHeight + textHeight;
-                var titleImageGap = 0;
+                var built = BuildSingleRowBlock(row, y);
 
-                var viewportTopPadding = (ushort)Math.Min(FocusPad + titleImageGap, (int)ushort.MaxValue);
-                var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - titleImageGap);
-                var rowBlock = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = rowHeight + (FocusPad * 2),
-                    PositionY = y
-                };
+                _verticalContainer.Add(built.RowBlock);
 
-                var title = MediaBrowserChrome.CreateRowTitle(row.Title, SidePadding);
-                title.HeightSpecification = rowInfo.TitleHeight;
-
-                var viewport = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = cardHeight + (FocusPad * 2),
-                    PositionY = rowInfo.TitleHeight + 10,
-                    ClippingMode = ClippingModeType.ClipChildren,
-                    Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
-                };
-
-                var rowContainer = new View
-                {
-                    PositionX = SidePadding,
-                    PositionY = 0,
-                    Layout = new LinearLayout
-                    {
-                        LinearOrientation = LinearLayout.Orientation.Horizontal,
-                        CellPadding = new Size2D(rowInfo.Spacing, 0)
-                    }
-                };
-
-                var cards = new List<View>();
-
-                foreach (var item in row.Items)
-                {
-                    var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight);
-                    cards.Add(card);
-                    rowContainer.Add(card);
-                }
-
-                viewport.Add(rowContainer);
-                rowBlock.Add(title);
-                rowBlock.Add(viewport);
-
-                _verticalContainer.Add(rowBlock);
-
-                _rowCards.Add(cards);
-                _rowContainers.Add(rowContainer);
-                _rowViewports.Add(viewport);
-                _rowCardWidths.Add(rowInfo.CardWidth);
-                _rowSpacings.Add(rowInfo.Spacing);
+                _rowCards.Add(built.Cards);
+                _rowContainers.Add(built.RowContainer);
+                _rowViewports.Add(built.Viewport);
+                _rowBlocks.Add(built.RowBlock);
+                _rowCardWidths.Add(built.CardWidth);
+                _rowSpacings.Add(built.Spacing);
                 _rowTops.Add(y);
-                _rowHeights.Add(rowHeight + (FocusPad * 2));
+                _rowHeights.Add(built.TotalHeight);
 
-                y += rowHeight + (FocusPad * 2) + rowInfo.RowSpacing;
+                y += built.TotalHeight + built.RowSpacingAfter;
             }
+        }
+
+        private readonly struct BuiltRowBlock
+        {
+            public View RowBlock { get; init; }
+            public View Viewport { get; init; }
+            public View RowContainer { get; init; }
+            public List<View> Cards { get; init; }
+            public int CardWidth { get; init; }
+            public int Spacing { get; init; }
+            public int TotalHeight { get; init; }
+            public int RowSpacingAfter { get; init; }
+        }
+
+        // Builds the full visual block (title + viewport + card row) for a single HomeRowData,
+        // identical to the per-row construction inside BuildRows(). Extracted so the same
+        // logic can be reused when a Continue Watching row needs to be created from scratch
+        // after being previously removed (local-only optimistic insert), instead of
+        // duplicating this layout code.
+        private BuiltRowBlock BuildSingleRowBlock(HomeRowData row, int y)
+        {
+            var rowInfo = GetRowStyle(row.Kind);
+            var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
+            var cardHeight = rowInfo.CardHeight + textHeight;
+            var rowHeight = rowInfo.RowHeight + textHeight;
+            var titleImageGap = 0;
+
+            var viewportTopPadding = (ushort)Math.Min(FocusPad + titleImageGap, (int)ushort.MaxValue);
+            var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - titleImageGap);
+            var rowBlock = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = rowHeight + (FocusPad * 2),
+                PositionY = y
+            };
+
+            var title = MediaBrowserChrome.CreateRowTitle(row.Title, SidePadding);
+            title.HeightSpecification = rowInfo.TitleHeight;
+
+            var viewport = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = cardHeight + (FocusPad * 2),
+                PositionY = rowInfo.TitleHeight + 10,
+                ClippingMode = ClippingModeType.ClipChildren,
+                Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
+            };
+
+            var rowContainer = new View
+            {
+                PositionX = SidePadding,
+                PositionY = 0,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    CellPadding = new Size2D(rowInfo.Spacing, 0)
+                }
+            };
+
+            var cards = new List<View>();
+
+            if (row.Kind == HomeRowKind.RecentlyAdded)
+            {
+                _recentlyAddedBadges.Clear();
+            }
+
+            foreach (var item in row.Items)
+            {
+                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight, out var playedBadge);
+                cards.Add(card);
+                rowContainer.Add(card);
+                if (row.Kind == HomeRowKind.RecentlyAdded)
+                {
+                    _recentlyAddedBadges.Add(playedBadge);
+                }
+            }
+
+            viewport.Add(rowContainer);
+            rowBlock.Add(title);
+            rowBlock.Add(viewport);
+
+            return new BuiltRowBlock
+            {
+                RowBlock = rowBlock,
+                Viewport = viewport,
+                RowContainer = rowContainer,
+                Cards = cards,
+                CardWidth = rowInfo.CardWidth,
+                Spacing = rowInfo.Spacing,
+                TotalHeight = rowHeight + (FocusPad * 2),
+                RowSpacingAfter = rowInfo.RowSpacing
+            };
         }
 
         private int GetCardTextHeight(HomeRowData row, int cardWidth)
@@ -271,26 +330,49 @@ namespace JellyfinTizen.Screens
             };
         }
 
-        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight)
+        private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight, out View playedBadge)
         {
             var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
             var progressRatio = kind == HomeRowKind.ContinueWatching
                 ? GetPlaybackProgressRatio(item?.Media)
                 : null;
 
-            return MediaCardFactory.CreateImageCard(
-                width,
-                imageHeight,
-                textHeight,
-                item.Title,
-                hasSubtitle ? item.Subtitle : null,
-                item.ImageUrl,
-                out _,
-                focusBorder: FocusBorder,
-                titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
-                progressRatio: progressRatio
-            );
+            if (kind == HomeRowKind.RecentlyAdded)
+            {
+                return MediaCardFactory.CreateImageCard(
+                    width,
+                    imageHeight,
+                    textHeight,
+                    item.Title,
+                    hasSubtitle ? item.Subtitle : null,
+                    item.ImageUrl,
+                    out _,
+                    out playedBadge,
+                    focusBorder: FocusBorder,
+                    titlePoint: (int)UiTheme.MediaCardTitle,
+                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                    progressRatio: progressRatio,
+                    played: item?.Media?.Played ?? false
+                );
+            }
+            else
+            {
+                return MediaCardFactory.CreateImageCard(
+                    width,
+                    imageHeight,
+                    textHeight,
+                    item.Title,
+                    hasSubtitle ? item.Subtitle : null,
+                    item.ImageUrl,
+                    out _,
+                    out playedBadge,
+                    focusBorder: FocusBorder,
+                    titlePoint: (int)UiTheme.MediaCardTitle,
+                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                    progressRatio: progressRatio,
+                    played: item?.Media?.Played ?? false
+                );
+            }
         }
 
         private static float? GetPlaybackProgressRatio(JellyfinMovie media)
@@ -302,6 +384,319 @@ namespace JellyfinTizen.Screens
                 media.PlaybackPositionTicks / (double)media.RunTimeTicks,
                 0d,
                 1d);
+        }
+
+        // Builds the image URL for a Continue Watching card exactly the way HomeLoadingScreen
+        // does on a full reload (thumb/backdrop preference order, cached, no network call —
+        // it only computes a URL string against already-known HasThumb/HasBackdrop/HasPrimary
+        // flags on the JellyfinMovie).
+        private static string BuildContinueWatchingImageUrl(JellyfinMovie media)
+        {
+            var serverUrl = AppState.Jellyfin?.ServerUrl;
+            var apiKey = Uri.EscapeDataString(AppState.AccessToken ?? string.Empty);
+            if (string.IsNullOrWhiteSpace(serverUrl))
+                return null;
+
+            var imageUrl = HomeLoadingScreen.GetThumbOrBackdropUrl(media, serverUrl, apiKey, 280);
+            if (string.IsNullOrWhiteSpace(imageUrl))
+                return null;
+
+            return HomeLoadingScreen.BuildCachedImageUrl(
+                $"continue:{media.Id}:280:70:{apiKey}",
+                () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=50")));
+        }
+
+        private int ComputeNextRowY()
+        {
+            if (_rowTops.Count == 0 || _rowHeights.Count == 0)
+                return 0;
+
+            int lastIdx = _rowTops.Count - 1;
+            return _rowTops[lastIdx] + _rowHeights[lastIdx];
+        }
+
+        // Litefin-style "server is truth": always re-fetch the Continue Watching list fresh
+        // from the server (same getResumeItems-equivalent endpoint, GetContinueWatchingAsync)
+        // and rebuild the row to match, rather than relying only on the local optimistic
+        // update chain. Non-blocking; the UI rebuild is marshalled onto the UI thread.
+        private async Task RefreshContinueWatchingFromServerAsync()
+        {
+            List<JellyfinMovie> serverItems;
+            try
+            {
+                serverItems = await AppState.Jellyfin.GetContinueWatchingAsync(20);
+            }
+            catch (System.Exception ex)
+            {
+                TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: fetch failed: {ex.Message}");
+                NavigationService.HideLoadingOverlay();
+                return;
+            }
+
+            RunOnUiThread(() =>
+            {
+                try
+                {
+                    long topTicks = (serverItems != null && serverItems.Count > 0) ? serverItems[0].PlaybackPositionTicks : 0;
+                    TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: server truth ContinueWatching count={serverItems?.Count ?? 0}, topItemTicks={topTicks}");
+                    ApplyServerContinueWatching(serverItems);
+                }
+                catch
+                {
+                    // Screen may have been navigated away/disposed between fetch and continuation.
+                }
+                finally
+                {
+                    NavigationService.HideLoadingOverlay();
+                }
+            });
+        }
+
+        private async Task RefreshRecentlyAddedPlayedStateAsync()
+        {
+            int raIdx = _rows.FindIndex(r => r != null && r.Kind == HomeRowKind.RecentlyAdded);
+            if (raIdx < 0)
+                return;
+
+            var row = _rows[raIdx];
+            if (row == null || row.Items == null || row.Items.Count == 0)
+                return;
+
+            try
+            {
+                var itemIds = new List<string>();
+                foreach (var item in row.Items)
+                {
+                    if (item?.Media != null && !string.IsNullOrWhiteSpace(item.Media.Id))
+                    {
+                        itemIds.Add(item.Media.Id);
+                    }
+                }
+
+                if (itemIds.Count == 0)
+                    return;
+
+                var serverMovies = await AppState.Jellyfin.GetItemsByIdsAsync(itemIds);
+                if (serverMovies == null || serverMovies.Count == 0)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < row.Items.Count; i++)
+                        {
+                            var item = row.Items[i];
+                            if (item?.Media == null || string.IsNullOrWhiteSpace(item.Media.Id))
+                                continue;
+
+                            var serverMovie = serverMovies.Find(m => m != null && m.Id == item.Media.Id);
+                            if (serverMovie != null)
+                            {
+                                item.Media.Played = serverMovie.Played;
+                                if (i < _recentlyAddedBadges.Count && _recentlyAddedBadges[i] != null)
+                                {
+                                    if (item.Media.Played)
+                                        _recentlyAddedBadges[i].Show();
+                                    else
+                                        _recentlyAddedBadges[i].Hide();
+                                }
+                            }
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync UI update error: {ex.Message}");
+                    }
+                });
+            }
+            catch (System.Exception ex)
+            {
+                TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync fetch error: {ex.Message}");
+            }
+        }
+
+        // Reconciles the on-screen Continue Watching row to exactly match the server's list:
+        // removes the row if the server returns nothing, inserts a fresh row if the server has
+        // items but none is shown, or replaces the row's cards in place (preserving row index /
+        // scroll position / focus) when the row already exists. Server value is authoritative.
+        private void ApplyServerContinueWatching(List<JellyfinMovie> serverItems)
+        {
+            int cwIdx = _rows.FindIndex(r => r != null && r.Kind == HomeRowKind.ContinueWatching);
+
+            var items = new List<HomeItemData>();
+            if (serverItems != null)
+            {
+                foreach (var m in serverItems)
+                {
+                    if (m == null || string.IsNullOrWhiteSpace(m.Id))
+                        continue;
+                    items.Add(new HomeItemData
+                    {
+                        Title = m.Name,
+                        Subtitle = m.SeriesName,
+                        ImageUrl = BuildContinueWatchingImageUrl(m),
+                        Media = m
+                    });
+                }
+            }
+
+            if (items.Count == 0)
+            {
+                if (cwIdx >= 0)
+                    RemoveRowAt(cwIdx, wasFocusedRow: cwIdx == _rowIndex);
+                return;
+            }
+
+            if (cwIdx < 0)
+            {
+                InsertContinueWatchingRowWithItems(items);
+                return;
+            }
+
+            // Row exists — replace its cards in place, keeping row index / position / focus stable.
+            var row = _rows[cwIdx];
+            row.Items = items;
+
+            if (cwIdx >= _rowCards.Count || cwIdx >= _rowContainers.Count)
+                return;
+
+            var rowContainer = _rowContainers[cwIdx];
+            var oldCards = _rowCards[cwIdx];
+            foreach (var c in oldCards)
+            {
+                rowContainer.Remove(c);
+                try { c.Dispose(); } catch { }
+            }
+
+            var rowInfo = GetRowStyle(row.Kind);
+            var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
+            var newCards = new List<View>();
+            foreach (var item in items)
+            {
+                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight, out _);
+                newCards.Add(card);
+                rowContainer.Add(card);
+            }
+            _rowCards[cwIdx] = newCards;
+
+            if (_rowIndex == cwIdx)
+            {
+                _colIndex = Math.Clamp(_colIndex, 0, newCards.Count - 1);
+                Highlight(true);
+                FocusManager.Instance.SetCurrentFocusView(newCards[_colIndex]);
+                ScrollHorizontalIfNeeded();
+                ScrollVerticalIfNeeded();
+            }
+        }
+
+        // Inserts a fresh Continue Watching row containing the given items at the canonical
+        // position (before Recently Added, else appended). Mirrors the parallel-list
+        // bookkeeping used by the single-item optimistic insert, but with a full item list.
+        private void InsertContinueWatchingRowWithItems(List<HomeItemData> items)
+        {
+            var newRow = new HomeRowData
+            {
+                Title = "Continue Watching",
+                Kind = HomeRowKind.ContinueWatching
+            };
+            newRow.Items.AddRange(items);
+
+            int insertRowIdx = _rows.FindIndex(r => r.Kind == HomeRowKind.RecentlyAdded);
+            if (insertRowIdx < 0)
+                insertRowIdx = _rows.Count;
+
+            _rows.Insert(insertRowIdx, newRow);
+
+            int y = insertRowIdx < _rowTops.Count ? _rowTops[insertRowIdx] : ComputeNextRowY();
+            var built = BuildSingleRowBlock(newRow, y);
+
+            _verticalContainer.Add(built.RowBlock);
+
+            _rowCards.Insert(insertRowIdx, built.Cards);
+            _rowContainers.Insert(insertRowIdx, built.RowContainer);
+            _rowViewports.Insert(insertRowIdx, built.Viewport);
+            _rowBlocks.Insert(insertRowIdx, built.RowBlock);
+            _rowCardWidths.Insert(insertRowIdx, built.CardWidth);
+            _rowSpacings.Insert(insertRowIdx, built.Spacing);
+            _rowTops.Insert(insertRowIdx, y);
+            _rowHeights.Insert(insertRowIdx, built.TotalHeight);
+
+            int shiftAmount = built.TotalHeight + built.RowSpacingAfter;
+            for (int i = insertRowIdx + 1; i < _rowTops.Count; i++)
+            {
+                _rowTops[i] += shiftAmount;
+                _rowBlocks[i].PositionY = _rowTops[i];
+            }
+
+            if (insertRowIdx <= _rowIndex)
+                _rowIndex += 1;
+            _rowIndex = Math.Clamp(_rowIndex, 0, _rowCards.Count - 1);
+            _colIndex = Math.Clamp(_colIndex, 0, _rowCards[_rowIndex].Count - 1);
+        }
+
+
+        // parallel per-row tracking list, then shifts subsequent row blocks' PositionY up to
+        // close the gap. _verticalContainer uses HeightResizePolicy.FitToChildren, so removing
+        // the block is sufficient for the container itself to shrink.
+        private void RemoveRowAt(int rowIdx, bool wasFocusedRow)
+        {
+            var rowBlock = rowIdx < _rowBlocks.Count ? _rowBlocks[rowIdx] : null;
+            int removedHeight = rowIdx < _rowHeights.Count ? _rowHeights[rowIdx] : 0;
+
+            if (rowBlock != null)
+            {
+                _verticalContainer.Remove(rowBlock);
+                try { rowBlock.Dispose(); } catch { }
+            }
+
+            _rows.RemoveAt(rowIdx);
+            if (rowIdx < _rowCards.Count) _rowCards.RemoveAt(rowIdx);
+            if (rowIdx < _rowContainers.Count) _rowContainers.RemoveAt(rowIdx);
+            if (rowIdx < _rowViewports.Count) _rowViewports.RemoveAt(rowIdx);
+            if (rowIdx < _rowBlocks.Count) _rowBlocks.RemoveAt(rowIdx);
+            if (rowIdx < _rowCardWidths.Count) _rowCardWidths.RemoveAt(rowIdx);
+            if (rowIdx < _rowSpacings.Count) _rowSpacings.RemoveAt(rowIdx);
+            if (rowIdx < _rowTops.Count) _rowTops.RemoveAt(rowIdx);
+            if (rowIdx < _rowHeights.Count) _rowHeights.RemoveAt(rowIdx);
+
+            // Shift every subsequent row up by the removed row's height, both in the
+            // tracked _rowTops bookkeeping and the actual View PositionY.
+            for (int i = rowIdx; i < _rowTops.Count; i++)
+            {
+                _rowTops[i] -= removedHeight;
+                if (i < _rowBlocks.Count)
+                    _rowBlocks[i].PositionY = _rowTops[i];
+            }
+
+            if (_rowCards.Count == 0)
+            {
+                // Nothing left to focus.
+                _rowIndex = 0;
+                _colIndex = 0;
+                return;
+            }
+
+            if (!wasFocusedRow)
+            {
+                // A row above the focused one was removed — keep the same logical row focused
+                // by shifting the index down; the view itself already moved up to compensate.
+                if (rowIdx < _rowIndex)
+                    _rowIndex -= 1;
+                _rowIndex = Math.Clamp(_rowIndex, 0, _rowCards.Count - 1);
+                _colIndex = Math.Clamp(_colIndex, 0, _rowCards[_rowIndex].Count - 1);
+                return;
+            }
+
+            // The focused row itself was removed entirely — move focus to the row that took
+            // its place (same index if one exists, else the previous row), mirroring how
+            // initial load simply omits an empty row without special-casing focus.
+            _rowIndex = Math.Clamp(rowIdx, 0, _rowCards.Count - 1);
+            _colIndex = Math.Clamp(_colIndex, 0, _rowCards[_rowIndex].Count - 1);
+            Highlight(true);
+            FocusManager.Instance.SetCurrentFocusView(_rowCards[_rowIndex][_colIndex]);
+            ScrollHorizontalIfNeeded();
+            ScrollVerticalIfNeeded();
         }
 
         public void HandleKey(AppKey key)

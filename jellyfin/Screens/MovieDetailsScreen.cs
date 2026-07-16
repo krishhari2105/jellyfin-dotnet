@@ -22,7 +22,7 @@ namespace JellyfinTizen.Screens
         private const float EpisodeFocusScale = 1.03f;
         private const int FixedTopContentHeight = 500;
         private const int TitleLogoMaxWidth = 720;
-        private const int TitleLogoQuality = 76;
+        private const int TitleLogoQuality = 50;
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
         private readonly JellyfinMovie _mediaItem;
@@ -47,16 +47,15 @@ namespace JellyfinTizen.Screens
                 _mediaItem,
                 serverUrl,
                 apiKey,
-                maxWidth: 1920,
                 fallbackBackdropItemId: _mediaItem.IsEpisode ? _mediaItem.SeriesId : null);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
             var dimOverlay = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -76,7 +75,7 @@ namespace JellyfinTizen.Screens
             };
             var posterUrl =
                 $"{serverUrl}/Items/{_mediaItem.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
             var posterFrame = new View
             {
@@ -90,9 +89,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
             posterFrame.Add(poster);
             _infoColumn = new View
             {
@@ -200,8 +199,18 @@ namespace JellyfinTizen.Screens
             }
             else
             {
+                // Show the full-screen loading overlay synchronously as the first thing on
+                // the non-series (resume) path, so it paints in the same frame this cached
+                // screen is re-attached — before any stale child views render. Hidden when
+                // RefreshResumeStateFromServerAsync completes. (Not placed before the
+                // IsSeries check: the series branch does not run RefreshResumeStateFromServerAsync
+                // and therefore has no balancing HideLoadingOverlay, so showing it there would
+                // leave the overlay stuck.)
+                NavigationService.ShowLoadingOverlay("Loading details...");
                 if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
                     _ = LoadMediaSourcesAndSubtitlesAsync();
+                // Litefin-style: always re-fetch server-truth resume state on every OnShow.
+                _ = RefreshResumeStateFromServerAsync();
                 if (_buttons.Count > 0)
                     FocusButton(0);
                 RunOnUiThread(RefreshOverviewScrollBounds);
@@ -284,11 +293,11 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = TitleLogoDisplayWidth,
                 HeightSpecification = TitleLogoDisplayHeight,
-                ResourceUrl = logoUrl,
                 PreMultipliedAlpha = false,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.Linear
             };
+            UiAnimator.FadeInOnImageReady(logo, logoUrl, UiAnimator.BackdropFadeInDurationMs);
 
             logoContainer.Add(logo);
             return logoContainer;
@@ -407,6 +416,11 @@ namespace JellyfinTizen.Screens
                 _subtitleStreamsLoaded = true;
 
                 NormalizeSelectionStateForCurrentMediaSource();
+                // Re-derive Resume button state from the authoritative
+                // GetMediaItem().PlaybackPositionTicks BEFORE repainting, so this
+                // network-fetch-completion path cannot stomp an optimistic local update with
+                // stale field state. RebuildActionButtons is only the dumb repaint step.
+                ReconcileResumeButtonFromMediaItem();
                 RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
                 UpdateVersionButtonText();
                 UpdateMetadataView();
@@ -437,6 +451,11 @@ namespace JellyfinTizen.Screens
                     _actionButtonReflowScheduled = false;
                     if (_buttonGroup == null)
                         return;
+
+                    // Re-derive Resume button state from the current authoritative
+                    // mediaItem.PlaybackPositionTicks before rebuilding, so this reflow does
+                    // not repaint stale button state.
+                    ReconcileResumeButtonFromMediaItem();
 
                     RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
                     if (_buttons.Count > 0)

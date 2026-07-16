@@ -178,12 +178,15 @@ namespace JellyfinTizen.Screens
                     AppState.Username
                 );
 
+#if TAILSCALE
                 var isTailscaleUrl = AppState.IsTailscaleUrl(AppState.Jellyfin.ServerUrl);
                 var isTailscaleConnected = isTailscaleUrl && await AppState.IsTailscaleConnectedAsync();
+#endif
 
                 RunOnUiThread(() =>
                 {
                     NavigationService.ClearStack();
+#if TAILSCALE
                     // If the server is a Tailscale URL and not connected, go through Tailscale auth first
                     if (isTailscaleUrl && !isTailscaleConnected)
                     {
@@ -193,6 +196,7 @@ namespace JellyfinTizen.Screens
                         );
                     }
                     else
+#endif
                     {
                         NavigationService.Navigate(
                             new HomeLoadingScreen(),

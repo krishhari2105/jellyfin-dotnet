@@ -23,14 +23,17 @@ namespace JellyfinTizen.Screens
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int EpisodePageSize = 40;
         private const int EpisodePrefetchThreshold = 8;
+        private const int FixedTopContentHeight = 370;
 
         private readonly JellyfinMovie _season;
         private readonly ImageView _backdropView;
         private View _infoColumn;
         private View _episodeViewport;
         private View _episodeRowContainer;
+        private View _overviewViewport;
         private List<JellyfinMovie> _episodes;
         private readonly List<View> _episodeViews = new();
+        private readonly List<View> _episodeBadges = new();
         private int _episodeIndex = -1;
         private bool _isEpisodeViewFocused;
         private bool _isEpisodeLoadInProgress;
@@ -50,17 +53,17 @@ namespace JellyfinTizen.Screens
             var serverUrl = AppState.Jellyfin.ServerUrl;
 
             var backdropUrl = !string.IsNullOrWhiteSpace(_season.SeriesId)
-                ? JellyfinImageUrlBuilder.BuildImageUrl(serverUrl, _season.SeriesId, "Backdrop", 1920, 90, apiKey)
-                : JellyfinImageUrlBuilder.BuildBackdropUrl(_season, serverUrl, apiKey, maxWidth: 1920);
+                ? JellyfinImageUrlBuilder.BuildImageUrl(serverUrl, _season.SeriesId, "Backdrop", JellyfinImageUrlBuilder.DefaultBackdropMaxWidth, JellyfinImageUrlBuilder.DefaultBackdropQuality, apiKey)
+                : JellyfinImageUrlBuilder.BuildBackdropUrl(_season, serverUrl, apiKey);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
 
             _backdropView = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
 
             var dimOverlay = new View
             {
@@ -73,7 +76,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 80, 80),
+                Padding = new Extents(90, 90, 60, 40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -83,7 +86,7 @@ namespace JellyfinTizen.Screens
 
             var posterUrl =
                 $"{serverUrl}/Items/{_season.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
@@ -98,9 +101,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
 
             posterFrame.Add(poster);
 
@@ -111,7 +114,7 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
+                    CellPadding = new Size2D(0, 12)
                 }
             };
 
@@ -124,10 +127,19 @@ namespace JellyfinTizen.Screens
                 LineWrapMode = LineWrapMode.Word
             };
 
-            var overviewViewport = new View
+            int titleHeight = 80;
+            int topGaps = 2 * 12;
+            int estimatedOverviewHeight = EstimateOverviewHeight(_season.Overview, 1260, 32);
+            int overviewHeight = Math.Clamp(
+                estimatedOverviewHeight,
+                40,
+                Math.Max(40, FixedTopContentHeight - (titleHeight + topGaps))
+            );
+
+            _overviewViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 260,
+                HeightSpecification = overviewHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
@@ -146,10 +158,10 @@ namespace JellyfinTizen.Screens
                 Ellipsis = false
             };
 
-            overviewViewport.Add(overview);
+            _overviewViewport.Add(overview);
 
             _infoColumn.Add(title);
-            _infoColumn.Add(overviewViewport);
+            _infoColumn.Add(_overviewViewport);
 
             content.Add(posterFrame);
             content.Add(_infoColumn);
@@ -169,7 +181,13 @@ namespace JellyfinTizen.Screens
             }
 
             if (_episodes == null || _episodes.Count == 0)
+            {
                 _ = LoadEpisodesAsync();
+            }
+            else
+            {
+                _ = RefreshEpisodesPlayedStateFromServerAsync();
+            }
         }
 
         private async Task LoadEpisodesAsync()
@@ -238,6 +256,53 @@ namespace JellyfinTizen.Screens
             _ = LoadMoreEpisodesAsync(force: false);
         }
 
+        private async Task RefreshEpisodesPlayedStateFromServerAsync()
+        {
+            if (string.IsNullOrWhiteSpace(_season.SeriesId) || string.IsNullOrWhiteSpace(_season.Id))
+                return;
+
+            try
+            {
+                var serverEpisodes = await AppState.Jellyfin.GetEpisodesAsync(_season.SeriesId, _season.Id, lightweight: true);
+                if (serverEpisodes == null || serverEpisodes.Count == 0)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    try
+                    {
+                        for (int i = 0; i < _episodes.Count; i++)
+                        {
+                            var episode = _episodes[i];
+                            if (episode == null || string.IsNullOrWhiteSpace(episode.Id))
+                                continue;
+
+                            var serverEp = serverEpisodes.Find(e => e != null && e.Id == episode.Id);
+                            if (serverEp != null)
+                            {
+                                episode.Played = serverEp.Played;
+                                if (i < _episodeBadges.Count && _episodeBadges[i] != null)
+                                {
+                                    if (episode.Played)
+                                        _episodeBadges[i].Show();
+                                    else
+                                        _episodeBadges[i].Hide();
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync UI update error: {ex.Message}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync fetch error: {ex.Message}");
+            }
+        }
+
         private void ResetEpisodeSection()
         {
             if (_episodeRowContainer != null)
@@ -255,6 +320,7 @@ namespace JellyfinTizen.Screens
             }
 
             _episodeViews.Clear();
+            _episodeBadges.Clear();
             _episodes = new List<JellyfinMovie>();
             _episodeIndex = -1;
         }
@@ -264,8 +330,7 @@ namespace JellyfinTizen.Screens
             if (_episodeViewport == null)
                 return;
 
-            int cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
-            _episodeViewport.HeightSpecification = cardHeight + (FocusPad * 2);
+            _episodeViewport.HeightSpecification = 390;
         }
 
         private void EnsureEpisodeSection()
@@ -277,25 +342,25 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
-                PointSize = 32,
+                Margin = new Extents(0, 0, 14, 0),
+                PointSize = 34,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
                 Ellipsis = false
             };
-
-            var cardHeight = EpisodeCardHeight + _episodeCardTextHeight;
+            episodesTitle.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
             _episodeViewport = new View
             {
+                PositionX = -12,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = cardHeight + (FocusPad * 2),
+                HeightSpecification = 390,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _episodeRowContainer = new View
             {
-                PositionX = FocusPad,
+                PositionX = 12,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -317,6 +382,7 @@ namespace JellyfinTizen.Screens
             _episodeLoadingText.Hide();
 
             _episodeViews.Clear();
+            _episodeBadges.Clear();
 
             _episodeViewport.Add(_episodeRowContainer);
             _infoColumn.Add(episodesTitle);
@@ -337,8 +403,9 @@ namespace JellyfinTizen.Screens
 
                 _episodes.Add(episode);
 
-                var card = CreateEpisodeCard(episode);
+                var card = CreateEpisodeCard(episode, out var playedBadge);
                 _episodeViews.Add(card);
+                _episodeBadges.Add(playedBadge);
                 _episodeRowContainer.Add(card);
             }
 
@@ -418,7 +485,7 @@ namespace JellyfinTizen.Screens
                 var series = await AppState.Jellyfin.GetItemAsync(_season.SeriesId);
                 var apiKey = Uri.EscapeDataString(AppState.AccessToken);
                 var serverUrl = AppState.Jellyfin.ServerUrl;
-                var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(series, serverUrl, apiKey, maxWidth: 1920);
+                var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(series, serverUrl, apiKey);
 
                 if (string.IsNullOrWhiteSpace(backdropUrl))
                     return;
@@ -426,7 +493,7 @@ namespace JellyfinTizen.Screens
                 RunOnUiThread(() =>
                 {
                     if (_backdropView != null)
-                        _backdropView.ResourceUrl = backdropUrl;
+                        UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
                 });
             }
             catch
@@ -435,7 +502,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private View CreateEpisodeCard(JellyfinMovie episode)
+        private View CreateEpisodeCard(JellyfinMovie episode, out View playedBadge)
         {
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
@@ -445,21 +512,21 @@ namespace JellyfinTizen.Screens
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Thumb/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Primary/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasBackdrop)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Backdrop/0" +
-                    $"?maxWidth={EpisodeCardWidth}&quality=65&api_key={apiKey}";
+                    $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 
@@ -472,9 +539,11 @@ namespace JellyfinTizen.Screens
                 subtitle: null,
                 imageUrl: imageUrl,
                 out _,
+                out playedBadge,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                played: episode.Played
             );
         }
 
@@ -607,7 +676,7 @@ namespace JellyfinTizen.Screens
 
             if (_episodeIndex == 0)
             {
-                AnimateEpisodeRowTo(FocusPad);
+                AnimateEpisodeRowTo(12);
                 return;
             }
 
@@ -645,5 +714,54 @@ namespace JellyfinTizen.Screens
             _episodeRowContainer.PositionX = targetX;
         }
 
+        private static int EstimateOverviewHeight(string text, int width, float pointSize)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 40;
+
+            float approximateCharWidth = pointSize * 0.54f;
+            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(paragraph))
+                {
+                    lineCount++;
+                    continue;
+                }
+
+                int currentLineLength = 0;
+                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int wordLength = word.Length;
+                    if (currentLineLength == 0)
+                    {
+                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        currentLineLength = wordLength % maxCharsPerLine;
+                        if (currentLineLength == 0 && wordLength > 0)
+                            currentLineLength = maxCharsPerLine;
+                        continue;
+                    }
+
+                    int requiredLength = currentLineLength + 1 + wordLength;
+                    if (requiredLength <= maxCharsPerLine)
+                    {
+                        currentLineLength = requiredLength;
+                        continue;
+                    }
+
+                    lineCount++;
+                    currentLineLength = wordLength % maxCharsPerLine;
+                    if (currentLineLength == 0 && wordLength > 0)
+                        currentLineLength = maxCharsPerLine;
+                }
+                if (currentLineLength == 0)
+                    lineCount++;
+            }
+
+            float lineHeight = pointSize * 1.35f;
+            return (int)Math.Ceiling(lineCount * lineHeight);
+        }
     }
 }

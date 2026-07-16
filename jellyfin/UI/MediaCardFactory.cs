@@ -1,6 +1,7 @@
 using System;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.UI
 {
@@ -86,10 +87,12 @@ namespace JellyfinTizen.UI
             string subtitle,
             string imageUrl,
             out ImageView imageView,
+            out View playedBadge,
             int focusBorder = DefaultFocusBorder,
             int titlePoint = DefaultTitlePointSize,
             int subtitlePoint = DefaultSubtitlePointSize,
-            float? progressRatio = null)
+            float? progressRatio = null,
+            bool played = false)
         {
             _ = focusBorder;
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
@@ -147,10 +150,54 @@ namespace JellyfinTizen.UI
                 Name = "CardImage",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = imageUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(imageView, imageUrl);
             imageContainer.Add(imageView);
+
+            playedBadge = new View
+            {
+                Name = "CardPlayedBadgeBackdrop",
+                WidthSpecification = 48,
+                HeightSpecification = 48,
+                BackgroundColor = new Color(0f, 0f, 0f, 0.65f),
+                CornerRadius = 24.0f,
+                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
+                ParentOrigin = Tizen.NUI.ParentOrigin.TopRight,
+                PivotPoint = Tizen.NUI.PivotPoint.TopRight,
+                PositionUsesPivotPoint = true,
+                PositionX = -10,
+                PositionY = 10,
+                Layout = new LinearLayout
+                {
+                    LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+
+            var badgeIcon = new ImageView
+            {
+                Name = "CardPlayedBadgeIcon",
+                WidthSpecification = 30,
+                HeightSpecification = 30,
+                ResourceUrl = System.IO.Path.Combine(Tizen.Applications.Application.Current.DirectoryInfo.SharedResource, "check_circle_white.svg"),
+                PreMultipliedAlpha = false,
+                FittingMode = FittingModeType.ShrinkToFit,
+                SamplingMode = SamplingModeType.BoxThenLanczos
+            };
+
+            playedBadge.Add(badgeIcon);
+            imageContainer.Add(playedBadge);
+
+            if (played)
+            {
+                playedBadge.Show();
+            }
+            else
+            {
+                playedBadge.Hide();
+            }
 
             if (showProgress)
             {

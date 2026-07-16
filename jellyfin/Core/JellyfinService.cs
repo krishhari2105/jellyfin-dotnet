@@ -494,6 +494,24 @@ namespace JellyfinTizen.Core
             return ParseMediaItem(doc.RootElement);
         }
 
+        public async Task<List<JellyfinMovie>> GetItemsByIdsAsync(List<string> itemIds)
+        {
+            if (itemIds == null || itemIds.Count == 0)
+                return new List<JellyfinMovie>();
+
+            var idsParam = string.Join(",", itemIds);
+            var url =
+                $"/Users/{UserId}/Items?Ids={idsParam}" +
+                $"&Fields={FullMediaFields}" +
+                $"&UserId={UserId}";
+
+            var json = await GetAsync(url);
+            using var doc = JsonDocument.Parse(json);
+            var items = doc.RootElement.GetProperty("Items");
+
+            return ParseMediaItems(items);
+        }
+
         public async Task<List<JellyfinMovie>> GetRecentlyAddedAsync(string libraryId, string includeItemTypes, int limit)
         {
             var url =
@@ -666,6 +684,9 @@ namespace JellyfinTizen.Core
                                          userData.TryGetProperty("PlaybackPositionTicks", out var ticks)
                     ? ticks.GetInt64()
                     : 0,
+                Played = item.TryGetProperty("UserData", out var userDataPlayed) &&
+                         userDataPlayed.TryGetProperty("Played", out var playedProp) &&
+                         playedProp.ValueKind == JsonValueKind.True,
                 RunTimeTicks = item.TryGetProperty("RunTimeTicks", out var rt)
                     ? rt.GetInt64()
                     : 0,

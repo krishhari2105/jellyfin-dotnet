@@ -23,14 +23,16 @@ namespace JellyfinTizen.Screens
         private const int SeasonRowTopInset = FocusPad;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int TitleLogoMaxWidth = 720;
-        private const int TitleLogoQuality = 76;
+        private const int TitleLogoQuality = 50;
         private const int TitleLogoDisplayWidth = 720;
         private const int TitleLogoDisplayHeight = 136;
+        private const int FixedTopContentHeight = 370;
 
         private readonly JellyfinMovie _series;
         private View _infoColumn;
         private View _seasonViewport;
         private View _seasonRowContainer;
+        private View _overviewViewport;
         private List<JellyfinMovie> _seasons;
         private readonly List<View> _seasonViews = new();
         private int _seasonIndex = -1;
@@ -48,16 +50,15 @@ namespace JellyfinTizen.Screens
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
                 _series,
                 serverUrl,
-                apiKey,
-                maxWidth: 1920);
+                apiKey);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = backdropUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
             var dimOverlay = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -68,7 +69,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 80, 80),
+                Padding = new Extents(90, 90, 60, 40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -78,7 +79,7 @@ namespace JellyfinTizen.Screens
 
             var posterUrl =
                 $"{serverUrl}/Items/{_series.Id}/Images/Primary/0" +
-                $"?maxWidth={PosterWidth}&quality=75&api_key={apiKey}";
+                $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
             posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
@@ -93,9 +94,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                ResourceUrl = posterUrl,
                 PreMultipliedAlpha = false
             };
+            UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
 
             posterFrame.Add(poster);
 
@@ -106,7 +107,7 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
+                    CellPadding = new Size2D(0, 12)
                 }
             };
 
@@ -115,10 +116,21 @@ namespace JellyfinTizen.Screens
                 : CreateTextTitle(_series.Name);
 
             var metadata = BuildMetadataRow(_series);
-            var overviewViewport = new View
+            
+            int titleHeight = _series.HasLogo ? TitleLogoDisplayHeight : 80;
+            int metadataHeight = 40;
+            int topGaps = 2 * 12;
+            int estimatedOverviewHeight = EstimateOverviewHeight(_series.Overview, 1260, 32);
+            int overviewHeight = Math.Clamp(
+                estimatedOverviewHeight,
+                40,
+                Math.Max(40, FixedTopContentHeight - (titleHeight + metadataHeight + topGaps))
+            );
+
+            _overviewViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 260,
+                HeightSpecification = overviewHeight,
                 ClippingMode = ClippingModeType.ClipChildren
             };
             var overview = new TextLabel(
@@ -134,11 +146,11 @@ namespace JellyfinTizen.Screens
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word
             };
-            overviewViewport.Add(overview);
+            _overviewViewport.Add(overview);
 
             _infoColumn.Add(title);
             _infoColumn.Add(metadata);
-            _infoColumn.Add(overviewViewport);
+            _infoColumn.Add(_overviewViewport);
 
             content.Add(posterFrame);
             content.Add(_infoColumn);
@@ -172,11 +184,11 @@ namespace JellyfinTizen.Screens
             {
                 WidthSpecification = TitleLogoDisplayWidth,
                 HeightSpecification = TitleLogoDisplayHeight,
-                ResourceUrl = logoUrl,
                 PreMultipliedAlpha = false,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.Linear
             };
+            UiAnimator.FadeInOnImageReady(logo, logoUrl, UiAnimator.BackdropFadeInDurationMs);
 
             logoContainer.Add(logo);
             return logoContainer;
@@ -292,28 +304,28 @@ namespace JellyfinTizen.Screens
         {
             if (_seasons == null || _seasons.Count == 0) return;
 
-            var cardHeight = SeasonCardHeight + _seasonCardTextHeight;
-
             var title = new TextLabel("Seasons")
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
-                PointSize = 32,
+                Margin = new Extents(0, 0, 14, 0),
+                PointSize = 34,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin
             };
+            title.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
             _seasonViewport = new View
             {
+                PositionX = -12,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = cardHeight + (FocusPad * 2),
+                HeightSpecification = 550,
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _seasonRowContainer = new View
             {
-                PositionX = FocusPad,
+                PositionX = 12,
                 PositionY = SeasonRowTopInset,
                 Layout = new LinearLayout
                 {
@@ -344,14 +356,14 @@ namespace JellyfinTizen.Screens
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (season.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
-                    $"?maxWidth={SeasonCardWidth}&quality=70&api_key={apiKey}";
+                    $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
                 imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 
@@ -363,9 +375,11 @@ namespace JellyfinTizen.Screens
                 subtitle: null,
                 imageUrl: imageUrl,
                 out _,
+                out _,
                 focusBorder: FocusBorder,
                 titlePoint: (int)UiTheme.MediaCardTitle,
-                subtitlePoint: (int)UiTheme.MediaCardSubtitle
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                played: season.Played
             );
         }
 
@@ -459,7 +473,7 @@ namespace JellyfinTizen.Screens
 
             if (_seasonIndex == 0)
             {
-                _seasonRowContainer.PositionX = FocusPad;
+                _seasonRowContainer.PositionX = 12;
                 return;
             }
 
@@ -480,6 +494,56 @@ namespace JellyfinTizen.Screens
                 targetX += (visibleLeft - left + SeasonCardSpacing);
 
             _seasonRowContainer.PositionX = targetX;
+        }
+
+        private static int EstimateOverviewHeight(string text, int width, float pointSize)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 40;
+
+            float approximateCharWidth = pointSize * 0.54f;
+            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(paragraph))
+                {
+                    lineCount++;
+                    continue;
+                }
+
+                int currentLineLength = 0;
+                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int wordLength = word.Length;
+                    if (currentLineLength == 0)
+                    {
+                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        currentLineLength = wordLength % maxCharsPerLine;
+                        if (currentLineLength == 0 && wordLength > 0)
+                            currentLineLength = maxCharsPerLine;
+                        continue;
+                    }
+
+                    int requiredLength = currentLineLength + 1 + wordLength;
+                    if (requiredLength <= maxCharsPerLine)
+                    {
+                        currentLineLength = requiredLength;
+                        continue;
+                    }
+
+                    lineCount++;
+                    currentLineLength = wordLength % maxCharsPerLine;
+                    if (currentLineLength == 0 && wordLength > 0)
+                        currentLineLength = maxCharsPerLine;
+                }
+                if (currentLineLength == 0)
+                    lineCount++;
+            }
+
+            float lineHeight = pointSize * 1.35f;
+            return (int)Math.Ceiling(lineCount * lineHeight);
         }
     }
 }

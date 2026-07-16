@@ -8,3 +8,7 @@ obj/
 *.rpm
 *.log
 .claude/
+.kiro/
+bin-standalone/
+obj-standalone/
+lib/

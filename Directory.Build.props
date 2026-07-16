@@ -1,0 +1,18 @@
+<Project>
+  <!--
+    Directory.Build.props is imported very early (before Microsoft.Common.props),
+    so we can safely set BaseOutputPath and BaseIntermediateOutputPath here
+    based on the TailscaleEnabled property passed at the command line.
+  -->
+  <PropertyGroup>
+    <!-- Default output paths (for TailscaleEnabled=true or unspecified) -->
+    <BaseOutputPath>bin\</BaseOutputPath>
+    <BaseIntermediateOutputPath>obj\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+
+  <!-- Standalone build: redirect outputs to separate folders -->
+  <PropertyGroup Condition=" '$(TailscaleEnabled)' != 'true' ">
+    <BaseOutputPath>bin-standalone\</BaseOutputPath>
+    <BaseIntermediateOutputPath>obj-standalone\</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

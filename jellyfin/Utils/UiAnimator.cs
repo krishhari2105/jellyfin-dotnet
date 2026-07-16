@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
+using System.Runtime.CompilerServices;
 
 namespace JellyfinTizen.Utils
 {
@@ -10,9 +11,13 @@ namespace JellyfinTizen.Utils
         public const int FocusDurationMs = 120;
         public const int ScrollDurationMs = 160;
         public const int PanelDurationMs = 200;
+        public const int FadeInDurationMs = 150;
+        public const int HeroFadeInDurationMs = 300;
+        public const int BackdropFadeInDurationMs = 1000;
 
         private static readonly object _sync = new();
         private static readonly HashSet<Animation> _activeAnimations = new();
+        private static readonly ConditionalWeakTable<ImageView, EventHandler<ImageView.ResourceReadyEventArgs>> _pendingFades = new();
 
         public static Animation Start(int durationMs, Action<Animation> configure, Action onFinished = null)
         {
@@ -88,6 +93,61 @@ namespace JellyfinTizen.Utils
             }
 
             try { animation.Dispose(); } catch { }
+        }
+
+        public static void CancelFadeIn(ImageView imageView)
+        {
+            if (imageView == null)
+                return;
+
+            if (_pendingFades.TryGetValue(imageView, out var handler))
+            {
+                try
+                {
+                    imageView.ResourceReady -= handler;
+                }
+                catch
+                {
+                    // Fail-safe
+                }
+                _pendingFades.Remove(imageView);
+            }
+        }
+
+        public static void FadeInOnImageReady(ImageView imageView, string resourceUrl, int durationMs = FadeInDurationMs)
+        {
+            if (imageView == null)
+                return;
+
+            CancelFadeIn(imageView);
+
+            imageView.Opacity = 0.0f;
+
+            if (string.IsNullOrWhiteSpace(resourceUrl))
+            {
+                imageView.Opacity = 1.0f;
+                imageView.ResourceUrl = null;
+                return;
+            }
+
+            EventHandler<ImageView.ResourceReadyEventArgs> handler = null;
+            handler = (sender, e) =>
+            {
+                try
+                {
+                    _pendingFades.Remove(imageView);
+                    imageView.ResourceReady -= handler;
+                    _ = AnimateTo(imageView, "Opacity", 1.0f, durationMs);
+                }
+                catch
+                {
+                    // Fail-safe
+                }
+            };
+
+            _pendingFades.Add(imageView, handler);
+            imageView.ResourceReady += handler;
+            imageView.ResourceUrl = resourceUrl;
         }
     }
 }

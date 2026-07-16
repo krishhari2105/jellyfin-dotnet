@@ -40,7 +40,11 @@ namespace JellyfinTizen.Screens
         private View _cardsRow;
         private View _addButton;
         private View _removeButton;
+#if TAILSCALE
         private View _tailscaleButton;
+#else
+        private readonly View _tailscaleButton = null; // no Tailscale UI in standalone build
+#endif
         private TextLabel _errorLabel;
         private int _cardsContentWidth;
         private int _selectedCardIndex;
@@ -130,12 +134,14 @@ namespace JellyfinTizen.Screens
             actionRow.Add(_addButton);
             actionRow.Add(_removeButton);
 
+#if TAILSCALE
             if (AppState.Tailscale != null)
             {
                 _tailscaleButton = MonochromeAuthFactory.CreateButton("Tailscale Settings", out _);
                 _actionButtons.Add(_tailscaleButton);
                 actionRow.Add(_tailscaleButton);
             }
+#endif
 
             panel.Add(actionRow);
 
@@ -468,7 +474,9 @@ namespace JellyfinTizen.Screens
 
             if (_selectedActionIndex == 2 && _tailscaleButton != null)
             {
+#if TAILSCALE
                 NavigationService.Navigate(new TailscaleScreen());
+#endif
                 return;
             }
         }
@@ -526,6 +534,7 @@ namespace JellyfinTizen.Screens
             var isTailscale = AppState.IsTailscaleUrl(server.Url);
             Core.TailscaleDebugLog.Add($"ServerPicker.Select: url={server.Url}, isTailscale={isTailscale}, hasSession={server.HasSavedSession}");
 
+#if TAILSCALE
             if (isTailscale)
             {
                 var tailscaleReady = await EnsureTailscaleReadyForPickerAsync();
@@ -536,6 +545,7 @@ namespace JellyfinTizen.Screens
                     return;
                 }
             }
+#endif
 
             RunOnUiThread(() =>
             {
@@ -590,6 +600,7 @@ namespace JellyfinTizen.Screens
             }
         }
 
+#if TAILSCALE
         private async Task<bool> EnsureTailscaleReadyForPickerAsync()
         {
             try
@@ -641,6 +652,7 @@ namespace JellyfinTizen.Screens
                 return false;
             }
         }
+#endif
 
         private static void ClearRuntimeAuthForUserSelection()
         {
