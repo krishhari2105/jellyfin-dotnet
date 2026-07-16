@@ -82,7 +82,7 @@ namespace JellyfinTizen.Core
             Jellyfin.DeviceId = DeviceId;
             BurnInSubtitles = false;
             ForceTsTranscoding = false;
-            PreviewAutoplayEnabled = false;
+            PreviewAutoplayEnabled = true;
             DetailsPreviewDelayMs = 1800;
 
             // Initialize lifecycle state machine

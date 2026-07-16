@@ -16,7 +16,7 @@ using ThreadingTimer = System.Threading.Timer;
 
 namespace JellyfinTizen.Screens
 {
-    public abstract class DetailsScreenBase : ScreenBase, IKeyHandler
+    public abstract partial class DetailsScreenBase : ScreenBase, IKeyHandler
     {
         // =====================================================================
         // SHARED ENUMS

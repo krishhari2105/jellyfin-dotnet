@@ -105,10 +105,20 @@ namespace JellyfinTizen.Screens
 
             await EnsureMinimumDisplayTimeAsync(shownAt);
 
-            NavigationService.Navigate(
-                new EpisodeDetailsScreen(detailedEpisode ?? _episode, subtitleStreams, mediaSources),
-                addToStack: false
-            );
+            if (AppState.PreviewAutoplayEnabled)
+            {
+                NavigationService.Navigate(
+                    new VideoPlayerScreen(detailedEpisode ?? _episode, previewMode: true),
+                    addToStack: false
+                );
+            }
+            else
+            {
+                NavigationService.Navigate(
+                    new EpisodeDetailsScreen(detailedEpisode ?? _episode, subtitleStreams, mediaSources),
+                    addToStack: false
+                );
+            }
         }
 
         private static async Task EnsureMinimumDisplayTimeAsync(DateTime shownAt)

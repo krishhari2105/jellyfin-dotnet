@@ -903,10 +903,16 @@ namespace JellyfinTizen.Screens
                 }
                 else // Movie
                 {
-                    NavigationService.NavigateWithLoading(
-                        () => new MovieDetailsScreen(item.Media),
-                        "Loading details..."
-                    );
+                    if (AppState.PreviewAutoplayEnabled)
+                        NavigationService.NavigateWithLoading(
+                            () => new VideoPlayerScreen(item.Media, previewMode: true),
+                            "Loading details..."
+                        );
+                    else
+                        NavigationService.NavigateWithLoading(
+                            () => new MovieDetailsScreen(item.Media),
+                            "Loading details..."
+                        );
                 }
             }
         }

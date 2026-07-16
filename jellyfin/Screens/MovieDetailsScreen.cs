@@ -20,7 +20,6 @@ namespace JellyfinTizen.Screens
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
         private const float EpisodeFocusScale = 1.03f;
-        private const int FixedTopContentHeight = 500;
         private const int TitleLogoMaxWidth = 720;
         private const int TitleLogoQuality = 50;
         private const int TitleLogoDisplayWidth = 720;
@@ -40,7 +39,6 @@ namespace JellyfinTizen.Screens
         public MovieDetailsScreen(JellyfinMovie movie) : base(movie)
         {
             _mediaItem = movie;
-            var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
@@ -48,31 +46,6 @@ namespace JellyfinTizen.Screens
                 serverUrl,
                 apiKey,
                 fallbackBackdropItemId: _mediaItem.IsEpisode ? _mediaItem.SeriesId : null);
-            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
-            var backdrop = new ImageView
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PreMultipliedAlpha = false
-            };
-            UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
-            var dimOverlay = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
-            };
-            var content = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 80, 80),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(60, 0)
-                }
-            };
             var posterUrl =
                 $"{serverUrl}/Items/{_mediaItem.Id}/Images/Primary/0" +
                 $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
@@ -93,103 +66,14 @@ namespace JellyfinTizen.Screens
             };
             UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
             posterFrame.Add(poster);
-            _infoColumn = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
-                }
-            };
             var titleText = _mediaItem.IsEpisode
                 ? DetailsScreenHelpers.BuildEpisodeTitle(_mediaItem)
                 : _mediaItem.Name;
             var title = CreateDetailsTitleView(titleText);
-            _metadataContainer = CreateMetadataView();
             var overviewText = string.IsNullOrEmpty(_mediaItem.Overview)
                 ? "No overview available."
                 : _mediaItem.Overview;
-            var topContentViewport = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = FixedTopContentHeight,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            var topContent = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
-                }
-            };
-            _overviewViewport = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = FixedOverviewViewportHeight,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            _overviewLabel = new TextLabel(overviewText)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = 31,
-                TextColor = UiTheme.DetailsOverviewText,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word,
-                Ellipsis = false,
-                VerticalAlignment = VerticalAlignment.Top
-            };
-            _overviewViewport.Add(_overviewLabel);
-            topContent.Add(title);
-            topContent.Add(_metadataContainer);
-            topContent.Add(_overviewViewport);
-            topContentViewport.Add(topContent);
-            _infoColumn.Add(topContentViewport);
-            UpdateMetadataView();
-            if (_mediaItem.IsPlayableVideo)
-            {
-                _buttonGroup = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FitToChildren,
-                    Layout = new LinearLayout
-                    {
-                        LinearOrientation = LinearLayout.Orientation.Vertical,
-                        CellPadding = new Size2D(0, 14)
-                    },
-                    Margin = new Extents(0, 0, 34, 0)
-                };
-
-                _buttonRowTop = DetailsScreenHelpers.CreateButtonRow();
-                _buttonRowBottom = DetailsScreenHelpers.CreateButtonRow();
-                _buttonGroup.Add(_buttonRowTop);
-                _buttonGroup.Add(_buttonRowBottom);
-
-                _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: DetailsScreenHelpers.PlayActionButtonWidth, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
-
-                if (_resumeAvailable)
-                {
-                    _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
-                }
-
-                _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.AudioActionButtonIconSize);
-                _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.SubtitleActionButtonIconSize);
-                _versionButton = CreateActionButton("Default", isPrimary: false);
-                RebuildActionButtons(includeVersionButton: false);
-                _infoColumn.Add(_buttonGroup);
-            }
-            content.Add(posterFrame);
-            content.Add(_infoColumn);
-            root.Add(backdrop);
-            root.Add(dimOverlay);
-            root.Add(content);
-            Add(root);
-            NormalizeSelectionStateForCurrentMediaSource();
+            BuildDetailsOverlay(backdropUrl, posterFrame, new View[] { title }, overviewText);
         }
         public override void OnShow()
         {

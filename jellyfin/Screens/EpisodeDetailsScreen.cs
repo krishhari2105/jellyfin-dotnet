@@ -17,7 +17,6 @@ namespace JellyfinTizen.Screens
 {
     public class EpisodeDetailsScreen : DetailsScreenBase
     {
-        private const int FixedTopContentHeight = 500;
         private const int EpisodeThumbWidth = 640;
         private const int EpisodeThumbHeight = 360;
         private const float SeriesTitlePointSize = 28f;
@@ -35,39 +34,12 @@ namespace JellyfinTizen.Screens
                 _mediaSources = prefetchedMediaSources;
             _subtitleStreamsLoaded = prefetchedSubtitleStreams != null;
             _mediaSourcesLoaded = prefetchedMediaSources != null;
-            var root = UiFactory.CreateAtmosphericBackground();
             var apiKey = Uri.EscapeDataString(AppState.AccessToken);
             var serverUrl = AppState.Jellyfin.ServerUrl;
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
                 _episode,
                 serverUrl,
                 apiKey);
-            bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
-            var backdrop = new ImageView
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PreMultipliedAlpha = false
-            };
-            UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
-            var dimOverlay = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                BackgroundColor = hasBackdropImage ? UiTheme.DetailsBackdropDim : Color.Transparent
-            };
-            var content = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 80, 80),
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(60, 0)
-                }
-            };
-
             var thumbUrl =
                 _episode.IsEpisode && _episode.HasPrimary
                     ? $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=50&api_key={apiKey}"
@@ -77,7 +49,6 @@ namespace JellyfinTizen.Screens
                             ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=50&api_key={apiKey}"
                             : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=50&api_key={apiKey}";
             thumbUrl = AppState.RewriteImageUrlForTailscale(thumbUrl);
-
             var thumbFrame = new View
             {
                 WidthSpecification = EpisodeThumbWidth,
@@ -86,7 +57,6 @@ namespace JellyfinTizen.Screens
                 CornerRadius = 16.0f,
                 ClippingMode = ClippingModeType.ClipChildren
             };
-
             var thumb = new ImageView
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
@@ -95,18 +65,6 @@ namespace JellyfinTizen.Screens
             };
             UiAnimator.FadeInOnImageReady(thumb, thumbUrl, UiAnimator.HeroFadeInDurationMs);
             thumbFrame.Add(thumb);
-
-            _infoColumn = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
-                }
-            };
-
             var seriesTitleText = _episode.SeriesName;
             var episodeTitleText = DetailsScreenHelpers.BuildEpisodeTitle(_episode);
             var seriesTitle = new TextLabel(seriesTitleText)
@@ -129,90 +87,10 @@ namespace JellyfinTizen.Screens
                 Ellipsis = false,
                 VerticalAlignment = VerticalAlignment.Top
             };
-            _metadataContainer = CreateMetadataView();
             var overviewText = string.IsNullOrEmpty(_episode.Overview)
                 ? "No overview available."
                 : _episode.Overview;
-            var topContentViewport = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = FixedTopContentHeight,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            var topContent = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                Layout = new LinearLayout
-                {
-                    LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
-                }
-            };
-            _overviewViewport = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = FixedOverviewViewportHeight,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            _overviewLabel = new TextLabel(overviewText)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FitToChildren,
-                PointSize = 31,
-                TextColor = UiTheme.DetailsOverviewText,
-                MultiLine = true,
-                LineWrapMode = LineWrapMode.Word,
-                Ellipsis = false,
-                VerticalAlignment = VerticalAlignment.Top
-            };
-            _overviewViewport.Add(_overviewLabel);
-            topContent.Add(seriesTitle);
-            topContent.Add(episodeTitle);
-            topContent.Add(_metadataContainer);
-            topContent.Add(_overviewViewport);
-            topContentViewport.Add(topContent);
-            _infoColumn.Add(topContentViewport);
-            UpdateMetadataView();
-            if (_episode.IsPlayableVideo)
-            {
-                _buttonGroup = new View
-                {
-                    WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightResizePolicy = ResizePolicyType.FitToChildren,
-                    Layout = new LinearLayout
-                    {
-                        LinearOrientation = LinearLayout.Orientation.Vertical,
-                        CellPadding = new Size2D(0, 14)
-                    },
-                    Margin = new Extents(0, 0, 34, 0)
-                };
-
-                _buttonRowTop = DetailsScreenHelpers.CreateButtonRow();
-                _buttonRowBottom = DetailsScreenHelpers.CreateButtonRow();
-                _buttonGroup.Add(_buttonRowTop);
-                _buttonGroup.Add(_buttonRowBottom);
-
-                _playButton = CreateActionButton("Play", isPrimary: true, iconFile: "play.svg", width: DetailsScreenHelpers.PlayActionButtonWidth, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
-
-                if (_resumeAvailable)
-                {
-                    _resumeButton = CreateActionButton("Resume", isPrimary: false, iconFile: "resume.svg", width: null, iconSize: DetailsScreenHelpers.PlayActionButtonIconSize);
-                }
-
-                _audioButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "audio.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.AudioActionButtonIconSize);
-                _subtitleButton = CreateActionButton(string.Empty, isPrimary: false, iconFile: "sub.svg", width: DetailsScreenHelpers.IconActionButtonWidth, iconSize: DetailsScreenHelpers.SubtitleActionButtonIconSize);
-                _versionButton = CreateActionButton("Default", isPrimary: false);
-                RebuildActionButtons(includeVersionButton: false);
-                _infoColumn.Add(_buttonGroup);
-            }
-            content.Add(thumbFrame);
-            content.Add(_infoColumn);
-            root.Add(backdrop);
-            root.Add(dimOverlay);
-            root.Add(content);
-            Add(root);
-            NormalizeSelectionStateForCurrentMediaSource();
+            BuildDetailsOverlay(backdropUrl, thumbFrame, new View[] { seriesTitle, episodeTitle }, overviewText);
         }
         public override void OnShow()
         {

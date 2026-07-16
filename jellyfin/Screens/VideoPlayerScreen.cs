@@ -28,6 +28,12 @@ namespace JellyfinTizen.Screens
         private Player _player;
         private JellyfinMovie _movie;
         private int _startPositionMs;
+        private readonly bool _previewMode;
+        private PreviewOverlay _previewOverlay;
+        private Timer _previewDelayTimer;
+        private bool _previewPlaybackStarted;
+        private bool _previewOverlayHidden;
+        private Animation _previewOverlayAnimation;
         private TextLabel _errorLabel;
         private bool _playbackFailed;
         private bool _isStartingPlayback;
@@ -257,7 +263,8 @@ namespace JellyfinTizen.Screens
             bool burnIn = false,
             string preferredMediaSourceId = null,
             int? audioStreamIndex = null,
-            string initialSubtitleCodec = null
+            string initialSubtitleCodec = null,
+            bool previewMode = false
         )
         {
             _movie = movie;
@@ -278,6 +285,115 @@ namespace JellyfinTizen.Screens
             _overrideAudioIndex = audioStreamIndex;
             _audioSelectionUserOverride = audioStreamIndex.HasValue;
             _trickplayCacheDir = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, "trickplay-cache");
+            _previewMode = previewMode;
+            if (_previewMode)
+            {
+                _previewOverlay = new PreviewOverlay(_movie)
+                {
+                    PlayRequested = OnPreviewPlayRequested,
+                    BackRequested = OnPreviewBackRequested
+                };
+                Add(_previewOverlay);
+            }
+        }
+
+        // Shared resume/start-position resolution: resume position when this item has
+        // playback progress, otherwise 0 (fresh start). Mirrors the Play/Resume expression
+        // used by the details screens (DetailsScreenBase.ActivateFocusedButton) but reads
+        // VideoPlayerScreen's own _movie. Used by the preview-autoplay path.
+        private int ResolveStartPositionMs()
+        {
+            return _movie != null && _movie.PlaybackPositionTicks > 0
+                ? DetailsScreenHelpers.TicksToMs(_movie.PlaybackPositionTicks)
+                : 0;
+        }
+
+        // Raised by the preview overlay when Play/Resume is pressed.
+        private void OnPreviewPlayRequested()
+        {
+            if (!_previewMode)
+                return;
+
+            // Race case: pressed before the delay timer fired — cancel the timer and start
+            // playback exactly once now (same resolved position the timer would have used).
+            if (!_previewPlaybackStarted)
+            {
+                DisposePreviewDelayTimer();
+                StartPreviewPlayback();
+            }
+
+            // Normal case: playback is already running underneath. The ONLY action is fading
+            // the overlay out — no player calls (no restart, seek, mute/unmute, or
+            // start-position re-resolve).
+            FadeOutPreviewOverlay();
+        }
+
+        // Fades the overlay's opacity to 0 and hides it once faded. Touches only the overlay.
+        private void FadeOutPreviewOverlay()
+        {
+            if (_previewOverlay == null || _previewOverlayHidden)
+                return;
+            _previewOverlayHidden = true;
+            UiAnimator.StopAndDispose(ref _previewOverlayAnimation);
+            _previewOverlayAnimation = UiAnimator.AnimateTo(
+                _previewOverlay,
+                "Opacity",
+                0.0f,
+                UiAnimator.HeroFadeInDurationMs,
+                () => _previewOverlay?.Hide());
+        }
+
+        // Raised by the preview overlay when Back is pressed while the overlay is visible:
+        // leave the screen, same as the standalone details-screen Back.
+        private void OnPreviewBackRequested()
+        {
+            NavigationService.NavigateBack();
+        }
+
+        // Arms the delayed autostart. Reuses the file's Tizen.NUI.Timer teardown pattern
+        // (Tick -= ; Stop()) via DisposePreviewDelayTimer — ScreenBase.DisposeTimer targets
+        // System.Threading.Timer and does not apply to the NUI Timer used throughout this file.
+        private void ArmPreviewDelayTimer()
+        {
+            DisposePreviewDelayTimer();
+            _previewDelayTimer = new Timer((uint)Math.Max(1, AppState.DetailsPreviewDelayMs));
+            _previewDelayTimer.Tick += OnPreviewDelayTick;
+            _previewDelayTimer.Start();
+        }
+
+        private bool OnPreviewDelayTick(object sender, Timer.TickEventArgs e)
+        {
+            // One-shot: stop the timer regardless of outcome.
+            DisposePreviewDelayTimer();
+
+            // Debounce guard: only start if still in preview mode, not already started, and
+            // the screen is still attached (user did not back out during the delay window).
+            if (_previewMode && !_previewPlaybackStarted && GetParent() != null)
+                StartPreviewPlayback();
+
+            return false;
+        }
+
+        // Resolves the resume/start position and begins playback exactly once, underneath the
+        // still-visible overlay. Guarded so it cannot double-start (race with a Play press).
+        private void StartPreviewPlayback()
+        {
+            if (_previewPlaybackStarted)
+                return;
+            _previewPlaybackStarted = true;
+            _startPositionMs = ResolveStartPositionMs();
+            _lastKnownPositionTicks = Math.Max(0, (long)_startPositionMs) * 10000;
+            StartPlayback();
+        }
+
+        private void DisposePreviewDelayTimer()
+        {
+            if (_previewDelayTimer != null)
+            {
+                _previewDelayTimer.Tick -= OnPreviewDelayTick;
+                _previewDelayTimer.Stop();
+                _previewDelayTimer = null;
+            }
         }
 
         public override void OnShow()
@@ -309,7 +425,17 @@ namespace JellyfinTizen.Screens
             CreateSubtitleText();
             CreateStreamDebugOverlay();
 
-            StartPlayback();
+            if (_previewMode)
+            {
+                // Preview mode: keep the overlay on top of the (transparent) player window.
+                // Playback is NOT started here — the delayed autostart is armed below.
+                _previewOverlay?.RaiseToTop();
+                ArmPreviewDelayTimer();
+            }
+            else
+            {
+                StartPlayback();
+            }
         }
 
         private void EnsureTransientFeedbackViewsCreated()
@@ -323,6 +449,8 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
+            DisposePreviewDelayTimer();
+            UiAnimator.StopAndDispose(ref _previewOverlayAnimation);
             if (_reportProgressTimer != null)
             {
                 _reportProgressTimer.Tick -= OnReportProgressTick;
@@ -525,6 +653,12 @@ namespace JellyfinTizen.Screens
 
                 ApplyDisplayModeForCurrentVideo();
                 ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
+
+                // Preview mode: playback has started (post-Start + display mode applied), so
+                // reveal the video by fading out the overlay's static backdrop placeholder.
+                // The dim + title/synopsis/buttons stay on top until the user presses Play.
+                if (_previewMode)
+                    RunOnUiThread(() => _previewOverlay?.RevealVideo());
 
                 await StabilizeSubtitlesPostStartAsync(
                     mediaSource,
@@ -6443,6 +6577,22 @@ namespace JellyfinTizen.Screens
                     return;
                 }
                 return;
+            }
+            if (_previewMode)
+            {
+                bool overlayVisible = _previewOverlay != null && !_previewOverlayHidden;
+                if (overlayVisible)
+                {
+                    // Overlay is showing: it owns key handling — button focus (Left/Right),
+                    // Enter -> PlayRequested (fade), Back -> BackRequested (pop the screen).
+                    _previewOverlay.HandleKey(key);
+                    return;
+                }
+                // Overlay already faded (post Play/Resume): defer entirely to the normal player
+                // key handling below. A single Back there stops+reports and pops the screen via
+                // ReportStopThenNavigateBackAsync (which triggers OnHide -> StopPlayback for full
+                // player disposal) — no re-show-overlay intermediate step. OSD/seek sub-states
+                // are still handled first, exactly as in normal playback.
             }
             if (DebugSwitches.EnablePlaybackDebugOverlay)
             {
