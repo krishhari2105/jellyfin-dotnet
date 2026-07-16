@@ -24,7 +24,7 @@ namespace JellyfinTizen.UI
         private const float RingThickness = 3f;
         private const int SpinDurationMs = 1000;
 
-        public AppleTvLoadingVisual(string message)
+        public AppleTvLoadingVisual()
         {
             int screenWidth = Window.Default.Size.Width;
             int screenHeight = Window.Default.Size.Height;
@@ -91,11 +91,6 @@ namespace JellyfinTizen.UI
         }
 
         public View Root => _root;
-
-        public void SetMessage(string message)
-        {
-            // No-op: message text is removed in this simplified layout
-        }
 
         public void Start()
         {

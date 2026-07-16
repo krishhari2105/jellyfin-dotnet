@@ -245,6 +245,7 @@ namespace JellyfinTizen.Core
             if (_window == null || screenFactory == null)
                 return;
 
+            // If already on a LoadingScreen, skip the overlay and navigate immediately.
             if (_currentScreen is LoadingScreen)
             {
                 var immediate = screenFactory();
@@ -254,9 +255,13 @@ namespace JellyfinTizen.Core
 
             try
             {
-                var loadingScreen = new LoadingScreen(message);
+                // Show the shared loading overlay on top of the current screen instead of
+                // navigating to a separate LoadingScreen. This way, when the target screen's
+                // OnShow() also calls ShowLoadingOverlay, the already-spinning overlay is
+                // reused (just raised to top) — no animation reset, no stutter.
+                ShowLoadingOverlay(message);
                 var shownAt = DateTime.UtcNow;
-                Navigate(loadingScreen, addToStack: addToStack);
+                var generationAtShow = _loadingOverlayGeneration;
 
                 await Task.Yield();
 
@@ -267,8 +272,7 @@ namespace JellyfinTizen.Core
                 }
                 catch
                 {
-                    if (ReferenceEquals(_currentScreen, loadingScreen))
-                        NavigateBack();
+                    HideLoadingOverlay();
                     return;
                 }
 
@@ -278,13 +282,24 @@ namespace JellyfinTizen.Core
                     await Task.Delay((int)(minDisplayMs - elapsedMs));
                 }
 
-                if (!ReferenceEquals(_currentScreen, loadingScreen))
-                    return;
+                // Navigate to the target screen. If the target's OnShow calls
+                // ShowLoadingOverlay, the existing spinner continues spinning seamlessly
+                // and the target screen is responsible for calling HideLoadingOverlay when
+                // its async loading completes.
+                Navigate(target, addToStack: addToStack);
 
-                Navigate(target, addToStack: false);
+                // If the target's OnShow did NOT call ShowLoadingOverlay (e.g. SeriesDetailsScreen),
+                // the overlay is still showing from our call above — hide it now so it doesn't
+                // get stuck on screen. We detect re-show by checking if the generation counter
+                // is still the same (meaning the target didn't re-show it).
+                if (_loadingOverlayGeneration == generationAtShow && _loadingVisual != null)
+                {
+                    HideLoadingOverlay();
+                }
             }
             catch
             {
+                HideLoadingOverlay();
             }
         }
 
@@ -693,8 +708,19 @@ namespace JellyfinTizen.Core
         // "Loading items...", etc.), so any screen can show a consistent full-screen loading
         // state in-place (without navigating to a separate LoadingScreen). Show/Hide are the
         // in-place equivalents of navigating to a LoadingScreen and back.
+        //
+        // ARCHITECTURE: The spinner visual is a persistent singleton — it is created once
+        // and kept alive (and spinning) across show/hide cycles. HideLoadingOverlay merely
+        // removes the root view from the window; ShowLoadingOverlay re-adds it. This way
+        // the rotation animation continues from its current angle, eliminating the visible
+        // "jump to 0°" stutter that occurred when the spinner was destroyed and recreated.
         private static View _loadingOverlay;
         private static AppleTvLoadingVisual _loadingVisual;
+        private static bool _loadingOverlayAttached;
+        // Generation counter incremented on every ShowLoadingOverlay call. Used by
+        // NavigateWithLoadingAsync to detect whether the target screen re-claimed
+        // the overlay (by calling ShowLoadingOverlay in its OnShow).
+        private static int _loadingOverlayGeneration;
 
         public static void ShowLoadingOverlay(string message)
         {
@@ -706,35 +732,68 @@ namespace JellyfinTizen.Core
             // re-shown cached screen's stale child views never paint underneath it first.
             // (HideLoadingOverlay keeps its Post because it is invoked from post-await
             // continuations that may resume off the UI thread.)
+
+            // Every call bumps the generation so NavigateWithLoadingAsync can track
+            // whether the target screen re-claimed the overlay.
+            _loadingOverlayGeneration++;
+
+            // If the persistent spinner already exists, just (re-)attach and raise.
+            if (_loadingVisual != null && _loadingOverlay != null)
+            {
+                if (!_loadingOverlayAttached)
+                {
+                    _window.Add(_loadingOverlay);
+                    _loadingOverlayAttached = true;
+                }
+                _loadingOverlay.RaiseToTop();
+                _loadingVisual.Start(); // no-op if already animating
+                return;
+            }
+
+            // Clean up any partial state (e.g. overlay without visual or vice-versa)
             if (_loadingVisual != null || _loadingOverlay != null)
             {
                 try { _loadingVisual?.Stop(); } catch { }
-                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
+                try { if (_loadingOverlayAttached && _loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
                 try { _loadingVisual?.Dispose(); } catch { }
                 _loadingVisual = null;
                 _loadingOverlay = null;
+                _loadingOverlayAttached = false;
             }
 
-            _loadingVisual = new AppleTvLoadingVisual(message);
+            _loadingVisual = new AppleTvLoadingVisual();
             _loadingOverlay = _loadingVisual.Root;
             _window.Add(_loadingOverlay);
+            _loadingOverlayAttached = true;
             _loadingOverlay.RaiseToTop();
             _loadingVisual.Start();
         }
 
         public static void HideLoadingOverlay()
         {
-            if (_loadingOverlay == null && _loadingVisual == null) return;
+            if (!_loadingOverlayAttached || _loadingOverlay == null) return;
 
+            // Capture the generation at the time of this hide request. The deferred
+            // callback only detaches if no new ShowLoadingOverlay has been called since
+            // (which would have bumped the generation). This prevents a stale hide from
+            // a previous screen's OnHide() from removing an overlay that the next screen's
+            // OnShow() has already re-claimed.
+            var generationAtHide = _loadingOverlayGeneration;
+
+            // Detach via Post (callers often invoke from off-UI-thread continuations).
+            // The spinner visual is NOT stopped or disposed — it stays alive so the next
+            // ShowLoadingOverlay can re-attach it without resetting the animation.
             Tizen.Applications.CoreApplication.Post(() =>
             {
-                try { _loadingVisual?.Stop(); } catch { }
-                try { if (_loadingOverlay != null) _window.Remove(_loadingOverlay); } catch { }
-                try { _loadingVisual?.Dispose(); } catch { }
-                _loadingVisual = null;
-                _loadingOverlay = null;
+                if (!_loadingOverlayAttached || _loadingOverlay == null) return;
+                // If ShowLoadingOverlay was called after this hide was requested,
+                // the overlay belongs to the new caller — don't detach it.
+                if (_loadingOverlayGeneration != generationAtHide) return;
+                try { _window.Remove(_loadingOverlay); } catch { }
+                _loadingOverlayAttached = false;
             });
         }
 
     }
 }
+
