@@ -1,28 +1,27 @@
-using Tizen.NUI;
 using JellyfinTizen.Core;
-using JellyfinTizen.UI;
 
 namespace JellyfinTizen.Screens
 {
     public class LoadingScreen : ScreenBase, IKeyHandler
     {
-        private readonly AppleTvLoadingVisual _loadingVisual;
+        private readonly string _message;
 
         public LoadingScreen(string message)
         {
-            _loadingVisual = new AppleTvLoadingVisual(message);
-            Add(_loadingVisual.Root);
+            _message = message;
         }
 
         public override void OnShow()
         {
-            _loadingVisual.Start();
+            // Use the shared persistent spinner overlay — same singleton used by detail
+            // screens' OnShow, so the animation continues seamlessly when we navigate
+            // from this LoadingScreen to a target screen that also calls ShowLoadingOverlay.
+            NavigationService.ShowLoadingOverlay(_message);
         }
 
         public override void OnHide()
         {
-            _loadingVisual?.Stop();
-            _loadingVisual?.Dispose();
+            NavigationService.HideLoadingOverlay();
         }
 
         public void HandleKey(AppKey key)

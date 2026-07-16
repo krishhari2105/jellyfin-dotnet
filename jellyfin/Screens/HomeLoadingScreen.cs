@@ -8,7 +8,6 @@ using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
-using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 using ThreadingTimer = System.Threading.Timer;
@@ -71,7 +70,6 @@ namespace JellyfinTizen.Screens
         private bool _navigated;
         private bool _loaded;
         private ThreadingTimer _fallbackTimer;
-        private AppleTvLoadingVisual _loadingVisual;
 
         // Single static LRU cache instance (initialized on first access)
         private static readonly Lazy<LruCache> ImageUrlCache = new(() => new LruCache(ImageUrlCacheMaxEntries));
@@ -84,7 +82,7 @@ namespace JellyfinTizen.Screens
         {
             if (_loaded)
             {
-                _loadingVisual?.Start();
+                NavigationService.ShowLoadingOverlay("Loading...");
                 return;
             }
 
@@ -94,25 +92,14 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            _loadingVisual?.Stop();
-            _loadingVisual?.Dispose();
+            NavigationService.HideLoadingOverlay();
             _fallbackTimer?.Dispose();
             _fallbackTimer = null;
         }
 
         private async Task LoadAsync()
         {
-            if (_loadingVisual == null)
-            {
-                _loadingVisual = new AppleTvLoadingVisual("Loading libraries...");
-                Add(_loadingVisual.Root);
-            }
-            else
-            {
-                _loadingVisual.SetMessage("Loading libraries...");
-            }
-
-            _loadingVisual.Start();
+            NavigationService.ShowLoadingOverlay("Loading...");
 
             _fallbackTimer = new ThreadingTimer(_ =>
             {

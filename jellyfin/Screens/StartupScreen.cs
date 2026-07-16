@@ -5,7 +5,6 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using JellyfinTizen.Core;
-using JellyfinTizen.UI;
 
 using ThreadingTimer = System.Threading.Timer;
 
@@ -15,7 +14,6 @@ namespace JellyfinTizen.Screens
     {
         private bool _navigated;
         private ThreadingTimer _fallbackTimer;
-        private AppleTvLoadingVisual _loadingVisual;
         private bool _loaded;
 
         public StartupScreen()
@@ -26,7 +24,7 @@ namespace JellyfinTizen.Screens
         {
             if (_loaded)
             {
-                _loadingVisual?.Start();
+                NavigationService.ShowLoadingOverlay("Loading...");
                 return;
             }
 
@@ -36,8 +34,7 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            _loadingVisual?.Stop();
-            _loadingVisual?.Dispose();
+            NavigationService.HideLoadingOverlay();
             _fallbackTimer?.Dispose();
             _fallbackTimer = null;
         }
@@ -46,17 +43,7 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                if (_loadingVisual == null)
-                {
-                    _loadingVisual = new AppleTvLoadingVisual("Loading...");
-                    Add(_loadingVisual.Root);
-                }
-                else
-                {
-                    _loadingVisual.SetMessage("Loading...");
-                }
-
-                _loadingVisual.Start();
+                NavigationService.ShowLoadingOverlay("Loading...");
 
 #if TAILSCALE
                 // Detect if the active server uses Tailscale and wait for it to initialize
@@ -72,20 +59,18 @@ namespace JellyfinTizen.Screens
 
                             if (isTailscaleServer && AppState.TailscaleReadyTask != null)
                             {
-                                _loadingVisual.SetMessage("Initializing Tailscale...");
                                 // Wait for Tailscale daemon and proxy to be ready
                                 await Task.WhenAny(AppState.TailscaleReadyTask, Task.Delay(10000));
 
                                 // If Tailscale startup failed, don't wait for backend — skip to server entry
                                 if (AppState.TailscaleStartupFailed || AppState.Tailscale == null)
                                 {
-                                    _loadingVisual.SetMessage("Loading...");
+                                    // Fall through to normal startup
                                 }
                                 else if (AppState.Tailscale != null)
                                 {
                                     // Wait for Tailscale backend connection to be Running (online)
                                     await AppState.Tailscale.WaitForBackendRunningAsync(10000);
-                                    _loadingVisual.SetMessage("Loading...");
                                 }
                             }
                         }
