@@ -159,7 +159,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.date.outputs.date }}-${{ github.run_number }}
-          name: "Jellyfin Tizen Client Release v${{ steps.date.outputs.date }} (Build #${{ github.run_number }})"
+          name: "Jellyfin Tizen Client Release"
           body: |
             ## Jellyfin Tizen Client Build
             
