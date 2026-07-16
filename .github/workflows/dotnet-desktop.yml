@@ -97,7 +97,7 @@ jobs:
           dotnet restore jellyfin.sln \
             -p:TailscaleEnabled=$TAILSCALE_FLAG \
             --source https://api.nuget.org/v3/index.json \
-            --source https://tizen.myget.org/F/dotnet/api/v3/index.json
+            --ignore-failed-sources
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build Project
