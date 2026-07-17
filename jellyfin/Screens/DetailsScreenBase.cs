@@ -80,6 +80,8 @@ namespace JellyfinTizen.Screens
         protected int _selectedMediaSourceIndex = 0;
         protected int? _selectedSubtitleIndex = null;
         protected int? _selectedAudioIndex = null;
+        protected bool _subtitleSelectionUserOverride;
+        protected bool _audioSelectionUserOverride;
         protected bool _subtitleStreamsLoaded;
         protected bool _mediaSourcesLoaded;
         protected readonly Dictionary<View, Animation> _focusAnimations = new();
@@ -523,6 +525,7 @@ namespace JellyfinTizen.Screens
             switch (_selectionPanelMode)
             {
                 case DetailsPanelMode.Subtitle:
+                    _subtitleSelectionUserOverride = true;
                     _selectedSubtitleIndex = string.Equals(selectedOption.Id, "OFF_INDEX", StringComparison.Ordinal)
                         ? null
                         : int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var subtitleIndex)
@@ -532,6 +535,7 @@ namespace JellyfinTizen.Screens
                 case DetailsPanelMode.Audio:
                     if (int.TryParse(selectedOption.Id, NumberStyles.Integer, CultureInfo.InvariantCulture, out var audioIndex))
                     {
+                        _audioSelectionUserOverride = true;
                         _selectedAudioIndex = audioIndex;
                         UpdateAudioButtonText();
                     }
@@ -647,12 +651,26 @@ namespace JellyfinTizen.Screens
         protected void NormalizeSelectionStateForCurrentMediaSource(bool resetSubtitleSelection = false, bool resetAudioSelection = false)
         {
             var subtitleStreams = GetAvailableSubtitleStreams();
-            if (resetSubtitleSelection || (_selectedSubtitleIndex.HasValue && !subtitleStreams.Any(s => s.Index == _selectedSubtitleIndex.Value)))
-                _selectedSubtitleIndex = null;
+            if (resetSubtitleSelection ||
+                (_selectedSubtitleIndex.HasValue && !subtitleStreams.Any(s => s.Index == _selectedSubtitleIndex.Value)))
+            {
+                _selectedSubtitleIndex = ResolveDefaultSubtitleStreamIndex();
+                _subtitleSelectionUserOverride = false;
+            }
+            else if (!_subtitleSelectionUserOverride)
+            {
+                _selectedSubtitleIndex = ResolveDefaultSubtitleStreamIndex();
+            }
 
             var audioStreams = GetAvailableAudioStreams();
-            int? effectiveAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
-            _selectedAudioIndex = resetAudioSelection ? ResolveDefaultAudioStreamIndex(audioStreams) : effectiveAudioIndex;
+            bool selectedAudioStillAvailable =
+                _selectedAudioIndex.HasValue &&
+                audioStreams.Any(s => s.Index == _selectedAudioIndex.Value);
+            if (resetAudioSelection || !_audioSelectionUserOverride || !selectedAudioStillAvailable)
+            {
+                _selectedAudioIndex = ResolveDefaultAudioStreamIndex(audioStreams);
+                _audioSelectionUserOverride = false;
+            }
 
             UpdateSubtitleButtonText();
             UpdateAudioButtonText();
@@ -667,11 +685,34 @@ namespace JellyfinTizen.Screens
             return ResolveDefaultAudioStreamIndex(audioStreams);
         }
 
-        protected static int? ResolveDefaultAudioStreamIndex(List<MediaStream> audioStreams)
+        protected int? ResolveDefaultAudioStreamIndex(List<MediaStream> audioStreams)
         {
             if (audioStreams == null || audioStreams.Count == 0) return null;
+            var sourceDefault = GetSelectedMediaSource()?.DefaultAudioStreamIndex;
+            if (sourceDefault.HasValue && audioStreams.Any(s => s.Index == sourceDefault.Value))
+                return sourceDefault.Value;
             var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
             return (defaultStream ?? audioStreams[0]).Index;
+        }
+
+        // Server-persisted default subtitle for the selected media source. Returns null
+        // when the server has no recorded preference, falling back to "off" in the UI.
+        protected int? ResolveDefaultSubtitleStreamIndex()
+        {
+            var subtitleStreams = GetAvailableSubtitleStreams();
+            if (subtitleStreams == null || subtitleStreams.Count == 0) return null;
+            var sourceDefault = GetSelectedMediaSource()?.DefaultSubtitleStreamIndex;
+            if (sourceDefault.HasValue && subtitleStreams.Any(s => s.Index == sourceDefault.Value))
+                return sourceDefault.Value;
+            return null;
+        }
+
+        protected int? GetPlaybackSubtitleStreamIndex()
+        {
+            if (_subtitleSelectionUserOverride && !_selectedSubtitleIndex.HasValue)
+                return -1;
+
+            return _selectedSubtitleIndex;
         }
 
         // =====================================================================

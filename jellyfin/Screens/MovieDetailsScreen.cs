@@ -207,8 +207,7 @@ namespace JellyfinTizen.Screens
                 // and therefore has no balancing HideLoadingOverlay, so showing it there would
                 // leave the overlay stuck.)
                 NavigationService.ShowLoadingOverlay("Loading details...");
-                if (!_mediaSourcesLoaded || !_subtitleStreamsLoaded)
-                    _ = LoadMediaSourcesAndSubtitlesAsync();
+                _ = LoadMediaSourcesAndSubtitlesAsync(forceRefresh: true);
                 // Litefin-style: always re-fetch server-truth resume state on every OnShow.
                 _ = RefreshResumeStateFromServerAsync();
                 if (_buttons.Count > 0)
@@ -386,14 +385,14 @@ namespace JellyfinTizen.Screens
             FocusEpisode(0);
         }
 
-        private async Task LoadMediaSourcesAndSubtitlesAsync()
+        private async Task LoadMediaSourcesAndSubtitlesAsync(bool forceRefresh = false)
         {
-            if (_mediaSourcesLoaded && _subtitleStreamsLoaded)
+            if (!forceRefresh && _mediaSourcesLoaded && _subtitleStreamsLoaded)
                 return;
 
             try
             {
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id, subtitleHandlingDisabled: true);
+                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id);
                 _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
 
                 if (_mediaSources.Count == 0)
@@ -415,6 +414,11 @@ namespace JellyfinTizen.Screens
                     .ToList() ?? new List<MediaStream>();
                 _subtitleStreamsLoaded = true;
 
+                if (forceRefresh)
+                {
+                    _audioSelectionUserOverride = false;
+                    _subtitleSelectionUserOverride = false;
+                }
                 NormalizeSelectionStateForCurrentMediaSource();
                 // Re-derive Resume button state from the authoritative
                 // GetMediaItem().PlaybackPositionTicks BEFORE repainting, so this
@@ -537,7 +541,7 @@ namespace JellyfinTizen.Screens
                 new VideoPlayerScreen(
                     media,
                     startPositionMs,
-                    _selectedSubtitleIndex,
+                    GetPlaybackSubtitleStreamIndex(),
                     AppState.BurnInSubtitles,
                     GetSelectedMediaSourceId(),
                     GetEffectiveSelectedAudioIndex(),

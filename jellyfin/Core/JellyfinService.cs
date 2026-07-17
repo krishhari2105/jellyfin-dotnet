@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using JellyfinTizen.Models;
 using JellyfinTizen.Utils;
@@ -787,6 +788,15 @@ namespace JellyfinTizen.Core
             return JsonSerializer.Serialize(body, options);
         }
 
+        private static string ShortDebugId(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return "-";
+
+            value = value.Trim();
+            return value.Length <= 8 ? value : value.Substring(0, 8);
+        }
+
         public async Task<List<MediaStream>> GetSubtitleStreamsAsync(string itemId)
         {
             var json = await GetAsync($"/Users/{UserId}/Items/{itemId}?Fields=MediaStreams");
@@ -927,6 +937,13 @@ namespace JellyfinTizen.Core
             if (!string.IsNullOrWhiteSpace(mediaSourceId))
                 body["MediaSourceId"] = mediaSourceId;
 
+            TailscaleDebugLog.Add(
+                "PlaybackInfo.Request: " +
+                $"item={ShortDebugId(itemId)},user={ShortDebugId(UserId)},mediaSource={ShortDebugId(mediaSourceId)}," +
+                $"audio={audioStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "server"}," +
+                $"subtitle={subtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "server"}," +
+                $"subtitlesDisabled={effectiveSubtitlesDisabled},forceBurnIn={effectiveForceBurnIn}");
+
             var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
             
             // Simple deserialization
@@ -961,6 +978,8 @@ namespace JellyfinTizen.Core
                         Container = TryGetString(src, "Container"),
                         Size = TryGetInt64Loose(src, "Size", out var sourceSize) ? sourceSize : null,
                         Bitrate = TryGetInt32Loose(src, "Bitrate", out var sourceBitrate) ? sourceBitrate : null,
+                        DefaultAudioStreamIndex = TryGetInt32(src, "DefaultAudioStreamIndex", out var defaultAudioIndex) ? (int?)defaultAudioIndex : null,
+                        DefaultSubtitleStreamIndex = TryGetInt32(src, "DefaultSubtitleStreamIndex", out var defaultSubtitleIndex) ? (int?)defaultSubtitleIndex : null,
                         MediaStreams = new List<MediaStream>()
                     };
 
@@ -1009,6 +1028,14 @@ namespace JellyfinTizen.Core
                     response.MediaSources.Add(ms);
                 }
             }
+
+            var sourceSummary = response.MediaSources.Count == 0
+                ? "-"
+                : string.Join(";", response.MediaSources.Select(s =>
+                    $"{ShortDebugId(s.Id)}:a={s.DefaultAudioStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"},s={s.DefaultSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"}"));
+            TailscaleDebugLog.Add(
+                "PlaybackInfo.Response: " +
+                $"playSession={ShortDebugId(response.PlaySessionId)},sources={sourceSummary}");
 
             return response;
         }
