@@ -76,11 +76,15 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 60, 40),
+                Padding = new Extents(
+                    UiTheme.DetailsHorizontalPadding,
+                    UiTheme.DetailsHorizontalPadding,
+                    60,
+                    40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(60, 0)
+                    CellPadding = new Size2D(UiTheme.DetailsColumnGap, 0)
                 }
             };
 
@@ -267,6 +271,13 @@ namespace JellyfinTizen.Screens
                 if (serverEpisodes == null || serverEpisodes.Count == 0)
                     return;
 
+                var serverEpisodesById = new Dictionary<string, JellyfinMovie>(StringComparer.Ordinal);
+                foreach (var serverEpisode in serverEpisodes)
+                {
+                    if (serverEpisode != null && !string.IsNullOrWhiteSpace(serverEpisode.Id))
+                        serverEpisodesById[serverEpisode.Id] = serverEpisode;
+                }
+
                 RunOnUiThread(() =>
                 {
                     try
@@ -277,8 +288,7 @@ namespace JellyfinTizen.Screens
                             if (episode == null || string.IsNullOrWhiteSpace(episode.Id))
                                 continue;
 
-                            var serverEp = serverEpisodes.Find(e => e != null && e.Id == episode.Id);
-                            if (serverEp != null)
+                            if (serverEpisodesById.TryGetValue(episode.Id, out var serverEp))
                             {
                                 episode.Played = serverEp.Played;
                                 if (i < _episodeBadges.Count && _episodeBadges[i] != null)
@@ -316,7 +326,7 @@ namespace JellyfinTizen.Screens
                     _episodeRowContainer.Remove(child);
                 }
 
-                _episodeRowContainer.PositionX = FocusPad;
+                _episodeRowContainer.PositionX = 24;
             }
 
             _episodeViews.Clear();
@@ -342,7 +352,7 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.UseNaturalSize,
                 HeightResizePolicy = ResizePolicyType.UseNaturalSize,
-                Margin = new Extents(0, 0, 14, 0),
+                Margin = new Extents(24, 0, 14, 0),
                 PointSize = 34,
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Begin,
@@ -352,15 +362,13 @@ namespace JellyfinTizen.Screens
 
             _episodeViewport = new View
             {
-                PositionX = -12,
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 390,
+                Size = new Size2D(GetEpisodeViewportWidth(), 390),
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _episodeRowContainer = new View
             {
-                PositionX = 12,
+                PositionX = 24,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -676,16 +684,18 @@ namespace JellyfinTizen.Screens
 
             if (_episodeIndex == 0)
             {
-                AnimateEpisodeRowTo(12);
+                _episodeRowContainer.PositionX = 24;
                 return;
             }
 
             var offset = -_episodeRowContainer.PositionX;
-            var viewportWidth = _episodeViewport.SizeWidth;
+            var viewportWidth = _episodeViewport.SizeWidth > 0
+                ? _episodeViewport.SizeWidth
+                : GetEpisodeViewportWidth();
             var focused = _episodeViews[_episodeIndex];
 
-            var left = focused.PositionX;
-            var right = left + EpisodeCardWidth;
+            var left = focused.PositionX - 15;
+            var right = focused.PositionX + EpisodeCardWidth + 15;
 
             var visibleLeft = offset;
             var visibleRight = offset + viewportWidth;
@@ -696,22 +706,18 @@ namespace JellyfinTizen.Screens
             else if (left < visibleLeft)
                 targetX += (visibleLeft - left + EpisodeCardSpacing);
 
-            AnimateEpisodeRowTo(targetX);
+            _episodeRowContainer.PositionX = targetX;
         }
 
-        private void AnimateEpisodeRowTo(float targetX)
+        private static int GetEpisodeViewportWidth()
         {
-            if (_episodeRowContainer == null)
-            {
-                return;
-            }
-
-            if (Math.Abs(targetX - _episodeRowContainer.PositionX) < 0.5f)
-            {
-                return;
-            }
-
-            _episodeRowContainer.PositionX = targetX;
+            return Math.Max(
+                EpisodeCardWidth,
+                Window.Default.Size.Width
+                    - UiTheme.DetailsHorizontalPadding
+                    - PosterWidth
+                    - UiTheme.DetailsColumnGap
+                    - UiTheme.DetailsCarouselRightGutter);
         }
 
         private static int EstimateOverviewHeight(string text, int width, float pointSize)
