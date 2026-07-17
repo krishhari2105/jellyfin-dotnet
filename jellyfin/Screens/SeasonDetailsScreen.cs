@@ -28,6 +28,7 @@ namespace JellyfinTizen.Screens
         private readonly JellyfinMovie _season;
         private readonly ImageView _backdropView;
         private View _infoColumn;
+        private View _episodeViewportHost;
         private View _episodeViewport;
         private View _episodeRowContainer;
         private View _overviewViewport;
@@ -326,7 +327,7 @@ namespace JellyfinTizen.Screens
                     _episodeRowContainer.Remove(child);
                 }
 
-                _episodeRowContainer.PositionX = 12;
+                _episodeRowContainer.PositionX = GetEpisodeViewportLeftInset();
             }
 
             _episodeViews.Clear();
@@ -341,6 +342,8 @@ namespace JellyfinTizen.Screens
                 return;
 
             _episodeViewport.HeightSpecification = 390;
+            if (_episodeViewportHost != null)
+                _episodeViewportHost.HeightSpecification = 390;
         }
 
         private void EnsureEpisodeSection()
@@ -360,17 +363,22 @@ namespace JellyfinTizen.Screens
             };
             episodesTitle.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
+            _episodeViewportHost = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 390
+            };
+
+            int viewportLeftInset = GetEpisodeViewportLeftInset();
             _episodeViewport = new View
             {
-                PositionX = -UiTheme.DetailsCarouselLeftBleed,
-                WidthSpecification = GetEpisodeViewportWidth(),
-                HeightSpecification = 390,
+                Size = new Size2D(GetEpisodeViewportWidth(), 390),
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _episodeRowContainer = new View
             {
-                PositionX = 12,
+                PositionX = viewportLeftInset,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -395,8 +403,9 @@ namespace JellyfinTizen.Screens
             _episodeBadges.Clear();
 
             _episodeViewport.Add(_episodeRowContainer);
+            _episodeViewportHost.Add(_episodeViewport);
             _infoColumn.Add(episodesTitle);
-            _infoColumn.Add(_episodeViewport);
+            _infoColumn.Add(_episodeViewportHost);
             _infoColumn.Add(_episodeLoadingText);
         }
 
@@ -684,42 +693,71 @@ namespace JellyfinTizen.Screens
             if (_episodeRowContainer == null || _episodeViewport == null || _episodeViews.Count == 0)
                 return;
 
-            if (_episodeIndex == 0)
-            {
-                _episodeRowContainer.PositionX = 12;
-                return;
-            }
-
-            var offset = -_episodeRowContainer.PositionX;
             var viewportWidth = _episodeViewport.SizeWidth > 0
                 ? _episodeViewport.SizeWidth
                 : GetEpisodeViewportWidth();
-            var focused = _episodeViews[_episodeIndex];
+            _episodeRowContainer.PositionX = CalculateEpisodeRowPosition(
+                _episodeIndex,
+                _episodeRowContainer.PositionX,
+                viewportWidth);
+        }
 
-            var left = focused.PositionX;
-            var right = left + EpisodeCardWidth;
+        private static float CalculateEpisodeRowPosition(
+            int focusedIndex,
+            float currentRowPosition,
+            float viewportWidth)
+        {
+            if (focusedIndex <= 0)
+                return GetEpisodeViewportLeftInset();
 
-            var visibleLeft = offset;
-            var visibleRight = offset + viewportWidth;
-            var targetX = _episodeRowContainer.PositionX;
+            float cardLeft = focusedIndex * (EpisodeCardWidth + EpisodeCardSpacing);
+            float cardRight = cardLeft + EpisodeCardWidth;
+            float focusOverflow = GetEpisodeFocusOverflow();
+            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
+            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
 
-            if (right > visibleRight)
-                targetX -= (right - visibleRight + EpisodeCardSpacing);
-            else if (left < visibleLeft)
-                targetX += (visibleLeft - left + EpisodeCardSpacing);
+            if (focusedVisualRight > viewportWidth)
+            {
+                // Keep a small renderer-safe gap at the right clip edge. NUI can
+                // otherwise trim the outer anti-aliased pixels of the scaled border.
+                // The remaining card spacing still hides the following card.
+                return viewportWidth
+                    - GetEpisodeViewportLeftInset()
+                    - FocusBorder
+                    - cardRight;
+            }
 
-            _episodeRowContainer.PositionX = targetX;
+            if (focusedVisualLeft < 0)
+            {
+                // Align the expanded focus frame with the text column while leaving
+                // the preceding card fully behind the left clip boundary.
+                return GetEpisodeViewportLeftInset() - cardLeft;
+            }
+
+            return currentRowPosition;
+        }
+
+        private static float GetEpisodeFocusOverflow()
+        {
+            return (EpisodeCardWidth * (FocusScale - 1f) / 2f) + FocusBorder;
+        }
+
+        private static int GetEpisodeViewportLeftInset()
+        {
+            return Math.Max(
+                UiTheme.DetailsCarouselLeftBleed,
+                (int)Math.Ceiling(GetEpisodeFocusOverflow()));
         }
 
         private static int GetEpisodeViewportWidth()
         {
+            int viewportLeftInset = GetEpisodeViewportLeftInset();
             return Math.Max(
-                EpisodeCardWidth,
+                EpisodeCardWidth + (2 * viewportLeftInset),
                 Window.Default.Size.Width
                     - UiTheme.DetailsHorizontalPadding
                     - PosterWidth
                     - UiTheme.DetailsColumnGap
-                    + UiTheme.DetailsCarouselLeftBleed
                     - UiTheme.DetailsCarouselRightGutter);
         }
 
