@@ -381,13 +381,15 @@ namespace JellyfinTizen.Core
 
         public void Stop()
         {
-            if (_tailscaledProc == null || _tailscaledProc.HasExited)
+            var process = _tailscaledProc;
+            _tailscaledProc = null;
+            if (process == null)
                 return;
 
             try
             {
-                _tailscaledProc.Kill();
-                _tailscaledProc.WaitForExit(5000);
+                if (!process.HasExited)
+                    process.Kill();
             }
             catch
             {
@@ -395,7 +397,7 @@ namespace JellyfinTizen.Core
             }
             finally
             {
-                _tailscaledProc?.Dispose();
+                process.Dispose();
             }
         }
 

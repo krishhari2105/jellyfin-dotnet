@@ -41,6 +41,8 @@ namespace JellyfinTizen.Models
         public int? Bitrate { get; set; }
         // Note: DirectStreamUrl is often null, so we construct it manually if DirectPlay is supported
         public List<MediaStream> MediaStreams { get; set; }
+        public int? DefaultAudioStreamIndex { get; set; }
+        public int? DefaultSubtitleStreamIndex { get; set; }
 
         public void Validate()
         {
@@ -215,6 +217,8 @@ namespace JellyfinTizen.Models
         public int VolumeLevel { get; set; } = 100;
         public string PlayMethod { get; set; } = "DirectPlay";
         public string EventName { get; set; } // "TimeUpdate", "Pause", "Stop"
+        public int? AudioStreamIndex { get; set; }
+        public int? SubtitleStreamIndex { get; set; }
 
         public void Validate()
         {

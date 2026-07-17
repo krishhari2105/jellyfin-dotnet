@@ -128,9 +128,9 @@ namespace JellyfinTizen.Screens
             {
                 CoreApplication.Post(action);
             }
-            catch
+            catch (Exception ex)
             {
-                action();
+                TailscaleDebugLog.Add($"[UiDispatch] Unable to post UI work: {ex.Message}");
             }
         }
 
@@ -170,6 +170,27 @@ namespace JellyfinTizen.Screens
             }
             catch
             {
+            }
+        }
+
+        protected void CancelAndDispose(ref CancellationTokenSource cancellation)
+        {
+            var activeCancellation = cancellation;
+            cancellation = null;
+
+            if (activeCancellation == null)
+                return;
+
+            try
+            {
+                activeCancellation.Cancel();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                activeCancellation.Dispose();
             }
         }
 

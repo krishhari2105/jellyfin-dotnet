@@ -16,7 +16,6 @@ signing_profile: ""
 # files monitored for dirty/modified status
 files:
   - jellyfin.csproj
-  - jellyfin.cs
   - tizen-manifest.xml
   - shared/res
 

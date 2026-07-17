@@ -28,6 +28,7 @@ namespace JellyfinTizen.Screens
         private readonly JellyfinMovie _season;
         private readonly ImageView _backdropView;
         private View _infoColumn;
+        private View _episodeViewportHost;
         private View _episodeViewport;
         private View _episodeRowContainer;
         private View _overviewViewport;
@@ -76,11 +77,15 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 60, 40),
+                Padding = new Extents(
+                    UiTheme.DetailsHorizontalPadding,
+                    UiTheme.DetailsHorizontalPadding,
+                    60,
+                    40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(60, 0)
+                    CellPadding = new Size2D(UiTheme.DetailsColumnGap, 0)
                 }
             };
 
@@ -267,6 +272,13 @@ namespace JellyfinTizen.Screens
                 if (serverEpisodes == null || serverEpisodes.Count == 0)
                     return;
 
+                var serverEpisodesById = new Dictionary<string, JellyfinMovie>(StringComparer.Ordinal);
+                foreach (var serverEpisode in serverEpisodes)
+                {
+                    if (serverEpisode != null && !string.IsNullOrWhiteSpace(serverEpisode.Id))
+                        serverEpisodesById[serverEpisode.Id] = serverEpisode;
+                }
+
                 RunOnUiThread(() =>
                 {
                     try
@@ -277,8 +289,7 @@ namespace JellyfinTizen.Screens
                             if (episode == null || string.IsNullOrWhiteSpace(episode.Id))
                                 continue;
 
-                            var serverEp = serverEpisodes.Find(e => e != null && e.Id == episode.Id);
-                            if (serverEp != null)
+                            if (serverEpisodesById.TryGetValue(episode.Id, out var serverEp))
                             {
                                 episode.Played = serverEp.Played;
                                 if (i < _episodeBadges.Count && _episodeBadges[i] != null)
@@ -316,7 +327,7 @@ namespace JellyfinTizen.Screens
                     _episodeRowContainer.Remove(child);
                 }
 
-                _episodeRowContainer.PositionX = FocusPad;
+                _episodeRowContainer.PositionX = GetEpisodeViewportLeftInset();
             }
 
             _episodeViews.Clear();
@@ -331,6 +342,8 @@ namespace JellyfinTizen.Screens
                 return;
 
             _episodeViewport.HeightSpecification = 390;
+            if (_episodeViewportHost != null)
+                _episodeViewportHost.HeightSpecification = 390;
         }
 
         private void EnsureEpisodeSection()
@@ -350,17 +363,22 @@ namespace JellyfinTizen.Screens
             };
             episodesTitle.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Bold });
 
+            _episodeViewportHost = new View
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = 390
+            };
+
+            int viewportLeftInset = GetEpisodeViewportLeftInset();
             _episodeViewport = new View
             {
-                PositionX = -12,
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 390,
+                Size = new Size2D(GetEpisodeViewportWidth(), 390),
                 ClippingMode = ClippingModeType.ClipChildren
             };
 
             _episodeRowContainer = new View
             {
-                PositionX = 12,
+                PositionX = viewportLeftInset,
                 PositionY = FocusPad,
                 Layout = new LinearLayout
                 {
@@ -376,7 +394,7 @@ namespace JellyfinTizen.Screens
                 PointSize = 24,
                 TextColor = new Color(1f, 1f, 1f, 0.82f),
                 HorizontalAlignment = HorizontalAlignment.Begin,
-                Margin = new Extents((ushort)FocusPad, 0, 0, 0),
+                Margin = new Extents(0, 0, 0, 0),
                 Ellipsis = false
             };
             _episodeLoadingText.Hide();
@@ -385,8 +403,9 @@ namespace JellyfinTizen.Screens
             _episodeBadges.Clear();
 
             _episodeViewport.Add(_episodeRowContainer);
+            _episodeViewportHost.Add(_episodeViewport);
             _infoColumn.Add(episodesTitle);
-            _infoColumn.Add(_episodeViewport);
+            _infoColumn.Add(_episodeViewportHost);
             _infoColumn.Add(_episodeLoadingText);
         }
 
@@ -674,44 +693,72 @@ namespace JellyfinTizen.Screens
             if (_episodeRowContainer == null || _episodeViewport == null || _episodeViews.Count == 0)
                 return;
 
-            if (_episodeIndex == 0)
-            {
-                AnimateEpisodeRowTo(12);
-                return;
-            }
-
-            var offset = -_episodeRowContainer.PositionX;
-            var viewportWidth = _episodeViewport.SizeWidth;
-            var focused = _episodeViews[_episodeIndex];
-
-            var left = focused.PositionX;
-            var right = left + EpisodeCardWidth;
-
-            var visibleLeft = offset;
-            var visibleRight = offset + viewportWidth;
-            var targetX = _episodeRowContainer.PositionX;
-
-            if (right > visibleRight)
-                targetX -= (right - visibleRight + EpisodeCardSpacing);
-            else if (left < visibleLeft)
-                targetX += (visibleLeft - left + EpisodeCardSpacing);
-
-            AnimateEpisodeRowTo(targetX);
+            var viewportWidth = _episodeViewport.SizeWidth > 0
+                ? _episodeViewport.SizeWidth
+                : GetEpisodeViewportWidth();
+            _episodeRowContainer.PositionX = CalculateEpisodeRowPosition(
+                _episodeIndex,
+                _episodeRowContainer.PositionX,
+                viewportWidth);
         }
 
-        private void AnimateEpisodeRowTo(float targetX)
+        private static float CalculateEpisodeRowPosition(
+            int focusedIndex,
+            float currentRowPosition,
+            float viewportWidth)
         {
-            if (_episodeRowContainer == null)
+            if (focusedIndex <= 0)
+                return GetEpisodeViewportLeftInset();
+
+            float cardLeft = focusedIndex * (EpisodeCardWidth + EpisodeCardSpacing);
+            float cardRight = cardLeft + EpisodeCardWidth;
+            float focusOverflow = GetEpisodeFocusOverflow();
+            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
+            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
+
+            if (focusedVisualRight > viewportWidth)
             {
-                return;
+                // Keep a small renderer-safe gap at the right clip edge. NUI can
+                // otherwise trim the outer anti-aliased pixels of the scaled border.
+                // The remaining card spacing still hides the following card.
+                return viewportWidth
+                    - GetEpisodeViewportLeftInset()
+                    - FocusBorder
+                    - cardRight;
             }
 
-            if (Math.Abs(targetX - _episodeRowContainer.PositionX) < 0.5f)
+            if (focusedVisualLeft < 0)
             {
-                return;
+                // Align the expanded focus frame with the text column while leaving
+                // the preceding card fully behind the left clip boundary.
+                return GetEpisodeViewportLeftInset() - cardLeft;
             }
 
-            _episodeRowContainer.PositionX = targetX;
+            return currentRowPosition;
+        }
+
+        private static float GetEpisodeFocusOverflow()
+        {
+            return (EpisodeCardWidth * (FocusScale - 1f) / 2f) + FocusBorder;
+        }
+
+        private static int GetEpisodeViewportLeftInset()
+        {
+            return Math.Max(
+                UiTheme.DetailsCarouselLeftBleed,
+                (int)Math.Ceiling(GetEpisodeFocusOverflow()));
+        }
+
+        private static int GetEpisodeViewportWidth()
+        {
+            int viewportLeftInset = GetEpisodeViewportLeftInset();
+            return Math.Max(
+                EpisodeCardWidth + (2 * viewportLeftInset),
+                Window.Default.Size.Width
+                    - UiTheme.DetailsHorizontalPadding
+                    - PosterWidth
+                    - UiTheme.DetailsColumnGap
+                    - UiTheme.DetailsCarouselRightGutter);
         }
 
         private static int EstimateOverviewHeight(string text, int width, float pointSize)

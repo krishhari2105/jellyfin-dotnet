@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -44,6 +45,7 @@ namespace JellyfinTizen.Screens
         private bool _settingsVisible;
         private int _settingsPanelBaseX;
         private bool _libraryNavigationInProgress;
+        private CancellationTokenSource _refreshCts;
 
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
 
@@ -102,8 +104,11 @@ namespace JellyfinTizen.Screens
             // Litefin-style "server is truth": always re-fetch the Continue Watching row fresh
             // from the server on every OnShow. HomeScreen is a long-lived, reused instance, so
             // this runs each time Home becomes active again, not just on first construction.
-            _ = RefreshContinueWatchingFromServerAsync();
-            _ = RefreshRecentlyAddedPlayedStateAsync();
+            CancelAndDispose(ref _refreshCts);
+            _refreshCts = new CancellationTokenSource();
+            var refreshToken = _refreshCts.Token;
+            FireAndForget(RefreshContinueWatchingFromServerAsync(refreshToken), nameof(RefreshContinueWatchingFromServerAsync));
+            FireAndForget(RefreshRecentlyAddedPlayedStateAsync(refreshToken), nameof(RefreshRecentlyAddedPlayedStateAsync));
 
             if (_rows.Count == 0 || _rowCards.Count == 0 || _rowCards[0].Count == 0)
                 return;
@@ -419,22 +424,34 @@ namespace JellyfinTizen.Screens
         // from the server (same getResumeItems-equivalent endpoint, GetContinueWatchingAsync)
         // and rebuild the row to match, rather than relying only on the local optimistic
         // update chain. Non-blocking; the UI rebuild is marshalled onto the UI thread.
-        private async Task RefreshContinueWatchingFromServerAsync()
+        public override void OnHide()
+        {
+            CancelAndDispose(ref _refreshCts);
+            base.OnHide();
+        }
+
+        private async Task RefreshContinueWatchingFromServerAsync(CancellationToken cancellationToken)
         {
             List<JellyfinMovie> serverItems;
             try
             {
                 serverItems = await AppState.Jellyfin.GetContinueWatchingAsync(20);
+                if (cancellationToken.IsCancellationRequested)
+                    return;
             }
             catch (System.Exception ex)
             {
                 TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: fetch failed: {ex.Message}");
-                NavigationService.HideLoadingOverlay();
+                if (!cancellationToken.IsCancellationRequested)
+                    NavigationService.HideLoadingOverlay();
                 return;
             }
 
             RunOnUiThread(() =>
             {
+                if (cancellationToken.IsCancellationRequested)
+                    return;
+
                 try
                 {
                     long topTicks = (serverItems != null && serverItems.Count > 0) ? serverItems[0].PlaybackPositionTicks : 0;
@@ -452,7 +469,7 @@ namespace JellyfinTizen.Screens
             });
         }
 
-        private async Task RefreshRecentlyAddedPlayedStateAsync()
+        private async Task RefreshRecentlyAddedPlayedStateAsync(CancellationToken cancellationToken)
         {
             int raIdx = _rows.FindIndex(r => r != null && r.Kind == HomeRowKind.RecentlyAdded);
             if (raIdx < 0)
@@ -477,11 +494,24 @@ namespace JellyfinTizen.Screens
                     return;
 
                 var serverMovies = await AppState.Jellyfin.GetItemsByIdsAsync(itemIds);
+                if (cancellationToken.IsCancellationRequested)
+                    return;
+
                 if (serverMovies == null || serverMovies.Count == 0)
                     return;
 
+                var serverMoviesById = new Dictionary<string, JellyfinMovie>(StringComparer.Ordinal);
+                foreach (var serverMovie in serverMovies)
+                {
+                    if (serverMovie != null && !string.IsNullOrWhiteSpace(serverMovie.Id))
+                        serverMoviesById[serverMovie.Id] = serverMovie;
+                }
+
                 RunOnUiThread(() =>
                 {
+                    if (cancellationToken.IsCancellationRequested)
+                        return;
+
                     try
                     {
                         for (int i = 0; i < row.Items.Count; i++)
@@ -490,8 +520,7 @@ namespace JellyfinTizen.Screens
                             if (item?.Media == null || string.IsNullOrWhiteSpace(item.Media.Id))
                                 continue;
 
-                            var serverMovie = serverMovies.Find(m => m != null && m.Id == item.Media.Id);
-                            if (serverMovie != null)
+                            if (serverMoviesById.TryGetValue(item.Media.Id, out var serverMovie))
                             {
                                 item.Media.Played = serverMovie.Played;
                                 if (i < _recentlyAddedBadges.Count && _recentlyAddedBadges[i] != null)

@@ -67,6 +67,12 @@ namespace JellyfinTizen.Utils
                 return (T)existing.Value;
             }
 
+            if (existing != null)
+            {
+                _cache.TryRemove(key, out _);
+                RemoveFromLru(key);
+            }
+
             var value = await factory().ConfigureAwait(false);
             var item = new CacheItem { Value = value, Expiration = now.Add(duration) };
             _cache[key] = item;
@@ -101,10 +107,13 @@ namespace JellyfinTizen.Utils
 
         private static void AddToLru(string key)
         {
-            var node = new LruNode { Key = key };
-            _nodes[key] = node;
             lock (_lruLock)
             {
+                if (_nodes.TryRemove(key, out var existing))
+                    RemoveLruNode(existing);
+
+                var node = new LruNode { Key = key };
+                _nodes[key] = node;
                 if (_lruHead == null)
                 {
                     _lruHead = _lruTail = node;
@@ -115,6 +124,15 @@ namespace JellyfinTizen.Utils
                     _lruHead.Prev = node;
                     _lruHead = node;
                 }
+            }
+        }
+
+        private static void RemoveFromLru(string key)
+        {
+            lock (_lruLock)
+            {
+                if (_nodes.TryRemove(key, out var node))
+                    RemoveLruNode(node);
             }
         }
 
@@ -144,17 +162,17 @@ namespace JellyfinTizen.Utils
 
         private static void TrimToSize()
         {
-            while (_cache.Count > _maxEntries && _lruTail != null)
+            while (_cache.Count > _maxEntries)
             {
-                var tail = _lruTail;
                 lock (_lruLock)
                 {
-                    if (_lruTail == tail)
-                    {
-                        _cache.TryRemove(tail.Key, out _);
-                        _nodes.TryRemove(tail.Key, out _);
-                        RemoveLruNode(tail);
-                    }
+                    var tail = _lruTail;
+                    if (tail == null)
+                        return;
+
+                    _cache.TryRemove(tail.Key, out _);
+                    _nodes.TryRemove(tail.Key, out _);
+                    RemoveLruNode(tail);
                 }
             }
         }

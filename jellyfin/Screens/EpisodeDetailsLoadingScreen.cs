@@ -37,7 +37,7 @@ namespace JellyfinTizen.Screens
 
             try
             {
-                var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id, subtitleHandlingDisabled: true);
+                var playbackTask = AppState.Jellyfin.GetPlaybackInfoAsync(_episode.Id);
                 var itemTask = AppState.Jellyfin.GetItemAsync(_episode.Id);
 
                 try

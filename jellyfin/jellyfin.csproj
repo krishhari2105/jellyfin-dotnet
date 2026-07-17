@@ -42,7 +42,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Tizen.NET" Version="9.0.0.*" />
+    <PackageReference Include="Tizen.NET" Version="9.0.0.16760" />
     <PackageReference Include="QRCoder" Version="1.6.0" Condition=" '$(TailscaleEnabled)' == 'true' " />
   </ItemGroup>
 

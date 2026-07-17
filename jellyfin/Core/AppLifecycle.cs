@@ -77,19 +77,21 @@ namespace JellyfinTizen.Core
             }
             private set
             {
+                AppLifecycleState old;
                 Gate.Wait();
                 try
                 {
-                    var old = _state;
+                    old = _state;
                     _state = value;
                     if (Waiters.TryGetValue(value, out var tcs))
                     {
                         Waiters.TryRemove(value, out _);
                         tcs.TrySetResult(true);
                     }
-                    StateChanged?.Invoke(old, value);
                 }
                 finally { Gate.Release(); }
+
+                StateChanged?.Invoke(old, value);
             }
         }
 
@@ -107,12 +109,16 @@ namespace JellyfinTizen.Core
             try
             {
                 if (_state != from) return false;
+            }
+            finally { Gate.Release(); }
 
-                if (precondition != null)
-                {
-                    bool ready = await precondition();
-                    if (!ready) return false;
-                }
+            if (precondition != null && !await precondition())
+                return false;
+
+            await Gate.WaitAsync(ct);
+            try
+            {
+                if (_state != from) return false;
 
                 _state = to;
                 if (Waiters.TryGetValue(to, out var tcs))
@@ -120,10 +126,11 @@ namespace JellyfinTizen.Core
                     Waiters.TryRemove(to, out _);
                     tcs.TrySetResult(true);
                 }
-                StateChanged?.Invoke(from, to);
-                return true;
             }
             finally { Gate.Release(); }
+
+            StateChanged?.Invoke(from, to);
+            return true;
         }
 
         public static void Transition(AppLifecycleState from, AppLifecycleState to)
@@ -133,14 +140,17 @@ namespace JellyfinTizen.Core
 
         public static void TransitionToSuspended()
         {
+            AppLifecycleState previous;
             Gate.Wait();
             try
             {
                 _lastActiveStateBeforeSuspend = _state;
+                previous = _lastActiveStateBeforeSuspend;
                 _state = AppLifecycleState.Suspended;
-                StateChanged?.Invoke(_lastActiveStateBeforeSuspend, _state);
             }
             finally { Gate.Release(); }
+
+            StateChanged?.Invoke(previous, AppLifecycleState.Suspended);
         }
 
         public static async Task<bool> WaitForStateAsync(

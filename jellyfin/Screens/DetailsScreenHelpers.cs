@@ -138,15 +138,6 @@ namespace JellyfinTizen.Screens
         }
 
         // Media source/stream helpers
-        public static int? ResolveDefaultAudioStreamIndex(List<MediaStream> audioStreams)
-        {
-            if (audioStreams == null || audioStreams.Count == 0)
-                return null;
-
-            var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
-            return (defaultStream ?? audioStreams[0]).Index;
-        }
-
         public static string GetMediaSourceDisplayName(MediaSourceInfo source, int fallbackIndex)
         {
             if (source == null)

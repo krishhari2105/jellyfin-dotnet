@@ -26,6 +26,9 @@ namespace JellyfinTizen.Core
         private static readonly ConcurrentDictionary<string, CachedImage> _imageCache = new();
         private static readonly TimeSpan _cacheExpiration = TimeSpan.FromMinutes(10);
         private static readonly int _maxCacheSize = 100; // Max images to cache
+        private const long MemoryCacheMaxBytes = 32L * 1024 * 1024;
+        private static readonly object _imageCacheLock = new();
+        private static long _imageCacheBytes;
 
         // Persistent on-disk image cache. Survives across sessions so re-browsing a
         // library is instant and never re-hits the (weak) server for the same image.
@@ -81,7 +84,7 @@ namespace JellyfinTizen.Core
                     _listener.Start();
 
                     _cts = new CancellationTokenSource();
-                    _listenerTask = Task.Run(() => ListenLoopAsync(_cts.Token));
+                    _listenerTask = Task.Run(() => ListenLoopAsync(_listener, _cts.Token));
                     TailscaleDebugLog.Add("TailscaleProxyService listener started successfully.");
                     break;
                 }
@@ -104,24 +107,16 @@ namespace JellyfinTizen.Core
 
         public void Stop()
         {
-            if (_listener == null)
+            var listener = _listener;
+            if (listener == null)
                 return;
 
             try
             {
                 _cts?.Cancel();
-                _listener.Stop();
-                _listener.Close();
+                listener.Stop();
+                listener.Close();
                 _listener = null;
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                if (_listenerTask != null)
-                    _listenerTask.Wait(2000);
             }
             catch
             {
@@ -132,13 +127,13 @@ namespace JellyfinTizen.Core
             _listenerTask = null;
         }
 
-        private async Task ListenLoopAsync(CancellationToken cancellationToken)
+        private async Task ListenLoopAsync(HttpListener listener, CancellationToken cancellationToken)
         {
             while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    var context = await _listener.GetContextAsync();
+                    var context = await listener.GetContextAsync();
                     _ = HandleRequestAsync(context, cancellationToken);
                 }
                 catch (HttpListenerException)
@@ -314,7 +309,11 @@ namespace JellyfinTizen.Core
 
         public static void ClearCache()
         {
-            _imageCache.Clear();
+            lock (_imageCacheLock)
+            {
+                _imageCache.Clear();
+                _imageCacheBytes = 0;
+            }
 
             try
             {
@@ -348,12 +347,18 @@ namespace JellyfinTizen.Core
                 data = cached.Data;
                 contentType = cached.ContentType;
             }
-            else if (TryReadDiskCache(cacheKey, out var diskData, out var diskContentType))
+            else
             {
-                data = diskData;
-                contentType = diskContentType;
-                // Promote to memory so subsequent hits this session skip the disk read.
-                StoreInMemory(cacheKey, diskData, diskContentType);
+                if (cached != null)
+                    RemoveFromMemory(cacheKey, cached);
+
+                if (TryReadDiskCache(cacheKey, out var diskData, out var diskContentType))
+                {
+                    data = diskData;
+                    contentType = diskContentType;
+                    // Promote to memory so subsequent hits this session skip the disk read.
+                    StoreInMemory(cacheKey, diskData, diskContentType);
+                }
             }
 
             if (data == null)
@@ -384,20 +389,45 @@ namespace JellyfinTizen.Core
             if (data == null || data.Length == 0 || data.Length >= 5 * 1024 * 1024)
                 return;
 
-            // Bound the in-memory cache: evict the oldest entry before inserting.
-            while (_imageCache.Count >= _maxCacheSize)
+            lock (_imageCacheLock)
             {
-                var oldest = _imageCache.OrderBy(kvp => kvp.Value.CachedAt).FirstOrDefault();
-                if (oldest.Key == null || !_imageCache.TryRemove(oldest.Key, out _))
-                    break;
-            }
+                if (_imageCache.TryRemove(cacheKey, out var existing))
+                    _imageCacheBytes -= existing.Data?.LongLength ?? 0;
 
-            _imageCache[cacheKey] = new CachedImage
+                // Bound the in-memory cache by both count and bytes. The byte budget
+                // is the meaningful limit on a long-running TV process.
+                while (_imageCache.Count >= _maxCacheSize || _imageCacheBytes + data.LongLength > MemoryCacheMaxBytes)
+                {
+                    var oldest = _imageCache.OrderBy(kvp => kvp.Value.CachedAt).FirstOrDefault();
+                    if (oldest.Key == null || !_imageCache.TryRemove(oldest.Key, out var removed))
+                        break;
+
+                    _imageCacheBytes -= removed.Data?.LongLength ?? 0;
+                }
+
+                if (_imageCacheBytes + data.LongLength > MemoryCacheMaxBytes)
+                    return;
+
+                _imageCache[cacheKey] = new CachedImage
+                {
+                    Data = data,
+                    ContentType = string.IsNullOrEmpty(contentType) ? "image/jpeg" : contentType,
+                    CachedAt = DateTime.UtcNow
+                };
+                _imageCacheBytes += data.LongLength;
+            }
+        }
+
+        private static void RemoveFromMemory(string cacheKey, CachedImage expected)
+        {
+            lock (_imageCacheLock)
             {
-                Data = data,
-                ContentType = string.IsNullOrEmpty(contentType) ? "image/jpeg" : contentType,
-                CachedAt = DateTime.UtcNow
-            };
+                if (_imageCache.TryGetValue(cacheKey, out var current) && ReferenceEquals(current, expected) &&
+                    _imageCache.TryRemove(cacheKey, out var removed))
+                {
+                    _imageCacheBytes -= removed.Data?.LongLength ?? 0;
+                }
+            }
         }
 
         // Removes the volatile auth token from the URL so the same image caches across

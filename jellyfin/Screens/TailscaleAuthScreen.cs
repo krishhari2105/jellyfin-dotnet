@@ -157,8 +157,9 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
-            _busCts?.Cancel();
-            _authUrlTimeoutCts?.Cancel();
+            CancelAndDispose(ref _busCts);
+            CancelAndDispose(ref _refreshCts);
+            CancelAndDispose(ref _authUrlTimeoutCts);
             UnsubscribeAuthUrlEvents();
             base.OnHide(); // calls HideDebugOverlay()
         }
@@ -255,7 +256,7 @@ namespace JellyfinTizen.Screens
 
             try
             {
-                _busCts?.Cancel();
+                CancelAndDispose(ref _busCts);
                 _busCts = new CancellationTokenSource();
 
                 TailscaleDebugLog.Add("LoginAsync: calling StartLoginInteractiveAsync");
@@ -512,14 +513,24 @@ namespace JellyfinTizen.Screens
             _qrImageView.ExcludeLayouting = true;
 
             // Navigate using the central ContinueNavigation function after brief confirmation display
-            _ = Task.Run(async () =>
+            FireAndForget(
+                ContinueAfterConnectionAsync(_refreshCts?.Token ?? CancellationToken.None),
+                nameof(ContinueAfterConnectionAsync));
+        }
+
+        private async Task ContinueAfterConnectionAsync(CancellationToken token)
+        {
+            try
             {
-                await Task.Delay(1500);
-                RunOnUiThread(() =>
-                {
-                    ContinueNavigation();
-                });
-            });
+                await Task.Delay(1500, token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            if (!token.IsCancellationRequested)
+                RunOnUiThread(ContinueNavigation);
         }
 
         private void SubscribeAuthUrlEvents()
@@ -550,7 +561,7 @@ namespace JellyfinTizen.Screens
         private void StartPeriodicRefresh()
         {
             // Cancel any existing refresh operation
-            _refreshCts?.Cancel();
+            CancelAndDispose(ref _refreshCts);
             _refreshCts = new CancellationTokenSource();
 
             // Start periodic refresh every 2 seconds

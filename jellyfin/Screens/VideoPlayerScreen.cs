@@ -394,9 +394,12 @@ namespace JellyfinTizen.Screens
 
             try
             {
+                bool explicitSubtitleOff = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value < 0;
                 bool hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
                 bool preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
-                int? requestedSubtitleStreamIndex = hasSelectedSubtitle ? _initialSubtitleIndex : -1;
+                int? requestedSubtitleStreamIndex = hasSelectedSubtitle
+                    ? _initialSubtitleIndex
+                    : explicitSubtitleOff ? -1 : null;
                 bool preferTsOnlyHlsForRequestedSubtitle = RequiresTsOnlyHlsProfile(GetRequestedSubtitleCodecHint());
                 if (preferNativeEmbeddedOnStart)
                     requestedSubtitleStreamIndex = null;
@@ -412,7 +415,7 @@ namespace JellyfinTizen.Screens
                     requestedSubtitleStreamIndex,
                     burnInActive,
                     _overrideAudioIndex,
-                    hasSelectedSubtitle,
+                    explicitSubtitleOff,
                     requestedMediaSourceId,
                     preferTsOnlyHlsForRequestedSubtitle,
                     playbackToken);
@@ -427,7 +430,7 @@ namespace JellyfinTizen.Screens
                     requestedSubtitleStreamIndex,
                     burnInActive,
                     _overrideAudioIndex,
-                    hasSelectedSubtitle,
+                    explicitSubtitleOff,
                     requestedMediaSourceId,
                     preferTsOnlyHlsForRequestedSubtitle,
                     playbackToken);
@@ -437,13 +440,22 @@ namespace JellyfinTizen.Screens
                     return;
 
                 bool assignedStartupAudioOverride = ResolveStartupAudioDefault(playbackInfo);
+                bool assignedStartupSubtitleDefault = ResolveStartupSubtitleDefault(playbackInfo, explicitSubtitleOff);
+                hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
+                if (assignedStartupSubtitleDefault)
+                {
+                    requestedSubtitleStreamIndex = _initialSubtitleIndex;
+                    preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
+                    burnInActive = _burnIn && hasSelectedSubtitle;
+                }
 
                 // Jellyfin applies explicit subtitle/audio stream indices only when MediaSourceId is provided.
                 // If details screen did not preselect a source in time, re-request using resolved source id.
                 bool shouldRefinePlaybackInfo =
                     (string.IsNullOrWhiteSpace(requestedMediaSourceId) &&
                      (requestedSubtitleStreamIndex.HasValue || _overrideAudioIndex.HasValue)) ||
-                    assignedStartupAudioOverride;
+                    assignedStartupAudioOverride ||
+                    (assignedStartupSubtitleDefault && burnInActive);
                 if (shouldRefinePlaybackInfo)
                 {
                     var refineResult = await RefinePlaybackInfoWithResolvedSourceAsync(
@@ -452,7 +464,7 @@ namespace JellyfinTizen.Screens
                         requestedSubtitleStreamIndex,
                         burnInActive,
                         _overrideAudioIndex,
-                        hasSelectedSubtitle,
+                        explicitSubtitleOff,
                         requestedMediaSourceId,
                         preferTsOnlyHlsForRequestedSubtitle,
                         playbackToken);
@@ -624,7 +636,7 @@ namespace JellyfinTizen.Screens
             int? requestedSubtitleStreamIndex,
             bool burnInActive,
             int? overrideAudioIndex,
-            bool hasSelectedSubtitle,
+            bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
             int playbackToken)
@@ -634,7 +646,7 @@ namespace JellyfinTizen.Screens
                 requestedSubtitleStreamIndex,
                 burnInActive,
                 overrideAudioIndex,
-                subtitleHandlingDisabled: !hasSelectedSubtitle,
+                subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: requestedMediaSourceId,
                 preferTsOnlyHls: preferTsOnlyHls);
             if (playbackToken != _playbackToken)
@@ -648,7 +660,7 @@ namespace JellyfinTizen.Screens
             int? requestedSubtitleStreamIndex,
             bool burnInActive,
             int? overrideAudioIndex,
-            bool hasSelectedSubtitle,
+            bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
             int playbackToken)
@@ -664,7 +676,7 @@ namespace JellyfinTizen.Screens
                 requestedSubtitleStreamIndex,
                 burnInActive,
                 overrideAudioIndex,
-                subtitleHandlingDisabled: !hasSelectedSubtitle,
+                subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: null,
                 preferTsOnlyHls: preferTsOnlyHls);
             if (playbackToken != _playbackToken)
@@ -682,7 +694,7 @@ namespace JellyfinTizen.Screens
             int? requestedSubtitleStreamIndex,
             bool burnInActive,
             int? overrideAudioIndex,
-            bool hasSelectedSubtitle,
+            bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
             int playbackToken)
@@ -700,7 +712,7 @@ namespace JellyfinTizen.Screens
                 requestedSubtitleStreamIndex,
                 burnInActive,
                 overrideAudioIndex,
-                subtitleHandlingDisabled: !hasSelectedSubtitle,
+                subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: requestedMediaSourceId,
                 preferTsOnlyHls: preferTsOnlyHls);
             if (playbackToken != _playbackToken)
@@ -1111,7 +1123,9 @@ namespace JellyfinTizen.Screens
             var info = new PlaybackProgressInfo
             {
                 ItemId = playbackMovieId, PlaySessionId = playSessionId, MediaSourceId = mediaSourceId,
-                PositionTicks = startPositionMs * 10000, IsPaused = false, PlayMethod = reportedPlayMethod, EventName = "TimeUpdate"
+                PositionTicks = startPositionMs * 10000, IsPaused = false, PlayMethod = reportedPlayMethod, EventName = "TimeUpdate",
+                AudioStreamIndex = _overrideAudioIndex,
+                SubtitleStreamIndex = GetReportedSubtitleStreamIndex()
             };
             _ = AppState.Jellyfin.ReportPlaybackStartAsync(info);
         }
@@ -2984,8 +2998,26 @@ namespace JellyfinTizen.Screens
             if (audioStreams == null || audioStreams.Count == 0)
                 return null;
 
+            if (mediaSource.DefaultAudioStreamIndex.HasValue &&
+                audioStreams.Any(s => s.Index == mediaSource.DefaultAudioStreamIndex.Value))
+            {
+                return mediaSource.DefaultAudioStreamIndex.Value;
+            }
+
             var defaultStream = audioStreams.FirstOrDefault(s => s.IsDefault);
             return defaultStream?.Index ?? audioStreams[0].Index;
+        }
+
+        private static MediaStream ResolveStartupDefaultSubtitleStream(MediaSourceInfo mediaSource)
+        {
+            if (mediaSource?.DefaultSubtitleStreamIndex.HasValue != true)
+                return null;
+
+            int defaultSubtitleIndex = mediaSource.DefaultSubtitleStreamIndex.Value;
+            return mediaSource.MediaStreams?
+                .FirstOrDefault(s =>
+                    string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase) &&
+                    s.Index == defaultSubtitleIndex);
         }
 
         private bool ResolveStartupAudioDefault(PlaybackInfoResponse playbackInfo)
@@ -3004,6 +3036,46 @@ namespace JellyfinTizen.Screens
                 return true;
             }
             return false;
+        }
+
+        private bool ResolveStartupSubtitleDefault(PlaybackInfoResponse playbackInfo, bool explicitSubtitleOff)
+        {
+            if (explicitSubtitleOff || _initialSubtitleIndex.HasValue)
+                return false;
+
+            var mediaSource = ResolvePreferredMediaSource(playbackInfo);
+            var subtitleStream = ResolveStartupDefaultSubtitleStream(mediaSource);
+            if (subtitleStream == null)
+            {
+                _subtitleEnabled = false;
+                _initialSubtitleIndex = null;
+                if (DebugSwitches.EnablePlaybackDebugOverlay)
+                    CaptureSubtitleDebugEvent("StartPlayback.SubtitleDefault", details: "index=OFF");
+                return false;
+            }
+
+            _subtitleEnabled = true;
+            _initialSubtitleIndex = subtitleStream.Index;
+            _requestedEmbeddedSubtitleOrdinal = subtitleStream.IsExternal
+                ? null
+                : GetEmbeddedSubtitleOrdinal(mediaSource, subtitleStream.Index);
+            var orderedSubtitleStreams = mediaSource.MediaStreams?
+                .Where(s => string.Equals(s.Type, "Subtitle", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Index)
+                .ToList();
+            _requestedSubtitleOrdinalAll = orderedSubtitleStreams?.FindIndex(s => s.Index == subtitleStream.Index);
+            if (_requestedSubtitleOrdinalAll.HasValue && _requestedSubtitleOrdinalAll.Value < 0)
+                _requestedSubtitleOrdinalAll = null;
+            _requestedSubtitleLanguage = subtitleStream.Language;
+            _requestedSubtitleDisplayTitle = subtitleStream.DisplayTitle;
+            _requestedSubtitleCodec = subtitleStream.Codec;
+            _initialSubtitleCodecHint = subtitleStream.Codec;
+            _requestedSubtitleWasExternal = subtitleStream.IsExternal;
+
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+                CaptureSubtitleDebugEvent("StartPlayback.SubtitleDefault", subtitleStream, $"index={subtitleStream.Index}");
+
+            return true;
         }
 
         private static bool IsAudioCodecDirectPlayableByProfile(string codec)
@@ -5554,7 +5626,11 @@ namespace JellyfinTizen.Screens
                     StopPlayback();
                     _startPositionMs = (int)currentPos;
                     StartPlayback();
+                    return;
                 }
+                // No restart path — persist "subtitles off" immediately so a later
+                // pause/stop carries the explicit OFF state.
+                ReportProgressToServer(force: true);
                 return;
             }
 
@@ -5688,6 +5764,9 @@ namespace JellyfinTizen.Screens
                         }
                     }
                     ApplySubtitleOffset();
+                    // Native switch is invisible to the periodic timer; mirror litefin's
+                    // `mediastreamschange` by emitting a forced progress now.
+                    ReportProgressToServer(force: true);
                     return;
                 }
 
@@ -5696,6 +5775,9 @@ namespace JellyfinTizen.Screens
                 {
                     ApplySubtitleOffset();
                     if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ParserSwitchSuccess", subStream);
+                    // Parsed-renderer switch also bypasses restart; persist the new subtitle
+                    // selection immediately.
+                    ReportProgressToServer(force: true);
                     return;
                 }
 
@@ -5979,7 +6061,13 @@ namespace JellyfinTizen.Screens
             if (canTryNativeDirectPlaySwitch)
             {
                 if (TrySelectNativeAudioTrack(jellyfinStreamIndex))
+                {
+                    // Native switch redraws play state without a server restart, so the
+                    // periodic progress report would lag the new track by up to one tick.
+                    // Mirror litefin's `mediastreamschange` by pushing a progress report now.
+                    ReportProgressToServer(force: true);
                     return;
+                }
             }
 
             long currentPos = GetPlayPositionMs();
@@ -6204,6 +6292,20 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        // Returns the subtitle stream index to send in playback reports. Uses -1 to
+        // explicitly indicate "subtitles off" so the server records the user's selection
+        // rather than reverting to the source default on resume. Returns null when
+        // subtitles have not been initialised yet (start of playback / before any
+        // selection), matching the absence semantics the server expects.
+        private int? GetReportedSubtitleStreamIndex()
+        {
+            if (!_subtitleEnabled)
+                return -1;
+            if (_initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0)
+                return _initialSubtitleIndex.Value;
+            return null;
+        }
+
         // Guards against a second exit being triggered while the awaited stop-report from a
         // first exit is still in flight (the await introduces a window during which the
         // player is still on-screen and could receive another Back/Stop press).
@@ -6236,7 +6338,9 @@ namespace JellyfinTizen.Screens
                         MediaSourceId = _activeReportMediaSourceId,
                         PlayMethod = _activeReportPlayMethod,
                         PositionTicks = stopPositionTicks,
-                        EventName = "Stop"
+                        EventName = "Stop",
+                        AudioStreamIndex = _overrideAudioIndex,
+                        SubtitleStreamIndex = GetReportedSubtitleStreamIndex()
                     };
                 }
             }
@@ -6273,7 +6377,9 @@ namespace JellyfinTizen.Screens
             {
                 ItemId = _activeReportItemId, PlaySessionId = _activeReportPlaySessionId, MediaSourceId = _activeReportMediaSourceId,
                 PositionTicks = (long)positionMs * 10000, IsPaused = _player.State == PlayerState.Paused,
-                PlayMethod = _activeReportPlayMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate"
+                PlayMethod = _activeReportPlayMethod, EventName = force ? (_player.State == PlayerState.Paused ? "Pause" : "Unpause") : "TimeUpdate",
+                AudioStreamIndex = _overrideAudioIndex,
+                SubtitleStreamIndex = GetReportedSubtitleStreamIndex()
             };
             _lastKnownPositionTicks = info.PositionTicks;
             _ = AppState.Jellyfin.ReportPlaybackProgressAsync(info);
@@ -6361,7 +6467,9 @@ namespace JellyfinTizen.Screens
                         MediaSourceId = _activeReportMediaSourceId,
                         PlayMethod = _activeReportPlayMethod,
                         PositionTicks = stopPositionTicks,
-                        EventName = "Stop"
+                        EventName = "Stop",
+                        AudioStreamIndex = _overrideAudioIndex,
+                        SubtitleStreamIndex = GetReportedSubtitleStreamIndex()
                     };
                     _ = ReportPlaybackStoppedSafeAsync(info);
                 }
@@ -6797,6 +6905,7 @@ namespace JellyfinTizen.Screens
             _audioSelectionUserOverride = false;
             _preferredMediaSourceId = null;
             _currentMediaSource = null;
+            ClearRequestedSubtitleSelectionState();
             _useParsedSubtitleRenderer = false;
             ClearParsedSubtitleCues();
             StopSubtitleRenderTimer();
