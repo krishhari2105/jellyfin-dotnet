@@ -37,7 +37,6 @@ namespace JellyfinTizen.Core
             if (_disposed)
                 return;
 
-            _http?.Dispose();
             _disposed = true;
         }
 

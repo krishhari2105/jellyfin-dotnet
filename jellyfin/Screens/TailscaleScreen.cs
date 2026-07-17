@@ -130,7 +130,8 @@ private CancellationTokenSource _refreshCts;
 
         public override void OnHide()
         {
-            _busCts?.Cancel();
+            CancelAndDispose(ref _busCts);
+            CancelAndDispose(ref _refreshCts);
             UnsubscribeAuthUrlEvents();
             base.OnHide(); // calls HideDebugOverlay()
         }
@@ -611,7 +612,7 @@ private CancellationTokenSource _refreshCts;
         private void StartPeriodicRefresh()
         {
             // Cancel any existing refresh operation
-            _refreshCts?.Cancel();
+            CancelAndDispose(ref _refreshCts);
             _refreshCts = new CancellationTokenSource();
 
             // Start periodic refresh every 2 seconds

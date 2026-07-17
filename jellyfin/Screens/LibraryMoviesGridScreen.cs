@@ -280,6 +280,13 @@ namespace JellyfinTizen.Screens
                 if (serverMovies == null || serverMovies.Count == 0)
                     return;
 
+                var serverMoviesById = new Dictionary<string, JellyfinMovie>(StringComparer.Ordinal);
+                foreach (var serverMovie in serverMovies)
+                {
+                    if (serverMovie != null && !string.IsNullOrWhiteSpace(serverMovie.Id))
+                        serverMoviesById[serverMovie.Id] = serverMovie;
+                }
+
                 RunOnUiThread(() =>
                 {
                     try
@@ -290,8 +297,7 @@ namespace JellyfinTizen.Screens
                             if (movie == null || string.IsNullOrWhiteSpace(movie.Id))
                                 continue;
 
-                            var serverMovie = serverMovies.Find(m => m != null && m.Id == movie.Id);
-                            if (serverMovie != null)
+                            if (serverMoviesById.TryGetValue(movie.Id, out var serverMovie))
                             {
                                 movie.Played = serverMovie.Played;
                                 if (i < _playedBadges.Count && _playedBadges[i] != null)

@@ -81,6 +81,12 @@ namespace JellyfinTizen.UI
         public const int HomeFocusBorder = 5;
         public const int HomeFocusPad = 30;
 
+        // Series and season detail layouts
+        public const int DetailsHorizontalPadding = 90;
+        public const int DetailsColumnGap = 60;
+        public const int DetailsCarouselLeftBleed = 12;
+        public const int DetailsCarouselRightGutter = 30;
+
         public const int LibraryTopBarHeight = 90;
         public const int LibraryTopBarPadding = 60;
         public const int LibraryContentTopGap = 20;

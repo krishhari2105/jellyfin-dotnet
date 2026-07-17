@@ -69,11 +69,15 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
-                Padding = new Extents(90, 90, 60, 40),
+                Padding = new Extents(
+                    UiTheme.DetailsHorizontalPadding,
+                    UiTheme.DetailsHorizontalPadding,
+                    60,
+                    40),
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
-                    CellPadding = new Size2D(60, 0)
+                    CellPadding = new Size2D(UiTheme.DetailsColumnGap, 0)
                 }
             };
 
@@ -317,8 +321,8 @@ namespace JellyfinTizen.Screens
 
             _seasonViewport = new View
             {
-                PositionX = -12,
-                WidthResizePolicy = ResizePolicyType.FillToParent,
+                PositionX = -UiTheme.DetailsCarouselLeftBleed,
+                WidthSpecification = GetSeasonViewportWidth(),
                 HeightSpecification = 550,
                 ClippingMode = ClippingModeType.ClipChildren
             };
@@ -478,7 +482,9 @@ namespace JellyfinTizen.Screens
             }
 
             var offset = -_seasonRowContainer.PositionX;
-            var viewportWidth = _seasonViewport.SizeWidth;
+            var viewportWidth = _seasonViewport.SizeWidth > 0
+                ? _seasonViewport.SizeWidth
+                : GetSeasonViewportWidth();
             var focused = _seasonViews[_seasonIndex];
 
             var left = focused.PositionX;
@@ -494,6 +500,18 @@ namespace JellyfinTizen.Screens
                 targetX += (visibleLeft - left + SeasonCardSpacing);
 
             _seasonRowContainer.PositionX = targetX;
+        }
+
+        private static int GetSeasonViewportWidth()
+        {
+            return Math.Max(
+                SeasonCardWidth,
+                Window.Default.Size.Width
+                    - UiTheme.DetailsHorizontalPadding
+                    - PosterWidth
+                    - UiTheme.DetailsColumnGap
+                    + UiTheme.DetailsCarouselLeftBleed
+                    - UiTheme.DetailsCarouselRightGutter);
         }
 
         private static int EstimateOverviewHeight(string text, int width, float pointSize)
