@@ -475,31 +475,56 @@ namespace JellyfinTizen.Screens
             if (_seasonRowContainer == null || _seasonViewport == null || _seasonViews.Count == 0)
                 return;
 
-            if (_seasonIndex == 0)
-            {
-                _seasonRowContainer.PositionX = 12;
-                return;
-            }
-
-            var offset = -_seasonRowContainer.PositionX;
             var viewportWidth = _seasonViewport.SizeWidth > 0
                 ? _seasonViewport.SizeWidth
                 : GetSeasonViewportWidth();
-            var focused = _seasonViews[_seasonIndex];
 
-            var left = focused.PositionX;
-            var right = left + SeasonCardWidth;
+            _seasonRowContainer.PositionX = CalculateSeasonRowPosition(
+                _seasonIndex,
+                _seasonRowContainer.PositionX,
+                viewportWidth);
+        }
 
-            var visibleLeft = offset;
-            var visibleRight = offset + viewportWidth;
-            var targetX = _seasonRowContainer.PositionX;
+        private static float CalculateSeasonRowPosition(
+            int focusedIndex,
+            float currentRowPosition,
+            float viewportWidth)
+        {
+            if (focusedIndex <= 0)
+                return GetSeasonViewportLeftInset();
 
-            if (right > visibleRight)
-                targetX -= (right - visibleRight + SeasonCardSpacing);
-            else if (left < visibleLeft)
-                targetX += (visibleLeft - left + SeasonCardSpacing);
+            float cardLeft = focusedIndex * (SeasonCardWidth + SeasonCardSpacing);
+            float cardRight = cardLeft + SeasonCardWidth;
+            float focusOverflow = GetSeasonFocusOverflow();
+            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
+            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
 
-            _seasonRowContainer.PositionX = targetX;
+            if (focusedVisualRight > viewportWidth)
+            {
+                return viewportWidth
+                    - GetSeasonViewportLeftInset()
+                    - FocusBorder
+                    - cardRight;
+            }
+
+            if (focusedVisualLeft < 0)
+            {
+                return GetSeasonViewportLeftInset() - cardLeft;
+            }
+
+            return currentRowPosition;
+        }
+
+        private static float GetSeasonFocusOverflow()
+        {
+            return (SeasonCardWidth * (FocusScale - 1f) / 2f) + FocusBorder;
+        }
+
+        private static int GetSeasonViewportLeftInset()
+        {
+            return Math.Max(
+                UiTheme.DetailsCarouselLeftBleed,
+                (int)Math.Ceiling(GetSeasonFocusOverflow()));
         }
 
         private static int GetSeasonViewportWidth()
