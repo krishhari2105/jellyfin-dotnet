@@ -1384,9 +1384,9 @@ namespace JellyfinTizen.Core
             lock (CircuitLock)
             {
                 _consecutiveFailures++;
-                if (_consecutiveFailures >= 5)
+                if (_consecutiveFailures >= AppState.JellyfinCircuitBreakerFailureThreshold)
                 {
-                    _circuitBreakerOpenUntil = DateTime.UtcNow.AddSeconds(10);
+                    _circuitBreakerOpenUntil = DateTime.UtcNow.AddSeconds(AppState.JellyfinCircuitBreakerOpenSeconds);
                     TailscaleDebugLog.Add($"Jellyfin server circuit breaker OPEN until {_circuitBreakerOpenUntil}");
                 }
             }
@@ -1409,10 +1409,10 @@ namespace JellyfinTizen.Core
                     RecordSuccess();
                     return result;
                 }
-                catch (Exception ex) when (IsTransient(ex) && attempt < 3)
+                catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
                 {
-                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/3): {ex.Message} for path={path}");
-                    await Task.Delay(attempt * 500);
+                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
+                    await Task.Delay(attempt * AppState.JellyfinRetryBaseDelayMs);
                 }
                 catch (Exception)
                 {
@@ -1439,10 +1439,10 @@ namespace JellyfinTizen.Core
                     RecordSuccess();
                     return;
                 }
-                catch (Exception ex) when (IsTransient(ex) && attempt < 3)
+                catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
                 {
-                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/3): {ex.Message} for path={path}");
-                    await Task.Delay(attempt * 500);
+                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
+                    await Task.Delay(attempt * AppState.JellyfinRetryBaseDelayMs);
                 }
                 catch (Exception)
                 {

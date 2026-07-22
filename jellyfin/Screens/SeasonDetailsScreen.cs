@@ -42,8 +42,11 @@ namespace JellyfinTizen.Screens
         private int _nextEpisodeStartIndex;
         private int _totalEpisodeCount;
         private TextLabel _episodeLoadingText;
+        private TextLabel _initialEpisodeLoadingLabel;
         private int _episodeCardTextHeight = PreferredEpisodeCardTextHeight;
         private bool _seriesBackdropResolved;
+        private int _backdropRequestToken = -1;
+        private int _lifecycleToken;
 
         public SeasonDetailsScreen(JellyfinMovie season)
         {
@@ -134,7 +137,7 @@ namespace JellyfinTizen.Screens
 
             int titleHeight = 80;
             int topGaps = 2 * 12;
-            int estimatedOverviewHeight = EstimateOverviewHeight(_season.Overview, 1260, 32);
+            int estimatedOverviewHeight = DetailsScreenHelpers.EstimateOverviewHeight(_season.Overview, 1260, 32);
             int overviewHeight = Math.Clamp(
                 estimatedOverviewHeight,
                 40,
@@ -180,24 +183,41 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
-            if (!_seriesBackdropResolved && !string.IsNullOrWhiteSpace(_season.SeriesId))
+            int lifecycleToken = _lifecycleToken;
+            if (!_seriesBackdropResolved && _backdropRequestToken != lifecycleToken && !string.IsNullOrWhiteSpace(_season.SeriesId))
             {
-                _ = ResolveSeriesBackdropAsync();
+                FireAndForget(ResolveSeriesBackdropAsync(lifecycleToken), nameof(ResolveSeriesBackdropAsync));
             }
 
             if (_episodes == null || _episodes.Count == 0)
             {
-                _ = LoadEpisodesAsync();
+                FireAndForget(LoadEpisodesAsync(lifecycleToken), nameof(LoadEpisodesAsync));
             }
             else
             {
-                _ = RefreshEpisodesPlayedStateFromServerAsync();
+                FireAndForget(RefreshEpisodesPlayedStateFromServerAsync(lifecycleToken), nameof(RefreshEpisodesPlayedStateFromServerAsync));
             }
         }
 
-        private async Task LoadEpisodesAsync()
+        public override void OnHide()
         {
-            if (_isEpisodeLoadInProgress)
+            // JellyfinService's episode calls do not accept cancellation tokens, so
+            // invalidate their continuations before the screen can be reused.
+            _lifecycleToken++;
+            _isEpisodeLoadInProgress = false;
+            if (_initialEpisodeLoadingLabel != null)
+            {
+                _infoColumn.Remove(_initialEpisodeLoadingLabel);
+                _initialEpisodeLoadingLabel = null;
+            }
+            base.OnHide();
+        }
+
+        private bool IsCurrentLifecycle(int lifecycleToken) => lifecycleToken == _lifecycleToken;
+
+        private async Task LoadEpisodesAsync(int lifecycleToken)
+        {
+            if (!IsCurrentLifecycle(lifecycleToken) || _isEpisodeLoadInProgress)
                 return;
 
             _isEpisodeLoadInProgress = true;
@@ -209,6 +229,7 @@ namespace JellyfinTizen.Screens
                 TextColor = Color.White,
                 HorizontalAlignment = HorizontalAlignment.Center
             };
+            _initialEpisodeLoadingLabel = loading;
             _infoColumn.Add(loading);
 
             try
@@ -221,47 +242,71 @@ namespace JellyfinTizen.Screens
                     lightweight: true);
 
                 var firstPage = items ?? new List<JellyfinMovie>();
-                _episodes = new List<JellyfinMovie>();
-                _episodeCardTextHeight = CalculateEpisodeCardTextHeight(firstPage);
-                _totalEpisodeCount = Math.Max(totalRecordCount, firstPage.Count);
-                _nextEpisodeStartIndex = firstPage.Count;
-                _hasMoreEpisodes = firstPage.Count > 0 || _totalEpisodeCount > 0;
+                RunOnUiThread(() =>
+                {
+                    if (!IsCurrentLifecycle(lifecycleToken))
+                        return;
 
-                EnsureEpisodeSection();
-                ResetEpisodeSection();
-                UpdateEpisodeViewportHeight();
-                AppendEpisodeCards(firstPage);
-                _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount;
+                    _episodes = new List<JellyfinMovie>();
+                    _episodeCardTextHeight = CalculateEpisodeCardTextHeight(firstPage);
+                    _totalEpisodeCount = Math.Max(totalRecordCount, firstPage.Count);
+                    _nextEpisodeStartIndex = firstPage.Count;
+                    _hasMoreEpisodes = firstPage.Count > 0 || _totalEpisodeCount > 0;
+
+                    EnsureEpisodeSection();
+                    ResetEpisodeSection();
+                    UpdateEpisodeViewportHeight();
+                    AppendEpisodeCards(firstPage);
+                    _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount;
+                });
             }
             catch
             {
-                if (_episodes == null)
+                RunOnUiThread(() =>
                 {
+                    if (!IsCurrentLifecycle(lifecycleToken) || _episodes != null)
+                        return;
+
                     _episodes = new List<JellyfinMovie>();
                     _totalEpisodeCount = 0;
                     _nextEpisodeStartIndex = 0;
                     _hasMoreEpisodes = false;
-                }
+                });
             }
             finally
             {
-                _infoColumn.Remove(loading);
-                _isEpisodeLoadInProgress = false;
-            }
-            EnsureEpisodeSection();
+                RunOnUiThread(() =>
+                {
+                    if (!IsCurrentLifecycle(lifecycleToken))
+                    {
+                        if (ReferenceEquals(_initialEpisodeLoadingLabel, loading))
+                        {
+                            _infoColumn.Remove(loading);
+                            _initialEpisodeLoadingLabel = null;
+                        }
+                        return;
+                    }
 
-            if (_episodeViews.Count == 0)
-            {
-                SetEpisodeLoadingText("No episodes found.", visible: true);
-                return;
-            }
+                    _infoColumn.Remove(loading);
+                    if (ReferenceEquals(_initialEpisodeLoadingLabel, loading))
+                        _initialEpisodeLoadingLabel = null;
+                    _isEpisodeLoadInProgress = false;
+                    EnsureEpisodeSection();
 
-            _isEpisodeViewFocused = true;
-            FocusEpisode(0);
-            _ = LoadMoreEpisodesAsync(force: false);
+                    if (_episodeViews.Count == 0)
+                    {
+                        SetEpisodeLoadingText("No episodes found.", visible: true);
+                        return;
+                    }
+
+                    _isEpisodeViewFocused = true;
+                    FocusEpisode(0);
+                    FireAndForget(LoadMoreEpisodesAsync(force: false, lifecycleToken), nameof(LoadMoreEpisodesAsync));
+                });
+            }
         }
 
-        private async Task RefreshEpisodesPlayedStateFromServerAsync()
+        private async Task RefreshEpisodesPlayedStateFromServerAsync(int lifecycleToken)
         {
             if (string.IsNullOrWhiteSpace(_season.SeriesId) || string.IsNullOrWhiteSpace(_season.Id))
                 return;
@@ -283,6 +328,9 @@ namespace JellyfinTizen.Screens
                 {
                     try
                     {
+                        if (!IsCurrentLifecycle(lifecycleToken))
+                            return;
+
                         for (int i = 0; i < _episodes.Count; i++)
                         {
                             var episode = _episodes[i];
@@ -443,9 +491,9 @@ namespace JellyfinTizen.Screens
                 _episodeLoadingText.Hide();
         }
 
-        private async Task LoadMoreEpisodesAsync(bool force)
+        private async Task LoadMoreEpisodesAsync(bool force, int lifecycleToken)
         {
-            if (_isEpisodeLoadInProgress || !_hasMoreEpisodes)
+            if (!IsCurrentLifecycle(lifecycleToken) || _isEpisodeLoadInProgress || !_hasMoreEpisodes)
                 return;
 
             if (!force)
@@ -471,15 +519,18 @@ namespace JellyfinTizen.Screens
                     lightweight: true);
 
                 var pageItems = items ?? new List<JellyfinMovie>();
-                _nextEpisodeStartIndex += pageItems.Count;
-                _totalEpisodeCount = Math.Max(totalRecordCount, _totalEpisodeCount);
-
-                if (pageItems.Count > 0)
+                RunOnUiThread(() =>
                 {
-                    AppendEpisodeCards(pageItems);
-                }
+                    if (!IsCurrentLifecycle(lifecycleToken))
+                        return;
 
-                _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount && pageItems.Count > 0;
+                    _nextEpisodeStartIndex += pageItems.Count;
+                    _totalEpisodeCount = Math.Max(totalRecordCount, _totalEpisodeCount);
+                    if (pageItems.Count > 0)
+                        AppendEpisodeCards(pageItems);
+
+                    _hasMoreEpisodes = _nextEpisodeStartIndex < _totalEpisodeCount && pageItems.Count > 0;
+                });
             }
             catch
             {
@@ -487,17 +538,23 @@ namespace JellyfinTizen.Screens
             }
             finally
             {
-                _isEpisodeLoadInProgress = false;
-                SetEpisodeLoadingText(string.Empty, visible: false);
+                RunOnUiThread(() =>
+                {
+                    if (!IsCurrentLifecycle(lifecycleToken))
+                        return;
+
+                    _isEpisodeLoadInProgress = false;
+                    SetEpisodeLoadingText(string.Empty, visible: false);
+                });
             }
         }
 
-        private async Task ResolveSeriesBackdropAsync()
+        private async Task ResolveSeriesBackdropAsync(int lifecycleToken)
         {
-            if (_seriesBackdropResolved || string.IsNullOrWhiteSpace(_season.SeriesId))
+            if (_seriesBackdropResolved || _backdropRequestToken == lifecycleToken || string.IsNullOrWhiteSpace(_season.SeriesId))
                 return;
 
-            _seriesBackdropResolved = true;
+            _backdropRequestToken = lifecycleToken;
 
             try
             {
@@ -511,8 +568,11 @@ namespace JellyfinTizen.Screens
 
                 RunOnUiThread(() =>
                 {
-                    if (_backdropView != null)
+                    if (IsCurrentLifecycle(lifecycleToken) && _backdropView != null)
+                    {
                         UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
+                        _seriesBackdropResolved = true;
+                    }
                 });
             }
             catch
@@ -625,7 +685,7 @@ namespace JellyfinTizen.Screens
                 case AppKey.Right:
                     if (_episodeIndex >= _episodeViews.Count - 1 && _hasMoreEpisodes)
                     {
-                        _ = LoadMoreEpisodesAsync(force: true);
+                        FireAndForget(LoadMoreEpisodesAsync(force: true, _lifecycleToken), nameof(LoadMoreEpisodesAsync));
                         return;
                     }
                     MoveEpisodeFocus(1);
@@ -659,7 +719,7 @@ namespace JellyfinTizen.Screens
             _episodeIndex = Math.Clamp(index, 0, _episodeViews.Count - 1);
             ApplyEpisodeFocus(_episodeViews[_episodeIndex], true);
             ScrollEpisodesIfNeeded();
-            _ = LoadMoreEpisodesAsync(force: false);
+            FireAndForget(LoadMoreEpisodesAsync(force: false, _lifecycleToken), nameof(LoadMoreEpisodesAsync));
 
             Tizen.Applications.CoreApplication.Post(() =>
             {
@@ -669,23 +729,7 @@ namespace JellyfinTizen.Screens
 
         private void ApplyEpisodeFocus(View card, bool focused)
         {
-            var frame = MediaCardFocus.GetCardFrame(card);
-            var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
-            if (frame != null)
-            {
-                frame.PositionZ = focused ? 20 : 0;
-                card.PositionZ = 0;
-            }
-            else
-            {
-                card.PositionZ = focused ? 20 : 0;
-            }
-
-            if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
-            else
-                MediaCardFocus.ClearFrameFocus(frame);
+            MediaCardFocus.ApplyCardFocus(card, focused, FocusScale);
         }
 
         private void ScrollEpisodesIfNeeded()
@@ -707,34 +751,10 @@ namespace JellyfinTizen.Screens
             float currentRowPosition,
             float viewportWidth)
         {
-            if (focusedIndex <= 0)
-                return GetEpisodeViewportLeftInset();
-
-            float cardLeft = focusedIndex * (EpisodeCardWidth + EpisodeCardSpacing);
-            float cardRight = cardLeft + EpisodeCardWidth;
-            float focusOverflow = GetEpisodeFocusOverflow();
-            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
-            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
-
-            if (focusedVisualRight > viewportWidth)
-            {
-                // Keep a small renderer-safe gap at the right clip edge. NUI can
-                // otherwise trim the outer anti-aliased pixels of the scaled border.
-                // The remaining card spacing still hides the following card.
-                return viewportWidth
-                    - GetEpisodeViewportLeftInset()
-                    - FocusBorder
-                    - cardRight;
-            }
-
-            if (focusedVisualLeft < 0)
-            {
-                // Align the expanded focus frame with the text column while leaving
-                // the preceding card fully behind the left clip boundary.
-                return GetEpisodeViewportLeftInset() - cardLeft;
-            }
-
-            return currentRowPosition;
+            return DetailsScreenHelpers.CalculateCarouselRowPosition(
+                focusedIndex, currentRowPosition, viewportWidth, EpisodeCardWidth,
+                EpisodeCardSpacing, GetEpisodeViewportLeftInset(), FocusBorder,
+                GetEpisodeFocusOverflow());
         }
 
         private static float GetEpisodeFocusOverflow()
@@ -761,54 +781,5 @@ namespace JellyfinTizen.Screens
                     - UiTheme.DetailsCarouselRightGutter);
         }
 
-        private static int EstimateOverviewHeight(string text, int width, float pointSize)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return 40;
-
-            float approximateCharWidth = pointSize * 0.54f;
-            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
-            int lineCount = 0;
-
-            foreach (var paragraph in text.Split('\n'))
-            {
-                if (string.IsNullOrWhiteSpace(paragraph))
-                {
-                    lineCount++;
-                    continue;
-                }
-
-                int currentLineLength = 0;
-                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    int wordLength = word.Length;
-                    if (currentLineLength == 0)
-                    {
-                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
-                        currentLineLength = wordLength % maxCharsPerLine;
-                        if (currentLineLength == 0 && wordLength > 0)
-                            currentLineLength = maxCharsPerLine;
-                        continue;
-                    }
-
-                    int requiredLength = currentLineLength + 1 + wordLength;
-                    if (requiredLength <= maxCharsPerLine)
-                    {
-                        currentLineLength = requiredLength;
-                        continue;
-                    }
-
-                    lineCount++;
-                    currentLineLength = wordLength % maxCharsPerLine;
-                    if (currentLineLength == 0 && wordLength > 0)
-                        currentLineLength = maxCharsPerLine;
-                }
-                if (currentLineLength == 0)
-                    lineCount++;
-            }
-
-            float lineHeight = pointSize * 1.35f;
-            return (int)Math.Ceiling(lineCount * lineHeight);
-        }
     }
 }

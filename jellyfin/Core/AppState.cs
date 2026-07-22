@@ -24,7 +24,6 @@ namespace JellyfinTizen.Core
         private const string KeyServersRegistry = "jf_servers_registry_v1";
         private const string KeyActiveServerUrl = "jf_active_server_url";
         private const int MaxStoredServersCount = 4;
-        private const int DefaultApiTimeoutSeconds = 20;
 
         private static readonly object ServerRegistryLock = new();
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -119,7 +118,7 @@ namespace JellyfinTizen.Core
 
                             bool listenerReady = await AppLifecycle.WaitForProxyListenerReadyAsync(
                                 TailscaleProxyService.LocalProxyPort,
-                                TimeSpan.FromSeconds(5));
+                                TimeSpan.FromMilliseconds(TailscaleProxyListenerReadyTimeoutMs));
 
                             if (listenerReady)
                             {
@@ -127,7 +126,7 @@ namespace JellyfinTizen.Core
                             }
                             else
                             {
-                                Tizen.Log.Warn("AppState", "Tailscale proxy listener not ready after 5s");
+                                Tizen.Log.Warn("AppState", $"Tailscale proxy listener not ready after {TailscaleProxyListenerReadyTimeoutMs}ms");
                                 TailscaleProxy = null;
                                 _ = AppLifecycle.TryTransitionAsync(AppLifecycleState.ProxyStarting, AppLifecycleState.ProxyStartFailed);
                             }
@@ -1078,7 +1077,7 @@ namespace JellyfinTizen.Core
 
                     bool listenerReady = await AppLifecycle.WaitForProxyListenerReadyAsync(
                         TailscaleProxyService.LocalProxyPort,
-                        TimeSpan.FromSeconds(5));
+                        TimeSpan.FromMilliseconds(TailscaleProxyListenerReadyTimeoutMs));
 
                     if (!listenerReady)
                         throw new TimeoutException("Proxy listener not ready after Start()");
@@ -1132,7 +1131,7 @@ namespace JellyfinTizen.Core
                 try
                 {
                     attempts = 0;
-                    while (attempts < 15)
+                    while (attempts < TailscaleResumeConnectionMaxAttempts)
                     {
                         try
                         {
@@ -1144,7 +1143,7 @@ namespace JellyfinTizen.Core
                             }
                         }
                         catch { }
-                        await Task.Delay(1000);
+                        await Task.Delay(TailscaleResumeConnectionRetryDelayMs);
                         attempts++;
                     }
                 }
@@ -1259,7 +1258,16 @@ namespace JellyfinTizen.Core
 
         public static int PlayerBufferInitialMs { get; set; } = 6000;
         public static int PlayerBufferResumeMs { get; set; } = 4000;
+        public static int PlayerPrepareTimeoutMs { get; set; } = 15000;
+        public static int ApiRequestTimeoutSeconds { get; set; } = 20;
+        public static int JellyfinRetryMaxAttempts { get; set; } = 3;
+        public static int JellyfinRetryBaseDelayMs { get; set; } = 500;
+        public static int JellyfinCircuitBreakerFailureThreshold { get; set; } = 5;
+        public static int JellyfinCircuitBreakerOpenSeconds { get; set; } = 10;
         public static int TailscaleSocketWaitSeconds { get; set; } = 30;
+        public static int TailscaleProxyListenerReadyTimeoutMs { get; set; } = 5000;
+        public static int TailscaleResumeConnectionMaxAttempts { get; set; } = 15;
+        public static int TailscaleResumeConnectionRetryDelayMs { get; set; } = 1000;
         public static int StartupFallbackTimeoutMs { get; set; } = 12000;
         public static int HomeLoadingFallbackTimeoutMs { get; set; } = 25000;
 
@@ -1300,7 +1308,7 @@ namespace JellyfinTizen.Core
 #endif
             var client = new HttpClient(handler)
             {
-                Timeout = TimeSpan.FromSeconds(DefaultApiTimeoutSeconds)
+                Timeout = TimeSpan.FromSeconds(ApiRequestTimeoutSeconds)
             };
             client.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinTizen/2.0");
             return client;
