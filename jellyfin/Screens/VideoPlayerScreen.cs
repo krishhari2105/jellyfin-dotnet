@@ -1196,16 +1196,26 @@ namespace JellyfinTizen.Screens
                 }
                 var localPath = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, $"sub_{mediaSourceId}_{subtitleIndex}.{ext}");
                 var client = AppState.HttpClient;
+                var jellyfinService = AppState.Jellyfin;
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
-                string authHeader = AppState.Jellyfin?.BuildAuthorizationHeader(apiKey);
+                string authHeader = jellyfinService?.BuildAuthorizationHeader(apiKey);
                 if (!string.IsNullOrWhiteSpace(authHeader))
                 {
                     request.Headers.TryAddWithoutValidation("Authorization", authHeader);
-                    request.Headers.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
                 }
-                if (!string.IsNullOrWhiteSpace(apiKey))
-                    request.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
+                if (jellyfinService?.IsEmby == true)
+                {
+                    if (!string.IsNullOrWhiteSpace(apiKey))
+                        request.Headers.TryAddWithoutValidation("X-Emby-Token", apiKey);
+                }
+                else
+                {
+                    if (!string.IsNullOrWhiteSpace(authHeader))
+                        request.Headers.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
+                    if (!string.IsNullOrWhiteSpace(apiKey))
+                        request.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
+                }
 
                 using var response = await client.SendAsync(request);
                 response.EnsureSuccessStatusCode();

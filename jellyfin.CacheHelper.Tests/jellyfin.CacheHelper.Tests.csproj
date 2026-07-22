@@ -17,5 +17,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\jellyfin\Utils\CacheHelper.cs" Link="CacheHelper.cs" />
+    <Compile Include="..\jellyfin\Core\AuthorizationHeaderFormatter.cs" Link="AuthorizationHeaderFormatter.cs" />
   </ItemGroup>
 </Project>

@@ -763,19 +763,14 @@ namespace JellyfinTizen.Core
             var normalizedDeviceId = string.IsNullOrWhiteSpace(DeviceId)
                 ? DefaultDeviceId
                 : DeviceId.Trim();
-            var scheme = IsEmby ? "Emby" : "MediaBrowser";
 
-            var header = scheme + " Client=\"" + Uri.EscapeDataString(ClientName) + "\", " +
-                         "Device=\"" + Uri.EscapeDataString(DeviceName) + "\", " +
-                         "DeviceId=\"" + Uri.EscapeDataString(normalizedDeviceId) + "\", " +
-                         "Version=\"" + Uri.EscapeDataString(ClientVersion) + "\"";
-
-            if (!IsEmby && !string.IsNullOrEmpty(token))
-            {
-                header += ", Token=\"" + Uri.EscapeDataString(token) + "\"";
-            }
-
-            return header;
+            return AuthorizationHeaderFormatter.Build(
+                ClientName,
+                DeviceName,
+                normalizedDeviceId,
+                ClientVersion,
+                token,
+                IsEmby);
         }
 
         private static string SerializeJson(object body, bool useCamelCase)
