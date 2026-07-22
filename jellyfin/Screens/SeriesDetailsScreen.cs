@@ -124,7 +124,7 @@ namespace JellyfinTizen.Screens
             int titleHeight = _series.HasLogo ? TitleLogoDisplayHeight : 80;
             int metadataHeight = 40;
             int topGaps = 2 * 12;
-            int estimatedOverviewHeight = EstimateOverviewHeight(_series.Overview, 1260, 32);
+            int estimatedOverviewHeight = DetailsScreenHelpers.EstimateOverviewHeight(_series.Overview, 1260, 32);
             int overviewHeight = Math.Clamp(
                 estimatedOverviewHeight,
                 40,
@@ -451,23 +451,7 @@ namespace JellyfinTizen.Screens
 
         private static void ApplySeasonFocus(View card, bool focused)
         {
-            var frame = MediaCardFocus.GetCardFrame(card);
-            var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
-            if (frame != null)
-            {
-                frame.PositionZ = focused ? 20 : 0;
-                card.PositionZ = 0;
-            }
-            else
-            {
-                card.PositionZ = focused ? 20 : 0;
-            }
-
-            if (focused)
-                MediaCardFocus.ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
-            else
-                MediaCardFocus.ClearFrameFocus(frame);
+            MediaCardFocus.ApplyCardFocus(card, focused, FocusScale);
         }
 
         private void ScrollSeasonsIfNeeded()
@@ -490,29 +474,10 @@ namespace JellyfinTizen.Screens
             float currentRowPosition,
             float viewportWidth)
         {
-            if (focusedIndex <= 0)
-                return GetSeasonViewportLeftInset();
-
-            float cardLeft = focusedIndex * (SeasonCardWidth + SeasonCardSpacing);
-            float cardRight = cardLeft + SeasonCardWidth;
-            float focusOverflow = GetSeasonFocusOverflow();
-            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
-            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
-
-            if (focusedVisualRight > viewportWidth)
-            {
-                return viewportWidth
-                    - GetSeasonViewportLeftInset()
-                    - FocusBorder
-                    - cardRight;
-            }
-
-            if (focusedVisualLeft < 0)
-            {
-                return GetSeasonViewportLeftInset() - cardLeft;
-            }
-
-            return currentRowPosition;
+            return DetailsScreenHelpers.CalculateCarouselRowPosition(
+                focusedIndex, currentRowPosition, viewportWidth, SeasonCardWidth,
+                SeasonCardSpacing, GetSeasonViewportLeftInset(), FocusBorder,
+                GetSeasonFocusOverflow());
         }
 
         private static float GetSeasonFocusOverflow()
@@ -539,54 +504,5 @@ namespace JellyfinTizen.Screens
                     - UiTheme.DetailsCarouselRightGutter);
         }
 
-        private static int EstimateOverviewHeight(string text, int width, float pointSize)
-        {
-            if (string.IsNullOrWhiteSpace(text))
-                return 40;
-
-            float approximateCharWidth = pointSize * 0.54f;
-            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
-            int lineCount = 0;
-
-            foreach (var paragraph in text.Split('\n'))
-            {
-                if (string.IsNullOrWhiteSpace(paragraph))
-                {
-                    lineCount++;
-                    continue;
-                }
-
-                int currentLineLength = 0;
-                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-                {
-                    int wordLength = word.Length;
-                    if (currentLineLength == 0)
-                    {
-                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
-                        currentLineLength = wordLength % maxCharsPerLine;
-                        if (currentLineLength == 0 && wordLength > 0)
-                            currentLineLength = maxCharsPerLine;
-                        continue;
-                    }
-
-                    int requiredLength = currentLineLength + 1 + wordLength;
-                    if (requiredLength <= maxCharsPerLine)
-                    {
-                        currentLineLength = requiredLength;
-                        continue;
-                    }
-
-                    lineCount++;
-                    currentLineLength = wordLength % maxCharsPerLine;
-                    if (currentLineLength == 0 && wordLength > 0)
-                        currentLineLength = maxCharsPerLine;
-                }
-                if (currentLineLength == 0)
-                    lineCount++;
-            }
-
-            float lineHeight = pointSize * 1.35f;
-            return (int)Math.Ceiling(lineCount * lineHeight);
-        }
     }
 }

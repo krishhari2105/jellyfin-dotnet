@@ -5,6 +5,9 @@
     based on the TailscaleEnabled property passed at the command line.
   -->
   <PropertyGroup>
+    <!-- This file is imported before the project can supply its default. Keep the
+         default flavor consistent with jellyfin.csproj before choosing paths. -->
+    <TailscaleEnabled Condition=" '$(TailscaleEnabled)' == '' ">true</TailscaleEnabled>
     <!-- Default output paths (for TailscaleEnabled=true or unspecified) -->
     <BaseOutputPath>bin\</BaseOutputPath>
     <BaseIntermediateOutputPath>obj\</BaseIntermediateOutputPath>

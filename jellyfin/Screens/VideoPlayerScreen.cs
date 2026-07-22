@@ -394,158 +394,14 @@ namespace JellyfinTizen.Screens
 
             try
             {
-                bool explicitSubtitleOff = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value < 0;
-                bool hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
-                bool preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
-                int? requestedSubtitleStreamIndex = hasSelectedSubtitle
-                    ? _initialSubtitleIndex
-                    : explicitSubtitleOff ? -1 : null;
-                bool preferTsOnlyHlsForRequestedSubtitle = RequiresTsOnlyHlsProfile(GetRequestedSubtitleCodecHint());
-                if (preferNativeEmbeddedOnStart)
-                    requestedSubtitleStreamIndex = null;
-                string requestedMediaSourceId = _preferredMediaSourceId;
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Request", $"sub={requestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={requestedMediaSourceId ?? "-"}");
+                var request = CreatePlaybackStartupRequest(playbackMovie.Id);
+                ResetPlaybackState(request.HasSelectedSubtitle, request.RequestedSubtitleStreamIndex, playbackToken, request.PreferNativeEmbeddedOnStart);
 
-                ResetPlaybackState(hasSelectedSubtitle, requestedSubtitleStreamIndex, playbackToken, preferNativeEmbeddedOnStart);
-
-                bool burnInActive = _burnIn && hasSelectedSubtitle;
-
-                var playbackInfo = await FetchInitialPlaybackInfoAsync(
-                    playbackMovie.Id,
-                    requestedSubtitleStreamIndex,
-                    burnInActive,
-                    _overrideAudioIndex,
-                    explicitSubtitleOff,
-                    requestedMediaSourceId,
-                    preferTsOnlyHlsForRequestedSubtitle,
-                    playbackToken);
-                if (playbackInfo == null || playbackToken != _playbackToken)
+                var plan = await ResolvePlaybackStartupPlanAsync(request, playbackToken);
+                if (plan == null || playbackToken != _playbackToken)
                     return;
 
-                // Episode switches can carry a stale media source id from the previous item.
-                // Retry once without pinning the source to avoid black-screen stalls.
-                var fallbackResult = await TryFallbackPlaybackInfoAsync(
-                    playbackMovie.Id,
-                    playbackInfo,
-                    requestedSubtitleStreamIndex,
-                    burnInActive,
-                    _overrideAudioIndex,
-                    explicitSubtitleOff,
-                    requestedMediaSourceId,
-                    preferTsOnlyHlsForRequestedSubtitle,
-                    playbackToken);
-                playbackInfo = fallbackResult.playbackInfo;
-                requestedMediaSourceId = fallbackResult.requestedMediaSourceId;
-                if (playbackInfo == null || playbackToken != _playbackToken)
-                    return;
-
-                bool assignedStartupAudioOverride = ResolveStartupAudioDefault(playbackInfo);
-                bool assignedStartupSubtitleDefault = ResolveStartupSubtitleDefault(playbackInfo, explicitSubtitleOff);
-                hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
-                if (assignedStartupSubtitleDefault)
-                {
-                    requestedSubtitleStreamIndex = _initialSubtitleIndex;
-                    preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
-                    burnInActive = _burnIn && hasSelectedSubtitle;
-                }
-
-                // Jellyfin applies explicit subtitle/audio stream indices only when MediaSourceId is provided.
-                // If details screen did not preselect a source in time, re-request using resolved source id.
-                bool shouldRefinePlaybackInfo =
-                    (string.IsNullOrWhiteSpace(requestedMediaSourceId) &&
-                     (requestedSubtitleStreamIndex.HasValue || _overrideAudioIndex.HasValue)) ||
-                    assignedStartupAudioOverride ||
-                    (assignedStartupSubtitleDefault && burnInActive);
-                if (shouldRefinePlaybackInfo)
-                {
-                    var refineResult = await RefinePlaybackInfoWithResolvedSourceAsync(
-                        playbackMovie.Id,
-                        playbackInfo,
-                        requestedSubtitleStreamIndex,
-                        burnInActive,
-                        _overrideAudioIndex,
-                        explicitSubtitleOff,
-                        requestedMediaSourceId,
-                        preferTsOnlyHlsForRequestedSubtitle,
-                        playbackToken);
-                    playbackInfo = refineResult.playbackInfo;
-                    requestedMediaSourceId = refineResult.requestedMediaSourceId;
-                    if (playbackInfo == null || playbackToken != _playbackToken)
-                        return;
-                }
-
-                var resolveResult = await ResolveAndValidateMediaSourceAsync(
-                    playbackInfo,
-                    playbackMovie.Id,
-                    _overrideAudioIndex,
-                    _initialSubtitleIndex,
-                    hasSelectedSubtitle,
-                    burnInActive,
-                    playbackToken);
-
-                if (resolveResult.mediaSource == null)
-                    return;
-
-                var mediaSource = resolveResult.mediaSource;
-                playbackInfo = resolveResult.playbackInfo;
-                bool effectiveHasSelectedSubtitle = resolveResult.effectiveHasSelectedSubtitle;
-                burnInActive = resolveResult.burnInActive;
-
-                InitializePlaybackContext(playbackInfo);
-
-                string streamUrl = BuildStreamUrl(
-                    mediaSource,
-                    playbackMovie.Id,
-                    _playSessionId,
-                    burnInActive,
-                    _overrideAudioIndex,
-                    effectiveHasSelectedSubtitle,
-                    _initialSubtitleIndex,
-                    preferNativeEmbeddedOnStart);
-
-                if (string.IsNullOrEmpty(streamUrl))
-                    return;
-
-                bool requiresServerManagedStream = burnInActive;
-                bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
-                bool supportsTranscoding = mediaSource.SupportsTranscoding;
-                bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
-
-                string reportedPlayMethod = ResolveReportedPlayMethod(_playMethod, mediaSource, requiresServerManagedStream);
-                _reportedPlayMethod = reportedPlayMethod;
-
-                ConfigureExternalSubtitleMetadata(mediaSource, burnInActive, effectiveHasSelectedSubtitle, _playMethod, _initialSubtitleIndex);
-
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEntry(streamUrl, mediaSource, requiresServerManagedStream, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"route={_playMethod},reported={reportedPlayMethod},burnInActive={burnInActive}");
-
-                streamUrl = RewriteStreamUrlForTailscale(streamUrl);
-
-                await PreparePlayerAsync(streamUrl, playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, playbackToken);
-                if (playbackToken != _playbackToken)
-                    return;
-                ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
-
-                var subtitleInitResult = await ConfigureSubtitlesPreparedAsync(mediaSource, burnInActive, effectiveHasSelectedSubtitle, _initialSubtitleIndex, playbackToken);
-                var (pendingStartupNativeEmbeddedSubtitleIndex, pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream) = subtitleInitResult;
-
-                if (_useParsedSubtitleRenderer) TryDisableNativeSubtitleTrack();
-
-                await StartPlaybackAndSeekAsync(_startPositionMs, playbackToken);
-                if (playbackToken != _playbackToken)
-                    return;
-
-                ApplyDisplayModeForCurrentVideo();
-                ApplyPendingNativeAudioOverride(playbackToken, mediaSource);
-
-                await StabilizeSubtitlesPostStartAsync(
-                    mediaSource,
-                    pendingStartupNativeEmbeddedSubtitleIndex,
-                    pendingStartupNativeEmbeddedSubtitleStream,
-                    pendingStartupParsedSubtitleStream,
-                    playbackToken);
-
-                FinalizePlaybackReporting(playbackMovie.Id, _playSessionId, mediaSource.Id, reportedPlayMethod, _startPositionMs, playbackToken);
+                await PreparePlaybackPipelineAsync(plan, playbackToken);
             }
             catch (Exception ex)
             {
@@ -560,6 +416,161 @@ namespace JellyfinTizen.Screens
             {
                 _isStartingPlayback = false;
             }
+        }
+
+        private sealed class PlaybackStartupRequest
+        {
+            public string ItemId;
+            public bool ExplicitSubtitleOff;
+            public bool HasSelectedSubtitle;
+            public bool PreferNativeEmbeddedOnStart;
+            public int? RequestedSubtitleStreamIndex;
+            public bool BurnInActive;
+            public bool PreferTsOnlyHls;
+            public string RequestedMediaSourceId;
+        }
+
+        private sealed class PlaybackStartupPlan
+        {
+            public string ItemId;
+            public PlaybackInfoResponse PlaybackInfo;
+            public MediaSourceInfo MediaSource;
+            public bool EffectiveHasSelectedSubtitle;
+            public bool BurnInActive;
+            public bool PreferNativeEmbeddedOnStart;
+        }
+
+        private PlaybackStartupRequest CreatePlaybackStartupRequest(string itemId)
+        {
+            bool explicitSubtitleOff = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value < 0;
+            bool hasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
+            bool preferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && hasSelectedSubtitle && !_burnIn;
+            int? requestedSubtitleStreamIndex = hasSelectedSubtitle ? _initialSubtitleIndex : explicitSubtitleOff ? -1 : null;
+            if (preferNativeEmbeddedOnStart)
+                requestedSubtitleStreamIndex = null;
+
+            var request = new PlaybackStartupRequest
+            {
+                ItemId = itemId,
+                ExplicitSubtitleOff = explicitSubtitleOff,
+                HasSelectedSubtitle = hasSelectedSubtitle,
+                PreferNativeEmbeddedOnStart = preferNativeEmbeddedOnStart,
+                RequestedSubtitleStreamIndex = requestedSubtitleStreamIndex,
+                BurnInActive = _burnIn && hasSelectedSubtitle,
+                PreferTsOnlyHls = RequiresTsOnlyHlsProfile(GetRequestedSubtitleCodecHint()),
+                RequestedMediaSourceId = _preferredMediaSourceId
+            };
+
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+                CaptureStreamDebugEvent("StartPlayback.Request", $"sub={request.RequestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={request.RequestedMediaSourceId ?? "-"}");
+
+            return request;
+        }
+
+        private async Task<PlaybackStartupPlan> ResolvePlaybackStartupPlanAsync(PlaybackStartupRequest request, int playbackToken)
+        {
+            var playbackInfo = await FetchInitialPlaybackInfoAsync(request.ItemId, request.RequestedSubtitleStreamIndex,
+                request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff, request.RequestedMediaSourceId,
+                request.PreferTsOnlyHls, playbackToken);
+            if (playbackInfo == null || playbackToken != _playbackToken)
+                return null;
+
+            var fallbackResult = await TryFallbackPlaybackInfoAsync(request.ItemId, playbackInfo,
+                request.RequestedSubtitleStreamIndex, request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff,
+                request.RequestedMediaSourceId, request.PreferTsOnlyHls, playbackToken);
+            playbackInfo = fallbackResult.playbackInfo;
+            request.RequestedMediaSourceId = fallbackResult.requestedMediaSourceId;
+            if (playbackInfo == null || playbackToken != _playbackToken)
+                return null;
+
+            bool assignedStartupAudioOverride = ResolveStartupAudioDefault(playbackInfo);
+            bool assignedStartupSubtitleDefault = ResolveStartupSubtitleDefault(playbackInfo, request.ExplicitSubtitleOff);
+            request.HasSelectedSubtitle = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value >= 0;
+            if (assignedStartupSubtitleDefault)
+            {
+                request.RequestedSubtitleStreamIndex = _initialSubtitleIndex;
+                request.PreferNativeEmbeddedOnStart = _forceNativeEmbeddedSelectionOnRestart && request.HasSelectedSubtitle && !_burnIn;
+                request.BurnInActive = _burnIn && request.HasSelectedSubtitle;
+            }
+
+            bool shouldRefinePlaybackInfo =
+                (string.IsNullOrWhiteSpace(request.RequestedMediaSourceId) &&
+                 (request.RequestedSubtitleStreamIndex.HasValue || _overrideAudioIndex.HasValue)) ||
+                assignedStartupAudioOverride ||
+                (assignedStartupSubtitleDefault && request.BurnInActive);
+            if (shouldRefinePlaybackInfo)
+            {
+                var refineResult = await RefinePlaybackInfoWithResolvedSourceAsync(request.ItemId, playbackInfo,
+                    request.RequestedSubtitleStreamIndex, request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff,
+                    request.RequestedMediaSourceId, request.PreferTsOnlyHls, playbackToken);
+                playbackInfo = refineResult.playbackInfo;
+                request.RequestedMediaSourceId = refineResult.requestedMediaSourceId;
+                if (playbackInfo == null || playbackToken != _playbackToken)
+                    return null;
+            }
+
+            var resolved = await ResolveAndValidateMediaSourceAsync(playbackInfo, request.ItemId, _overrideAudioIndex,
+                _initialSubtitleIndex, request.HasSelectedSubtitle, request.BurnInActive, playbackToken);
+            if (resolved.mediaSource == null || playbackToken != _playbackToken)
+                return null;
+
+            return new PlaybackStartupPlan
+            {
+                ItemId = request.ItemId,
+                PlaybackInfo = resolved.playbackInfo,
+                MediaSource = resolved.mediaSource,
+                EffectiveHasSelectedSubtitle = resolved.effectiveHasSelectedSubtitle,
+                BurnInActive = resolved.burnInActive,
+                PreferNativeEmbeddedOnStart = request.PreferNativeEmbeddedOnStart
+            };
+        }
+
+        private async Task PreparePlaybackPipelineAsync(PlaybackStartupPlan plan, int playbackToken)
+        {
+            InitializePlaybackContext(plan.PlaybackInfo);
+            string streamUrl = BuildStreamUrl(plan.MediaSource, plan.ItemId, _playSessionId, plan.BurnInActive,
+                _overrideAudioIndex, plan.EffectiveHasSelectedSubtitle, _initialSubtitleIndex, plan.PreferNativeEmbeddedOnStart);
+            if (string.IsNullOrEmpty(streamUrl))
+                return;
+
+            bool requiresServerManagedStream = plan.BurnInActive;
+            bool supportsDirectPlay = plan.MediaSource.SupportsDirectPlay;
+            bool supportsTranscoding = plan.MediaSource.SupportsTranscoding;
+            bool hasTranscodeUrl = !string.IsNullOrEmpty(plan.MediaSource.TranscodingUrl);
+            string reportedPlayMethod = ResolveReportedPlayMethod(_playMethod, plan.MediaSource, requiresServerManagedStream);
+            _reportedPlayMethod = reportedPlayMethod;
+
+            ConfigureExternalSubtitleMetadata(plan.MediaSource, plan.BurnInActive, plan.EffectiveHasSelectedSubtitle, _playMethod, _initialSubtitleIndex);
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+            {
+                CaptureStreamDebugEntry(streamUrl, plan.MediaSource, requiresServerManagedStream, supportsDirectPlay, supportsTranscoding, hasTranscodeUrl);
+                CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"route={_playMethod},reported={reportedPlayMethod},burnInActive={plan.BurnInActive}");
+            }
+
+            streamUrl = RewriteStreamUrlForTailscale(streamUrl);
+            await PreparePlayerAsync(streamUrl, plan.ItemId, _playSessionId, plan.MediaSource.Id, reportedPlayMethod, playbackToken);
+            if (playbackToken != _playbackToken)
+                return;
+
+            ApplyPendingNativeAudioOverride(playbackToken, plan.MediaSource);
+            var subtitleInitResult = await ConfigureSubtitlesPreparedAsync(plan.MediaSource, plan.BurnInActive,
+                plan.EffectiveHasSelectedSubtitle, _initialSubtitleIndex, playbackToken);
+            var (pendingStartupNativeEmbeddedSubtitleIndex, pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream) = subtitleInitResult;
+            if (_useParsedSubtitleRenderer)
+                TryDisableNativeSubtitleTrack();
+
+            await StartPlaybackAndSeekAsync(_startPositionMs, playbackToken);
+            if (playbackToken != _playbackToken)
+                return;
+
+            ApplyDisplayModeForCurrentVideo();
+            ApplyPendingNativeAudioOverride(playbackToken, plan.MediaSource);
+            await StabilizeSubtitlesPostStartAsync(plan.MediaSource, pendingStartupNativeEmbeddedSubtitleIndex,
+                pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream, playbackToken);
+            if (playbackToken != _playbackToken)
+                return;
+
+            FinalizePlaybackReporting(plan.ItemId, _playSessionId, plan.MediaSource.Id, reportedPlayMethod, _startPositionMs, playbackToken);
         }
 
         private void ShowPlaybackError(string message)
@@ -955,7 +966,7 @@ namespace JellyfinTizen.Screens
             SetReportingContext(playbackMovieId, playSessionId, mediaSourceId, reportedPlayMethod);
             _player.SetSource(source);
 
-            await WithTimeout(_player.PrepareAsync(), 15000);
+            await WithTimeout(_player.PrepareAsync(), AppState.PlayerPrepareTimeoutMs);
             if (playbackToken != _playbackToken)
                 return;
 

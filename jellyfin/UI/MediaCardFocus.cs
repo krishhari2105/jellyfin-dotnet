@@ -57,5 +57,26 @@ namespace JellyfinTizen.UI
             frame.BorderlineColor = Color.Transparent;
             frame.BoxShadow = null;
         }
+
+        public static void ApplyCardFocus(View card, bool focused, float scale)
+        {
+            var frame = GetCardFrame(card);
+            var scaleTarget = frame ?? card;
+            scaleTarget.Scale = focused ? new Vector3(scale, scale, 1f) : Vector3.One;
+            if (frame != null)
+            {
+                frame.PositionZ = focused ? 20 : 0;
+                card.PositionZ = 0;
+            }
+            else
+            {
+                card.PositionZ = focused ? 20 : 0;
+            }
+
+            if (focused)
+                ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
+            else
+                ClearFrameFocus(frame);
+        }
     }
 }

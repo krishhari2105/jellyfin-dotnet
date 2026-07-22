@@ -190,11 +190,11 @@ Enable `DebugSwitches.EnableVerboseDebugLogging = true` and/or `DebugSwitches.En
 
 | Debt Item | Status | Evidence |
 |-----------|--------|----------|
-| `VideoPlayerScreen.StartPlaybackAsync()` decomposition | ❌ **NOT FIXED** | Main orchestration method ~180 lines (lines 381-563) with deep nesting, multiple token checks, complex branching. Helper methods extracted but orchestration remains monolithic. |
+| `VideoPlayerScreen.StartPlaybackAsync()` decomposition | ✅ **FIXED** | `StartPlaybackAsync()` now gates startup then delegates to request creation, playback-plan negotiation, and native-player preparation; both Release flavors build successfully. |
 | `MovieDetailsScreen` / `EpisodeDetailsScreen` duplication | ✅ **FIXED** (Movie/Episode) | Both inherit `DetailsScreenBase` (1230 lines) consolidating: action buttons, selection panels, media source management, metadata UI, overview scrolling, resume reconciliation. |
-| `SeasonDetailsScreen` duplication | ❌ **NOT FIXED** | Does NOT inherit `DetailsScreenBase`; duplicates backdrop/layout/metadata/overview patterns, no shared action buttons/selection panels. |
-| `CacheHelper` size-based eviction | ❌ **NOT FIXED** | Only TTL + count-based LRU (MaxEntries=500). No byte-size tracking, no max-bytes limit, no size-weighted eviction. `CacheItem` lacks size field. |
-| Hardcoded timeouts/buffer sizes | ⚠️ **PARTIALLY FIXED** | Configurable: `PlayerBufferInitialMs`, `PlayerBufferResumeMs`, `TailscaleSocketWaitSeconds`, `StartupFallbackTimeoutMs`, `HomeLoadingFallbackTimeoutMs`. Still hardcoded: `DefaultApiTimeoutSeconds=20` (private const), proxy listener 5s, reconnection loop 1s×15 attempts. |
+| `SeasonDetailsScreen` duplication | ✅ **FIXED** | Kept composition (the season carousel is not a playback-details screen) while sharing overview measurement, card-focus rendering, and carousel positioning with the related details screen. |
+| `CacheHelper` size-based eviction | ✅ **FIXED** | Adds opt-in caller-supplied byte estimates, `MaxBytes`, atomic byte/LRU accounting, and focused tests for eviction, replacement, oversized entries, and clearing. |
+| Hardcoded timeouts/buffer sizes | ✅ **FIXED** | API timeout, Jellyfin retry/circuit policy, proxy readiness, resume retry policy, and player prepare timeout are centralized in `AppState` with existing defaults preserved. |
 
 ## Critical Reminders
 - **Tizen kills background apps** — no long-running background tasks survive suspend

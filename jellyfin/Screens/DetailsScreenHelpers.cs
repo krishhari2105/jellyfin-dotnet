@@ -506,5 +506,80 @@ namespace JellyfinTizen.Screens
 
             return episode.Name ?? string.Empty;
         }
+
+        public static int EstimateOverviewHeight(string text, int width, float pointSize)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 40;
+
+            float approximateCharWidth = pointSize * 0.54f;
+            int maxCharsPerLine = Math.Max(10, (int)Math.Floor(width / approximateCharWidth));
+            int lineCount = 0;
+
+            foreach (var paragraph in text.Split('\n'))
+            {
+                if (string.IsNullOrWhiteSpace(paragraph))
+                {
+                    lineCount++;
+                    continue;
+                }
+
+                int currentLineLength = 0;
+                foreach (var word in paragraph.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    int wordLength = word.Length;
+                    if (currentLineLength == 0)
+                    {
+                        lineCount += Math.Max(1, (int)Math.Ceiling(wordLength / (double)maxCharsPerLine));
+                        currentLineLength = wordLength % maxCharsPerLine;
+                        if (currentLineLength == 0 && wordLength > 0)
+                            currentLineLength = maxCharsPerLine;
+                        continue;
+                    }
+
+                    int requiredLength = currentLineLength + 1 + wordLength;
+                    if (requiredLength <= maxCharsPerLine)
+                    {
+                        currentLineLength = requiredLength;
+                        continue;
+                    }
+
+                    lineCount++;
+                    currentLineLength = wordLength % maxCharsPerLine;
+                    if (currentLineLength == 0 && wordLength > 0)
+                        currentLineLength = maxCharsPerLine;
+                }
+                if (currentLineLength == 0)
+                    lineCount++;
+            }
+
+            return (int)Math.Ceiling(lineCount * pointSize * 1.35f);
+        }
+
+        public static float CalculateCarouselRowPosition(
+            int focusedIndex,
+            float currentRowPosition,
+            float viewportWidth,
+            int cardWidth,
+            int cardSpacing,
+            int leftInset,
+            int focusBorder,
+            float focusOverflow)
+        {
+            if (focusedIndex <= 0)
+                return leftInset;
+
+            float cardLeft = focusedIndex * (cardWidth + cardSpacing);
+            float cardRight = cardLeft + cardWidth;
+            float focusedVisualLeft = currentRowPosition + cardLeft - focusOverflow;
+            float focusedVisualRight = currentRowPosition + cardRight + focusOverflow;
+
+            if (focusedVisualRight > viewportWidth)
+                return viewportWidth - leftInset - focusBorder - cardRight;
+
+            return focusedVisualLeft < 0
+                ? leftInset - cardLeft
+                : currentRowPosition;
+        }
     }
 }
