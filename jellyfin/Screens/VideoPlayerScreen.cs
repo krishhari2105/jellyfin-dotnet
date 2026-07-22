@@ -186,7 +186,6 @@ namespace JellyfinTizen.Screens
         private const int SubtitleOffsetLimitMs = 5000;
         private const int SubtitleOffsetTrackWidth = 280;
         private const int ParsedSubtitleRenderTickMs = 100;
-        private const int SubtitleOsdLiftPx = 100;
         private const int OverlaySlideDistance = 36;
         private const int OsdSlideDistance = 34;
         private const int SeekStepSeconds = 10;
@@ -4975,21 +4974,56 @@ namespace JellyfinTizen.Screens
                 return;
 
             // Keep styling identical across embedded and sidecar paths.
-            _subtitleText.TextColor = Color.White;
+            int viewportWidth = Window.Default.Size.Width > 0
+                ? Window.Default.Size.Width
+                : UiTheme.PlayerSubtitleReferenceViewportWidth;
+            int viewportHeight = Window.Default.Size.Height > 0
+                ? Window.Default.Size.Height
+                : UiTheme.PlayerSubtitleReferenceViewportHeight;
+            float viewportScale = viewportHeight / (float)UiTheme.PlayerSubtitleReferenceViewportHeight;
+            float pixelSize = Math.Clamp(
+                UiTheme.PlayerSubtitleTextSize * viewportScale,
+                UiTheme.PlayerSubtitleMinimumPixelSize,
+                UiTheme.PlayerSubtitleMaximumPixelSize);
+            int horizontalInset = Math.Max(0, (int)Math.Round(viewportWidth * UiTheme.PlayerSubtitleHorizontalSafeAreaRatio));
+            int labelWidth = Math.Max(1, viewportWidth - (horizontalInset * 2));
+            float lineSpacing = UiTheme.PlayerSubtitleLineSpacing * viewportScale;
+            int labelHeight = Math.Min(
+                viewportHeight,
+                Math.Max(
+                    (int)Math.Ceiling(viewportHeight * UiTheme.PlayerSubtitleLabelHeightRatio),
+                    (int)Math.Ceiling((pixelSize + lineSpacing) * UiTheme.PlayerSubtitleMaximumVisibleLines)));
+            int bottomInset = Math.Max(0, (int)Math.Round(viewportHeight * UiTheme.PlayerSubtitleBottomSafeAreaRatio));
+
+            _subtitleText.TextColor = UiTheme.PlayerSubtitleText;
             _subtitleText.HorizontalAlignment = HorizontalAlignment.Center;
             _subtitleText.VerticalAlignment = VerticalAlignment.Bottom;
-            _subtitleText.BackgroundColor = Color.Transparent;
-            _subtitleText.PointSize = UiTheme.PlayerSubtitleTextSize;
-            _subtitleText.HeightSpecification = 180;
-            _subtitleText.Padding = new Extents(180, 180, 0, 0);
-            _subtitleTextBaseY = Window.Default.Size.Height - 310;
-            try
-            {
-                _subtitleText.SetFontStyle(new Tizen.NUI.Text.FontStyle { Weight = FontWeightType.Normal });
-            }
-            catch { }
+            _subtitleText.BackgroundColor = UiTheme.PlayerSubtitleBackground;
+            _subtitleText.PixelSize = pixelSize;
+            _subtitleText.LineSpacing = lineSpacing;
+            _subtitleText.WidthSpecification = labelWidth;
+            _subtitleText.HeightSpecification = labelHeight;
+            _subtitleText.PositionX = horizontalInset;
+            _subtitleTextBaseY = Math.Max(0, viewportHeight - bottomInset - labelHeight);
 
-            _subtitleTextOsdY = _subtitleTextBaseY - SubtitleOsdLiftPx;
+            _subtitleText.Outline = new PropertyMap();
+
+            var shadow = new PropertyMap();
+            shadow.Add("color", new PropertyValue(UiTheme.PlayerSubtitleShadowColor));
+            shadow.Add("offset", new PropertyValue(new Vector2(
+                UiTheme.PlayerSubtitleShadowOffsetX * viewportScale,
+                UiTheme.PlayerSubtitleShadowOffsetY * viewportScale)));
+            shadow.Add("blurRadius", new PropertyValue(UiTheme.PlayerSubtitleShadowBlurRadius * viewportScale));
+            _subtitleText.Shadow = shadow;
+
+            var fontStyle = new PropertyMap();
+            fontStyle.Add("weight", new PropertyValue(UiTheme.PlayerSubtitleFontWeight));
+            fontStyle.Add("width", new PropertyValue(UiTheme.PlayerSubtitleFontWidth));
+            fontStyle.Add("slant", new PropertyValue(UiTheme.PlayerSubtitleFontSlant));
+            _subtitleText.FontStyle = fontStyle;
+
+            int osdLift = Math.Max(0, (int)Math.Round(UiTheme.PlayerSubtitleOsdLiftPx * viewportScale));
+            _subtitleTextOsdY = Math.Max(0, _subtitleTextBaseY - osdLift);
             _subtitleText.PositionY = _osdVisible ? _subtitleTextOsdY : _subtitleTextBaseY;
         }
 

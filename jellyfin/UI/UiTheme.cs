@@ -45,7 +45,9 @@ namespace JellyfinTizen.UI
         public static readonly Color PlayerBottomGradientStart = new Color(4f / 255f, 8f / 255f, 16f / 255f, 0.0f);
         public static readonly Color PlayerBottomGradientEnd = new Color(4f / 255f, 8f / 255f, 16f / 255f, 0.96f);
         public static readonly Color PlayerTimeText = new Color(243f / 255f, 247f / 255f, 255f / 255f, 0.94f);
-        public static readonly Color PlayerSubtitleText = new Color(243f / 255f, 247f / 255f, 255f / 255f, 0.96f);
+        public static readonly Color PlayerSubtitleText = new Color(1f, 1f, 1f, 1f);
+        public static readonly Color PlayerSubtitleBackground = Color.Transparent;
+        public static readonly Color PlayerSubtitleShadowColor = new Color(0f, 0f, 0f, 0.92f);
 
         public const int SidePadding = 76;
         public const int PanelWidth = 1120;
@@ -141,7 +143,24 @@ namespace JellyfinTizen.UI
         public const float PlayerOverlayItem = 28f;
         public const float PlayerAudioItem = 26f;
         public const float PlayerOffsetLabel = 20f;
-        public const float PlayerSubtitleTextSize = 48f;
+        // Subtitle presentation is sized relative to a 1080p logical viewport.
+        public const int PlayerSubtitleReferenceViewportWidth = 1920;
+        public const int PlayerSubtitleReferenceViewportHeight = 1080;
+        public const float PlayerSubtitleTextSize = 54f;
+        public const float PlayerSubtitleMinimumPixelSize = 38f;
+        public const float PlayerSubtitleMaximumPixelSize = 86f;
+        public const float PlayerSubtitleHorizontalSafeAreaRatio = 0.10f;
+        public const float PlayerSubtitleBottomSafeAreaRatio = 0.10f;
+        public const float PlayerSubtitleLabelHeightRatio = 0.20f;
+        public const int PlayerSubtitleMaximumVisibleLines = 2;
+        public const float PlayerSubtitleShadowOffsetX = 2f;
+        public const float PlayerSubtitleShadowOffsetY = 2f;
+        public const float PlayerSubtitleShadowBlurRadius = 3f;
+        public const float PlayerSubtitleLineSpacing = 0f;
+        public const float PlayerSubtitleOsdLiftPx = 100f;
+        public const string PlayerSubtitleFontWeight = "bold";
+        public const string PlayerSubtitleFontWidth = "semiCondensed";
+        public const string PlayerSubtitleFontSlant = "normal";
 
         // Startup/loading
         public const float StartupLoadingText = 44f;
