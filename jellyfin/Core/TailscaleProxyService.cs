@@ -282,13 +282,17 @@ namespace JellyfinTizen.Core
                 {
                     TailscaleDebugLog.Add($"Proxy HTTP inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
                 }
-                Tizen.Log.Error("TailscaleProxy", $"Proxy request failed: {ex.Message}");
+                Tizen.Log.Error(
+                    "TailscaleProxy",
+                    $"Proxy request failed: {SensitiveDataRedactor.Redact(ex.Message)}");
                 response.StatusCode = (int)HttpStatusCode.BadGateway;
             }
             catch (Exception ex)
             {
                 TailscaleDebugLog.Add($"Proxy unexpected error: {ex.GetType().Name}: {ex.Message}");
-                Tizen.Log.Error("TailscaleProxy", $"Unexpected proxy error: {ex.Message}");
+                Tizen.Log.Error(
+                    "TailscaleProxy",
+                    $"Unexpected proxy error: {SensitiveDataRedactor.Redact(ex.Message)}");
                 response.StatusCode = (int)HttpStatusCode.InternalServerError;
             }
             finally

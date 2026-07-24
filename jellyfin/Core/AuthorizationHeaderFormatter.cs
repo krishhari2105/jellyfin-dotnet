@@ -12,23 +12,34 @@ namespace JellyfinTizen.Core
             string token,
             bool isEmby)
         {
+            string header;
             if (isEmby)
             {
-                return "Emby Client=\"" + EscapeEmbyQuotedValue(clientName) + "\", " +
-                       "Device=\"" + EscapeEmbyQuotedValue(deviceName) + "\", " +
-                       "DeviceId=\"" + EscapeEmbyQuotedValue(deviceId) + "\", " +
-                       "Version=\"" + EscapeEmbyQuotedValue(clientVersion) + "\"";
+                header = "Emby Client=\"" + EscapeEmbyQuotedValue(clientName) + "\", " +
+                         "Device=\"" + EscapeEmbyQuotedValue(deviceName) + "\", " +
+                         "DeviceId=\"" + EscapeEmbyQuotedValue(deviceId) + "\", " +
+                         "Version=\"" + EscapeEmbyQuotedValue(clientVersion) + "\"";
+
+                if (!string.IsNullOrWhiteSpace(token))
+                    header += ", Token=\"" + EscapeEmbyQuotedValue(token) + "\"";
+
+                return header;
             }
 
-            var header = "MediaBrowser Client=\"" + Uri.EscapeDataString(clientName) + "\", " +
-                         "Device=\"" + Uri.EscapeDataString(deviceName) + "\", " +
-                         "DeviceId=\"" + Uri.EscapeDataString(deviceId) + "\", " +
-                         "Version=\"" + Uri.EscapeDataString(clientVersion) + "\"";
+            header = "MediaBrowser Client=\"" + EscapeMediaBrowserValue(clientName) + "\", " +
+                     "Device=\"" + EscapeMediaBrowserValue(deviceName) + "\", " +
+                     "DeviceId=\"" + EscapeMediaBrowserValue(deviceId) + "\", " +
+                     "Version=\"" + EscapeMediaBrowserValue(clientVersion) + "\"";
 
-            if (!string.IsNullOrEmpty(token))
-                header += ", Token=\"" + Uri.EscapeDataString(token) + "\"";
+            if (!string.IsNullOrWhiteSpace(token))
+                header += ", Token=\"" + EscapeMediaBrowserValue(token) + "\"";
 
             return header;
+        }
+
+        private static string EscapeMediaBrowserValue(string value)
+        {
+            return Uri.EscapeDataString(value ?? string.Empty);
         }
 
         internal static string EscapeEmbyQuotedValue(string value)

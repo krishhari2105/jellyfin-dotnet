@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Net.Http.Headers;
 using System.Threading;
 using JellyfinTizen.Models;
 using JellyfinTizen.Utils;
@@ -26,6 +27,7 @@ namespace JellyfinTizen.Core
 
         private readonly HttpClient _http;
         private string _connectedServerUrl;
+        private bool _isEmby;
         private bool _disposed;
 
         public JellyfinService(HttpClient httpClient)
@@ -45,7 +47,20 @@ namespace JellyfinTizen.Core
         public string AccessToken { get; private set; }
         public string UserId { get; private set; }
         public string DeviceId { get; set; } = DefaultDeviceId;
-        public bool IsEmby { get; set; }
+        public bool IsEmby
+        {
+            get => _isEmby;
+            set
+            {
+                if (_isEmby == value)
+                    return;
+
+                // A token is scoped to both a server and its authentication scheme.
+                // Clear it before changing modes so the previous schema cannot survive.
+                ClearAuthToken();
+                _isEmby = value;
+            }
+        }
         public event EventHandler UnauthorizedDetected;
         private const string FullMediaFields =
             "Overview,UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId,RunTimeTicks,ProductionYear,OfficialRating,CommunityRating";
@@ -71,8 +86,8 @@ namespace JellyfinTizen.Core
 
         public void SetAuthToken(string token)
         {
-            AccessToken = token;
-            SetAuthorizationHeader(token);
+            AccessToken = string.IsNullOrWhiteSpace(token) ? null : token.Trim();
+            SetAuthorizationHeader(AccessToken);
         }
 
         public void SetUserId(string userId)
@@ -96,7 +111,7 @@ namespace JellyfinTizen.Core
                 using var response = await _http.GetAsync(ServerUrl + path);
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
-                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                    HandleUnauthorizedResponse();
                 }
 
                 var responseContent = await response.Content.ReadAsStringAsync();
@@ -134,7 +149,7 @@ namespace JellyfinTizen.Core
                 using var response = await _http.PostAsync(ServerUrl + path, null);
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
-                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                    HandleUnauthorizedResponse();
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -283,7 +298,7 @@ namespace JellyfinTizen.Core
 
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
-                    UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
+                    HandleUnauthorizedResponse();
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -321,7 +336,9 @@ namespace JellyfinTizen.Core
                 };
 
                 request.Headers.TryAddWithoutValidation("Accept", AuthenticateAcceptHeader);
-                request.Headers.TryAddWithoutValidation("Authorization", BuildAuthorizationHeader(string.Empty));
+                AuthenticationHeaderManager.Apply(
+                    request.Headers,
+                    BuildAuthorizationHeader(token: null));
 
                 using var response = await _http.SendAsync(request);
                 if (!response.IsSuccessStatusCode)
@@ -743,36 +760,19 @@ namespace JellyfinTizen.Core
             if (_http == null)
                 return;
 
-            if (_http.DefaultRequestHeaders.Contains("X-MediaBrowser-Token"))
-                _http.DefaultRequestHeaders.Remove("X-MediaBrowser-Token");
+            ApplyAuthorizationHeader(_http.DefaultRequestHeaders, token);
+        }
 
-            if (_http.DefaultRequestHeaders.Contains("X-Emby-Authorization"))
-                _http.DefaultRequestHeaders.Remove("X-Emby-Authorization");
+        internal void ApplyAuthorizationHeader(HttpRequestHeaders headers, string token)
+        {
+            var normalizedToken = string.IsNullOrWhiteSpace(token)
+                ? null
+                : token.Trim();
+            var headerValue = normalizedToken == null
+                ? null
+                : BuildAuthorizationHeader(normalizedToken);
 
-            if (_http.DefaultRequestHeaders.Contains("Authorization"))
-                _http.DefaultRequestHeaders.Remove("Authorization");
-
-            if (_http.DefaultRequestHeaders.Contains("X-Emby-Token"))
-                _http.DefaultRequestHeaders.Remove("X-Emby-Token");
-
-            if (string.IsNullOrWhiteSpace(token))
-                return;
-
-            var normalizedToken = token.Trim();
-
-            if (IsEmby)
-            {
-                var headerValue = BuildAuthorizationHeader(null);
-                _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
-                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Token", normalizedToken);
-            }
-            else
-            {
-                var headerValue = BuildAuthorizationHeader(normalizedToken);
-                _http.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", headerValue);
-                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-Emby-Authorization", headerValue);
-                _http.DefaultRequestHeaders.TryAddWithoutValidation("X-MediaBrowser-Token", normalizedToken);
-            }
+            AuthenticationHeaderManager.Apply(headers, headerValue);
         }
 
         public string BuildAuthorizationHeader(string token)
@@ -788,6 +788,12 @@ namespace JellyfinTizen.Core
                 ClientVersion,
                 token,
                 IsEmby);
+        }
+
+        private void HandleUnauthorizedResponse()
+        {
+            ClearAuthToken();
+            UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
         }
 
         private static string SerializeJson(object body, bool useCamelCase)

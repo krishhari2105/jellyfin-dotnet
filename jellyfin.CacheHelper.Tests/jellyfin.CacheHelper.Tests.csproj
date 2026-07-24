@@ -17,8 +17,12 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\jellyfin\Utils\CacheHelper.cs" Link="CacheHelper.cs" />
+    <Compile Include="..\jellyfin\Core\AuthenticationHeaderManager.cs" Link="AuthenticationHeaderManager.cs" />
     <Compile Include="..\jellyfin\Core\AuthorizationHeaderFormatter.cs" Link="AuthorizationHeaderFormatter.cs" />
+    <Compile Include="..\jellyfin\Core\DebugSwitches.cs" Link="DebugSwitches.cs" />
     <Compile Include="..\jellyfin\Core\PlaybackReportCoordinator.cs" Link="PlaybackReportCoordinator.cs" />
+    <Compile Include="..\jellyfin\Core\SensitiveDataRedactor.cs" Link="SensitiveDataRedactor.cs" />
+    <Compile Include="..\jellyfin\Core\TailscaleDebugLog.cs" Link="TailscaleDebugLog.cs" />
     <Compile Include="..\jellyfin\Models\Capabilities.cs" Link="Capabilities.cs" />
   </ItemGroup>
 </Project>

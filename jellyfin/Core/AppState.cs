@@ -337,9 +337,19 @@ namespace JellyfinTizen.Core
 
                     record = new StoredServerRecord
                     {
-                        Url = normalized
+                        Url = normalized,
+                        IsEmby = Jellyfin?.IsEmby == true
                     };
                     StoredServers.Add(record);
+                }
+
+                if (Jellyfin != null &&
+                    string.Equals(
+                        normalized,
+                        NormalizeServerUrl(Jellyfin.ServerUrl),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    record.IsEmby = Jellyfin.IsEmby;
                 }
 
                 record.AccessToken = accessToken.Trim();
@@ -691,6 +701,14 @@ namespace JellyfinTizen.Core
                 return;
             }
 
+            // Clear the previous server's runtime identity before changing either
+            // the server URL or authentication scheme.
+            AccessToken = null;
+            UserId = null;
+            Username = null;
+            Jellyfin.ClearAuthToken();
+            Jellyfin.SetUserId(null);
+
             ServerUrl = record.Url;
             Jellyfin.IsEmby = record.IsEmby;
             Jellyfin.Connect(record.Url);
@@ -705,11 +723,7 @@ namespace JellyfinTizen.Core
                 return;
             }
 
-            AccessToken = null;
-            UserId = null;
-            Username = null;
-            Jellyfin.ClearAuthToken();
-            Jellyfin.SetUserId(null);
+            // Runtime authentication was cleared before the server mode changed.
         }
 
         private static void NormalizeServerRegistryInternal()

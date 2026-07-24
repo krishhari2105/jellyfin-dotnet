@@ -337,7 +337,7 @@ namespace JellyfinTizen.Screens
                 return string.Empty;
 
             string cleaned = url.Trim().Replace("\r", string.Empty).Replace("\n", string.Empty);
-            return Regex.Replace(cleaned, "([?&](?:api_key|apikey|token)=)[^&]+", "$1<redacted>", RegexOptions.IgnoreCase);
+            return SensitiveDataRedactor.Redact(cleaned);
         }
 
         private static string FormatDebugStreamUrl(string url)

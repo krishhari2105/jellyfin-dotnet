@@ -1215,23 +1215,7 @@ namespace JellyfinTizen.Screens
                 var jellyfinService = AppState.Jellyfin;
 
                 using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
-                string authHeader = jellyfinService?.BuildAuthorizationHeader(apiKey);
-                if (!string.IsNullOrWhiteSpace(authHeader))
-                {
-                    request.Headers.TryAddWithoutValidation("Authorization", authHeader);
-                }
-                if (jellyfinService?.IsEmby == true)
-                {
-                    if (!string.IsNullOrWhiteSpace(apiKey))
-                        request.Headers.TryAddWithoutValidation("X-Emby-Token", apiKey);
-                }
-                else
-                {
-                    if (!string.IsNullOrWhiteSpace(authHeader))
-                        request.Headers.TryAddWithoutValidation("X-Emby-Authorization", authHeader);
-                    if (!string.IsNullOrWhiteSpace(apiKey))
-                        request.Headers.TryAddWithoutValidation("X-MediaBrowser-Token", apiKey);
-                }
+                jellyfinService?.ApplyAuthorizationHeader(request.Headers, apiKey);
 
                 using var response = await client.SendAsync(request);
                 response.EnsureSuccessStatusCode();
@@ -1559,7 +1543,6 @@ namespace JellyfinTizen.Screens
             if (subtitleStream == null) return null;
 
             var serverUrl = AppState.Jellyfin.ServerUrl?.TrimEnd('/');
-            var apiKey = AppState.AccessToken;
 
             var deliveryUrl = subtitleStream.DeliveryUrl;
             if (!forceFallback && !string.IsNullOrWhiteSpace(deliveryUrl))
@@ -1600,12 +1583,6 @@ namespace JellyfinTizen.Screens
                 }
 
                 absoluteUrl = NormalizeSubtitleDeliveryUrl(absoluteUrl);
-                string lowerUrl = absoluteUrl.ToLowerInvariant();
-                bool hasAuthParam = lowerUrl.Contains("api_key=") || lowerUrl.Contains("apikey=") || lowerUrl.Contains("token=");
-                if (!hasAuthParam)
-                {
-                    absoluteUrl += absoluteUrl.Contains("?") ? $"&api_key={apiKey}" : $"?api_key={apiKey}";
-                }
                 return absoluteUrl;
             }
 
@@ -1613,7 +1590,7 @@ namespace JellyfinTizen.Screens
             if (!allowFallbackWhenMissingDelivery)
                 return null;
 
-            return $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}?api_key={apiKey}";
+            return $"{serverUrl}/Videos/{_movie.Id}/{mediaSourceId}/Subtitles/{subtitleIndex}/0/Stream.{ext}";
         }
 
         private static string NormalizeSubtitleDeliveryUrl(string deliveryUrl)
@@ -4874,10 +4851,9 @@ namespace JellyfinTizen.Screens
                     return localPath;
 
                 var serverUrl = AppState.ServerUrl.TrimEnd('/');
-                var token = Uri.EscapeDataString(AppState.AccessToken ?? string.Empty);
-                var url = $"{serverUrl}/Videos/{_movie.Id}/Trickplay/{_trickplayInfo.Width}/{tileIndex}.jpg?api_key={token}";
+                var url = $"{serverUrl}/Videos/{_movie.Id}/Trickplay/{_trickplayInfo.Width}/{tileIndex}.jpg";
                 if (!string.IsNullOrWhiteSpace(_currentMediaSource?.Id))
-                    url += $"&MediaSourceId={Uri.EscapeDataString(_currentMediaSource.Id)}";
+                    url += $"?MediaSourceId={Uri.EscapeDataString(_currentMediaSource.Id)}";
 
                 var trickplayClient = AppState.HttpClient;
 

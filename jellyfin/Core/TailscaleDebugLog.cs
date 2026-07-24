@@ -21,7 +21,7 @@ namespace JellyfinTizen.Core
             try
             {
                 string timestamp = DateTime.Now.ToString("HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
-                string entry = $"{timestamp} | {message}";
+                string entry = $"{timestamp} | {SensitiveDataRedactor.Redact(message)}";
                 _entries.Enqueue(entry);
                 
                 while (_entries.Count > MaxEntries)
