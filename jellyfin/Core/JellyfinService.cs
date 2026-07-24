@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using JellyfinTizen.Models;
 using JellyfinTizen.Utils;
 
@@ -58,7 +59,7 @@ namespace JellyfinTizen.Core
             var rewrittenUrl = AppState.RewriteServerUrlForTailscale(serverUrl?.TrimEnd("/".ToCharArray()));
             var normalizedUrl = rewrittenUrl?.TrimEnd("/".ToCharArray());
             TailscaleDebugLog.Add($"JellyfinService.Connect: Rewritten/normalizedUrl={normalizedUrl}");
-            
+
             if (string.IsNullOrWhiteSpace(normalizedUrl))
                 throw new ArgumentException("Server URL is required.", nameof(serverUrl));
 
@@ -120,6 +121,11 @@ namespace JellyfinTizen.Core
             return await PostAsync(path, body, useCamelCase: true);
         }
 
+        public Task<string> PostAsync(string path, object body, CancellationToken cancellationToken)
+        {
+            return PostAsync(path, body, useCamelCase: true, cancellationToken);
+        }
+
         public async Task PostAsync(string path)
         {
             await ExecuteWithRetryAsync(async () =>
@@ -130,7 +136,7 @@ namespace JellyfinTizen.Core
                 {
                     UnauthorizedDetected?.Invoke(this, EventArgs.Empty);
                 }
-                
+
                 if (!response.IsSuccessStatusCode)
                 {
                     var responseContent = await response.Content.ReadAsStringAsync();
@@ -256,13 +262,24 @@ namespace JellyfinTizen.Core
 
         public async Task<string> PostAsync(string path, object body, bool useCamelCase)
         {
-            return await ExecuteWithRetryAsync(async () =>
+            return await PostAsync(path, body, useCamelCase, CancellationToken.None);
+        }
+
+        private async Task<string> PostAsync(
+            string path,
+            object body,
+            bool useCamelCase,
+            CancellationToken cancellationToken)
+        {
+            return await ExecuteWithRetryAsync(async token =>
             {
                 EnsureConnected();
                 var json = SerializeJson(body, useCamelCase);
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                using var response = await _http.PostAsync(ServerUrl + path, content);
+                using var response = await _http
+                    .PostAsync(ServerUrl + path, content, token)
+                    .ConfigureAwait(false);
 
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
@@ -281,8 +298,8 @@ namespace JellyfinTizen.Core
                     throw httpEx;
                 }
 
-                return await response.Content.ReadAsStringAsync();
-            }, path);
+                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            }, path, cancellationToken).ConfigureAwait(false);
         }
 
         private static bool IsAuthenticationRejection(HttpStatusCode? statusCode)
@@ -346,7 +363,7 @@ namespace JellyfinTizen.Core
 
                 if (!JellyfinLibrary.IsSupportedCollectionType(collectionType))
                     continue;
-                
+
                 var hasPrimary = false;
                 if (item.TryGetProperty("ImageTags", out var imageTags) &&
                     imageTags.ValueKind == JsonValueKind.Object)
@@ -737,7 +754,7 @@ namespace JellyfinTizen.Core
 
             if (_http.DefaultRequestHeaders.Contains("X-Emby-Token"))
                 _http.DefaultRequestHeaders.Remove("X-Emby-Token");
-            
+
             if (string.IsNullOrWhiteSpace(token))
                 return;
 
@@ -865,22 +882,43 @@ namespace JellyfinTizen.Core
 
         public async Task ReportPlaybackStartAsync(PlaybackProgressInfo info)
         {
+            await ReportPlaybackStartAsync(info, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        public async Task ReportPlaybackStartAsync(
+            PlaybackProgressInfo info,
+            CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(info.EventName))
                 info.EventName = "TimeUpdate";
-            await PostAsync("/Sessions/Playing", info);
+            await PostAsync("/Sessions/Playing", info, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task ReportPlaybackProgressAsync(PlaybackProgressInfo info)
         {
+            await ReportPlaybackProgressAsync(info, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        public async Task ReportPlaybackProgressAsync(
+            PlaybackProgressInfo info,
+            CancellationToken cancellationToken)
+        {
             if (string.IsNullOrWhiteSpace(info.EventName))
                 info.EventName = "TimeUpdate";
-            await PostAsync("/Sessions/Playing/Progress", info);
+            await PostAsync("/Sessions/Playing/Progress", info, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task ReportPlaybackStoppedAsync(PlaybackProgressInfo info)
         {
+            await ReportPlaybackStoppedAsync(info, CancellationToken.None).ConfigureAwait(false);
+        }
+
+        public async Task ReportPlaybackStoppedAsync(
+            PlaybackProgressInfo info,
+            CancellationToken cancellationToken)
+        {
             info.EventName = "Stop";
-            await PostAsync("/Sessions/Playing/Stopped", info);
+            await PostAsync("/Sessions/Playing/Stopped", info, cancellationToken).ConfigureAwait(false);
         }
 
         public async Task<PlaybackInfoResponse> GetPlaybackInfoAsync(
@@ -939,11 +977,11 @@ namespace JellyfinTizen.Core
                 $"subtitlesDisabled={effectiveSubtitlesDisabled},forceBurnIn={effectiveForceBurnIn}");
 
             var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
-            
+
             // Simple deserialization
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            
+
             var response = new PlaybackInfoResponse
             {
                 PlaySessionId = root.TryGetProperty("PlaySessionId", out var playSessionIdProp)
@@ -1015,7 +1053,7 @@ namespace JellyfinTizen.Core
                                 SampleRate = TryGetInt32Loose(s, "SampleRate", out var sampleRate) ? sampleRate : null,
                                 Profile = TryGetString(s, "Profile")
                             };
-                            
+
                             ms.MediaStreams.Add(mediaStream);
                         }
                     }
@@ -1417,6 +1455,49 @@ namespace JellyfinTizen.Core
             }
         }
 
+        private async Task<T> ExecuteWithRetryAsync<T>(
+            Func<CancellationToken, Task<T>> action,
+            string path,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsCircuitOpen())
+            {
+                throw new HttpRequestException("Jellyfin server circuit breaker is open. Request blocked.");
+            }
+
+            int attempt = 0;
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                attempt++;
+                try
+                {
+                    var result = await action(cancellationToken).ConfigureAwait(false);
+                    RecordSuccess();
+                    return result;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
+                {
+                    TailscaleDebugLog.Add(
+                        $"Jellyfin request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}) " +
+                        $"for path={path}; error={ex.GetType().Name}");
+                    await Task
+                        .Delay(attempt * AppState.JellyfinRetryBaseDelayMs, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch
+                {
+                    RecordFailure();
+                    throw;
+                }
+            }
+        }
+
         private async Task ExecuteWithRetryAsync(Func<Task> action, string path)
         {
             if (IsCircuitOpen())
@@ -1456,7 +1537,7 @@ namespace JellyfinTizen.Core
             {
                 if (httpEx.StatusCode == null)
                     return true;
-                
+
                 int code = (int)httpEx.StatusCode;
                 return code >= 500 || code == 408;
             }

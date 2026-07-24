@@ -67,9 +67,9 @@ namespace JellyfinTizen.Core
         {
             _window = window;
             // standard NUI event - this works!
-            _window.KeyEvent += OnKeyEvent; 
+            _window.KeyEvent += OnKeyEvent;
             // Intercept media key events to suppress "Not Available" system toast
-            _window.InterceptKeyEvent += OnInterceptKeyEvent; 
+            _window.InterceptKeyEvent += OnInterceptKeyEvent;
 
             // Remove the default blue focus border globally
             FocusManager.Instance.FocusIndicator = null;
@@ -166,7 +166,7 @@ namespace JellyfinTizen.Core
             // Map the media key
             var key = keyName switch
             {
-                "XF86PlayBack" => AppKey.MediaPlayPause, 
+                "XF86PlayBack" => AppKey.MediaPlayPause,
                 "MediaPlayPause" => AppKey.MediaPlayPause,
                 "XF86AudioPlay" => AppKey.MediaPlay,
                 "MediaPlay" => AppKey.MediaPlay,
@@ -328,17 +328,54 @@ namespace JellyfinTizen.Core
             if (_currentScreen is IKeyHandler handler) handler.HandleKey(AppKey.Back);
         }
 
+        public static void NotifyAppPaused()
+        {
+            NotifyPlaybackLifecycle(PlaybackStopReason.AppPaused, removeKeyHandler: false);
+        }
+
         public static void NotifyAppTerminating()
+        {
+            NotifyPlaybackLifecycle(PlaybackStopReason.AppTerminating, removeKeyHandler: true);
+        }
+
+        private static void NotifyPlaybackLifecycle(
+            PlaybackStopReason reason,
+            bool removeKeyHandler)
         {
             try
             {
-                if (_window != null)
+                if (_currentScreen is IPlaybackLifecycleHandler playbackLifecycle)
+                {
+                    // Request first so VideoPlayerScreen closes the report gate with the
+                    // lifecycle-specific reason. OnHide joins that same task and performs
+                    // its bounded wait before disposing the native player.
+                    _ = playbackLifecycle.RequestPlaybackStop(reason);
+                }
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error(
+                    "PlaybackLifecycle",
+                    $"Unable to request lifecycle stop reason={reason} error={ex.GetType().Name}");
+            }
+
+            try
+            {
+                _currentScreen?.OnHide();
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error(
+                    "PlaybackLifecycle",
+                    $"Unable to hide current screen reason={reason} error={ex.GetType().Name}");
+            }
+            finally
+            {
+                if (removeKeyHandler && _window != null)
                 {
                     _window.InterceptKeyEvent -= OnInterceptKeyEvent;
                 }
-                _currentScreen?.OnHide();
             }
-            catch { }
         }
 
         private static void NavigateImmediate(ScreenBase screen, bool addToStack)
@@ -359,7 +396,7 @@ namespace JellyfinTizen.Core
             ResetScreenTransform(_currentScreen);
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
-            
+
             try { _currentScreen.ShowDebugOverlayPublic(); } catch { }
         }
 
@@ -655,7 +692,7 @@ namespace JellyfinTizen.Core
         public static void ShowReconnectOverlay(string message)
         {
             if (_window == null) return;
-            
+
             Tizen.Applications.CoreApplication.Post(() =>
             {
                 if (_reconnectOverlay == null)
@@ -666,7 +703,7 @@ namespace JellyfinTizen.Core
                         HeightResizePolicy = ResizePolicyType.FillToParent,
                         BackgroundColor = new NColor(0f, 0f, 0f, 0.75f)
                     };
-                    
+
                     var panel = MonochromeAuthFactory.CreatePanel(width: 600, yOffset: 0);
                     panel.Padding = new Extents(40, 40, 30, 30);
                     panel.BackgroundColor = new NColor(7f / 255f, 13f / 255f, 28f / 255f, 1.0f);
@@ -676,16 +713,16 @@ namespace JellyfinTizen.Core
 
                     var title = MonochromeAuthFactory.CreateTitle("Tailscale Connection");
                     title.PointSize = 32f;
-                    
+
                     var subtitle = MonochromeAuthFactory.CreateSubtitle(message);
                     subtitle.PointSize = 20f;
                     subtitle.TextColor = new NColor(1f, 1f, 1f, 0.7f);
-                    
+
                     panel.Add(title);
                     panel.Add(subtitle);
                     _reconnectOverlay.Add(panel);
                 }
-                
+
                 try { _window.Remove(_reconnectOverlay); } catch { }
                 _window.Add(_reconnectOverlay);
                 _reconnectOverlay.Show();

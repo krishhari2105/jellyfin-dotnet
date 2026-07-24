@@ -17,7 +17,7 @@ namespace JellyfinTizen
         {
             base.OnPause();
             AppLifecycle.TransitionToSuspended();
-            NavigationService.NotifyAppTerminating();
+            NavigationService.NotifyAppPaused();
         }
 
         protected override void OnResume()
@@ -35,8 +35,8 @@ namespace JellyfinTizen
 
         protected override void OnTerminate()
         {
-            AppState.Shutdown();
             NavigationService.NotifyAppTerminating();
+            AppState.Shutdown();
             base.OnTerminate();
         }
 

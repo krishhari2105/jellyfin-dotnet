@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <!-- The installed SDK has no desktop .NET 6 runtime; this test host links only
-         the framework-neutral CacheHelper source and runs on the available runtime. -->
+    <!-- The installed SDK has no desktop .NET 6 runtime; this test host links
+         framework-neutral production sources and runs on the available runtime. -->
     <TargetFramework>net9.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -18,5 +18,7 @@
   <ItemGroup>
     <Compile Include="..\jellyfin\Utils\CacheHelper.cs" Link="CacheHelper.cs" />
     <Compile Include="..\jellyfin\Core\AuthorizationHeaderFormatter.cs" Link="AuthorizationHeaderFormatter.cs" />
+    <Compile Include="..\jellyfin\Core\PlaybackReportCoordinator.cs" Link="PlaybackReportCoordinator.cs" />
+    <Compile Include="..\jellyfin\Models\Capabilities.cs" Link="Capabilities.cs" />
   </ItemGroup>
 </Project>

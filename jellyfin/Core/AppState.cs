@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using JellyfinTizen.Screens;
 
@@ -29,6 +30,7 @@ namespace JellyfinTizen.Core
         private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
         private static readonly List<StoredServerRecord> StoredServers = new();
         private static bool _serversLoaded;
+        private static int _shutdownStarted;
 
         public static string ServerUrl { get; set; }
         public static string AccessToken { get; set; }
@@ -75,6 +77,7 @@ namespace JellyfinTizen.Core
 
         public static void Init()
         {
+            Interlocked.Exchange(ref _shutdownStarted, 0);
             HttpClient = CreateHttpClient();
             Jellyfin = new JellyfinService(HttpClient);
             DeviceId = GetOrCreateDeviceId();
@@ -1270,9 +1273,14 @@ namespace JellyfinTizen.Core
         public static int TailscaleResumeConnectionRetryDelayMs { get; set; } = 1000;
         public static int StartupFallbackTimeoutMs { get; set; } = 12000;
         public static int HomeLoadingFallbackTimeoutMs { get; set; } = 25000;
+        public static int PlaybackReportTimeoutMs { get; set; } = 4000;
+        public static int PlaybackLifecycleFlushTimeoutMs { get; set; } = 10000;
 
         public static void Shutdown()
         {
+            if (Interlocked.Exchange(ref _shutdownStarted, 1) != 0)
+                return;
+
             try
             {
 #if TAILSCALE
@@ -1291,7 +1299,10 @@ namespace JellyfinTizen.Core
 #endif
                 JellyfinTizen.Utils.CacheHelper.Clear();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error("AppState", $"Application shutdown failed: {ex.GetType().Name}");
+            }
         }
 
         private static HttpClient CreateHttpClient()
