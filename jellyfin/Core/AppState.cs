@@ -1276,6 +1276,12 @@ namespace JellyfinTizen.Core
         public static int PlayerBufferInitialMs { get; set; } = 6000;
         public static int PlayerBufferResumeMs { get; set; } = 4000;
         public static int PlayerPrepareTimeoutMs { get; set; } = 15000;
+        public static int HlsPlayerPrepareTimeoutMs { get; set; } = 45000;
+        public static int PlayerNativeDrainDelayMs { get; set; } = 500;
+        public static int HlsManifestProbeIntervalMs { get; set; } = 500;
+        public static int HlsManifestProbeTimeoutMs { get; set; } = 45000;
+        public static int HlsInitialSeekReadyPollMs { get; set; } = 100;
+        public static int HlsInitialSeekReadyTimeoutMs { get; set; } = 10000;
         public static int ApiRequestTimeoutSeconds { get; set; } = 20;
         public static int JellyfinRetryMaxAttempts { get; set; } = 3;
         public static int JellyfinRetryBaseDelayMs { get; set; } = 500;

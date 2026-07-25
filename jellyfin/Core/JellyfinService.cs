@@ -103,18 +103,23 @@ namespace JellyfinTizen.Core
 
 
         // STEP 2 will use this
-        public async Task<string> GetAsync(string path)
+        public async Task<string> GetAsync(
+            string path,
+            CancellationToken cancellationToken = default)
         {
-            return await ExecuteWithRetryAsync(async () =>
+            return await ExecuteWithRetryAsync(async token =>
             {
                 EnsureConnected();
-                using var response = await _http.GetAsync(ServerUrl + path);
+                using var response = await _http.GetAsync(
+                    ServerUrl + path,
+                    token);
                 if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
                 {
                     HandleUnauthorizedResponse();
                 }
 
                 var responseContent = await response.Content.ReadAsStringAsync();
+                token.ThrowIfCancellationRequested();
                 if (!response.IsSuccessStatusCode)
                 {
                     TailscaleDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
@@ -128,7 +133,7 @@ namespace JellyfinTizen.Core
                 }
 
                 return responseContent;
-            }, path);
+            }, path, cancellationToken);
         }
 
         public async Task<string> PostAsync(string path, object body)
@@ -313,7 +318,10 @@ namespace JellyfinTizen.Core
                     throw httpEx;
                 }
 
-                return await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var successResponseContent =
+                    await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                return successResponseContent;
             }, path, cancellationToken).ConfigureAwait(false);
         }
 
@@ -936,22 +944,31 @@ namespace JellyfinTizen.Core
             bool subtitleHandlingDisabled = false,
             string mediaSourceId = null,
             bool preferTsOnlyHls = false,
-            bool preferTsHlsFirst = false)
+            bool preferTsHlsFirst = false,
+            bool preferFmp4HlsFirst = false,
+            CancellationToken cancellationToken = default)
         {
             bool hasExplicitSubtitleSelection = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value >= 0;
             bool subtitleIndexExplicitlyOff = subtitleStreamIndex.HasValue && subtitleStreamIndex.Value < 0;
             bool effectiveSubtitlesDisabled = !hasExplicitSubtitleSelection && (subtitleHandlingDisabled || subtitleIndexExplicitlyOff);
             bool effectiveForceBurnIn = forceBurnIn && hasExplicitSubtitleSelection;
             bool forceServerTranscode = disableDirectPlay || effectiveForceBurnIn;
+            bool effectivePreferFmp4HlsFirst =
+                IsEmby &&
+                !effectiveForceBurnIn &&
+                !preferTsOnlyHls &&
+                preferFmp4HlsFirst;
             bool effectivePreferTsHlsFirst =
                 !effectiveForceBurnIn &&
                 !preferTsOnlyHls &&
+                !effectivePreferFmp4HlsFirst &&
                 (preferTsHlsFirst || AppState.ForceTsTranscoding);
             var deviceProfile = ProfileBuilder.BuildTizenProfile(
                 forceBurnIn: effectiveForceBurnIn,
                 disableSubtitles: effectiveSubtitlesDisabled && !effectiveForceBurnIn,
                 preferTsOnlyHls: preferTsOnlyHls && !effectiveForceBurnIn,
-                preferTsHlsFirst: effectivePreferTsHlsFirst);
+                preferTsHlsFirst: effectivePreferTsHlsFirst,
+                preferFmp4HlsFirst: effectivePreferFmp4HlsFirst);
 
             // We send the UserId and DeviceProfile so the server knows who is asking and what we can play
             var body = new Dictionary<string, object>
@@ -980,9 +997,11 @@ namespace JellyfinTizen.Core
                 $"item={ShortDebugId(itemId)},user={ShortDebugId(UserId)},mediaSource={ShortDebugId(mediaSourceId)}," +
                 $"audio={audioStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "server"}," +
                 $"subtitle={subtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "server"}," +
-                $"subtitlesDisabled={effectiveSubtitlesDisabled},forceBurnIn={effectiveForceBurnIn}");
+                $"subtitlesDisabled={effectiveSubtitlesDisabled},forceBurnIn={effectiveForceBurnIn}," +
+                $"preferFmp4Hls={effectivePreferFmp4HlsFirst}");
 
-            var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body);
+            var json = await PostAsync($"/Items/{itemId}/PlaybackInfo", body, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Simple deserialization
             using var doc = JsonDocument.Parse(json);
@@ -1000,6 +1019,7 @@ namespace JellyfinTizen.Core
             {
                 foreach (var src in sources.EnumerateArray())
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var ms = new MediaSourceInfo
                     {
                         Id = TryGetString(src, "Id") ?? itemId,
@@ -1075,10 +1095,37 @@ namespace JellyfinTizen.Core
                 "PlaybackInfo.Response: " +
                 $"playSession={ShortDebugId(response.PlaySessionId)},sources={sourceSummary}");
 
+            foreach (var source in response.MediaSources)
+            {
+                var video = source.MediaStreams?
+                    .FirstOrDefault(s => string.Equals(s.Type, "Video", StringComparison.OrdinalIgnoreCase));
+                int? selectedAudioIndex = audioStreamIndex ?? source.DefaultAudioStreamIndex;
+                var audio = source.MediaStreams?
+                    .FirstOrDefault(s =>
+                        string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase) &&
+                        (!selectedAudioIndex.HasValue || s.Index == selectedAudioIndex.Value));
+                audio ??= source.MediaStreams?
+                    .FirstOrDefault(s => string.Equals(s.Type, "Audio", StringComparison.OrdinalIgnoreCase));
+
+                string reasons = source.TranscodingReasons == null || source.TranscodingReasons.Count == 0
+                    ? "-"
+                    : string.Join(",", source.TranscodingReasons);
+                TailscaleDebugLog.Add(
+                    "PlaybackInfo.Source: " +
+                    $"source={ShortDebugId(source.Id)},audioIndex={selectedAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"}," +
+                    $"video={video?.Codec ?? "-"},audio={audio?.Codec ?? "-"}," +
+                    $"directPlay={source.SupportsDirectPlay},directStream={source.SupportsDirectStream}," +
+                    $"transcode={source.SupportsTranscoding},container={source.TranscodingContainer ?? "-"}," +
+                    $"subProtocol={source.TranscodingSubProtocol ?? "-"},reasons={reasons}");
+            }
+
             return response;
         }
 
-        public async Task<List<MediaSegmentInfo>> GetMediaSegmentsAsync(string itemId, params string[] includeSegmentTypes)
+        public async Task<List<MediaSegmentInfo>> GetMediaSegmentsAsync(
+            string itemId,
+            CancellationToken cancellationToken,
+            params string[] includeSegmentTypes)
         {
             if (string.IsNullOrWhiteSpace(itemId))
                 return new List<MediaSegmentInfo>();
@@ -1095,7 +1142,7 @@ namespace JellyfinTizen.Core
                     url += $"?{string.Join("&", filtered.Select(t => $"includeSegmentTypes={t}"))}";
             }
 
-            var json = await GetAsync(url);
+            var json = await GetAsync(url, cancellationToken);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
@@ -1118,12 +1165,16 @@ namespace JellyfinTizen.Core
             return items;
         }
 
-        public async Task<TrickplayInfo> GetTrickplayInfoAsync(string itemId)
+        public async Task<TrickplayInfo> GetTrickplayInfoAsync(
+            string itemId,
+            CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(itemId))
                 return null;
 
-            var json = await GetAsync($"/Items/{itemId}?Fields=Trickplay");
+            var json = await GetAsync(
+                $"/Items/{itemId}?Fields=Trickplay",
+                cancellationToken);
 
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
@@ -1229,6 +1280,83 @@ namespace JellyfinTizen.Core
             }
 
             return values;
+        }
+
+        public async Task<string> GetMediaSourceVideoCodecAsync(
+            string itemId,
+            string mediaSourceId = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+                return null;
+
+            string encodedItemId = Uri.EscapeDataString(itemId);
+            string itemPath = string.IsNullOrWhiteSpace(UserId)
+                ? $"/Items/{encodedItemId}?Fields=MediaSources,MediaStreams"
+                : $"/Users/{Uri.EscapeDataString(UserId)}/Items/{encodedItemId}?Fields=MediaSources,MediaStreams";
+            var json = await GetAsync(
+                itemPath,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            JsonElement? fallbackSource = null;
+            JsonElement? selectedSource = null;
+
+            if (root.TryGetProperty("MediaSources", out var mediaSources) &&
+                mediaSources.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var source in mediaSources.EnumerateArray())
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    fallbackSource ??= source;
+
+                    if (!string.IsNullOrWhiteSpace(mediaSourceId) &&
+                        string.Equals(
+                            TryGetString(source, "Id"),
+                            mediaSourceId,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        selectedSource = source;
+                        break;
+                    }
+                }
+            }
+
+            var sourceToInspect = selectedSource ?? fallbackSource;
+            string videoCodec = sourceToInspect.HasValue
+                ? TryGetVideoCodec(sourceToInspect.Value)
+                : null;
+            videoCodec ??= TryGetVideoCodec(root);
+
+            TailscaleDebugLog.Add(
+                "PlaybackProfile.SourceCodec: " +
+                $"item={ShortDebugId(itemId)},mediaSource={ShortDebugId(mediaSourceId)}," +
+                $"codec={videoCodec ?? "-"}");
+            return videoCodec;
+        }
+
+        private static string TryGetVideoCodec(JsonElement source)
+        {
+            if (!source.TryGetProperty("MediaStreams", out var streams) ||
+                streams.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var stream in streams.EnumerateArray())
+            {
+                if (string.Equals(
+                        TryGetString(stream, "Type"),
+                        "Video",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return TryGetString(stream, "Codec");
+                }
+            }
+
+            return null;
         }
 
         public async Task<bool> GetIsAnamorphicAsync(string itemId)

@@ -10,8 +10,116 @@ namespace JellyfinTizen.Core
             bool forceBurnIn = false,
             bool disableSubtitles = false,
             bool preferTsOnlyHls = false,
-            bool preferTsHlsFirst = false)
+            bool preferTsHlsFirst = false,
+            bool preferFmp4HlsFirst = false)
         {
+            var runtime = TizenPlaybackCapabilities.Current;
+            var tsVideoCodecList = new List<string> { "h264" };
+            if (runtime.SupportsVc1)
+                tsVideoCodecList.Add("vc1");
+            tsVideoCodecList.Add("mpeg2video");
+            if (runtime.SupportsHevcInMpegTsHls)
+                tsVideoCodecList.Add("hevc");
+
+            string tsVideoCodecs = string.Join(",", tsVideoCodecList);
+            string fmp4VideoCodecs = runtime.SupportsAv1
+                ? "h264,hevc,av1,vp9"
+                : "h264,hevc,vp9";
+            string directStreamVideoCodecs = runtime.SupportsAv1
+                ? "h264,hevc,av1,vp9"
+                : "h264,hevc,vp9";
+            var broadVideoCodecList = new List<string>
+            {
+                "h264",
+                "hevc",
+                "mpeg2video",
+                "msmpeg4v2",
+                "vp8",
+                "vp9"
+            };
+            if (runtime.SupportsVc1)
+                broadVideoCodecList.Add("vc1");
+            if (runtime.SupportsAv1)
+                broadVideoCodecList.Add("av1");
+
+            string broadVideoCodecs =
+                string.Join(",", broadVideoCodecList);
+            string webmVideoCodecs = runtime.SupportsAv1
+                ? "vp8,vp9,av1"
+                : "vp8,vp9";
+            string m2tsVideoCodecs = runtime.SupportsVc1
+                ? "h264,hevc,vc1,mpeg2video"
+                : "h264,hevc,mpeg2video";
+            string hlsAudioCodecs = runtime.SupportsEac3InHls
+                ? "ac3,eac3,aac,mp3"
+                : "ac3,aac,mp3";
+            const int hlsSegmentLengthSeconds = 6;
+            const int hlsMinimumSegments = 2;
+
+            var transcodingProfiles = new List<TranscodingProfile>
+            {
+                // MPEG-TS is the primary AVPlay route. HEVC is included only on
+                // firmware where the HLS MPEG-TS demuxer is known to accept it.
+                new TranscodingProfile
+                {
+                    Container = "ts",
+                    Type = "Video",
+                    AudioCodec = hlsAudioCodecs,
+                    VideoCodec = tsVideoCodecs,
+                    Context = "Streaming",
+                    Protocol = "hls",
+                    MaxAudioChannels = runtime.MaxHlsAudioChannels,
+                    MinSegments = hlsMinimumSegments,
+                    SegmentLength = hlsSegmentLengthSeconds,
+                    BreakOnNonKeyFrames = false,
+                    EnableAudioVbrEncoding = false
+                }
+            };
+
+            // fMP4 HLS is useful for copy-streaming AV1 and VP9, which do not fit
+            // in MPEG-TS. Jellyfin can select this secondary profile by codec;
+            // Emby-specific ordering is applied below when the source needs it.
+            if (runtime.SupportsFmp4Hls)
+            {
+                transcodingProfiles.Add(new TranscodingProfile
+                {
+                    Container = "mp4",
+                    Type = "Video",
+                    AudioCodec = hlsAudioCodecs,
+                    VideoCodec = fmp4VideoCodecs,
+                    Context = "Streaming",
+                    Protocol = "hls",
+                    MaxAudioChannels = runtime.MaxHlsAudioChannels,
+                    MinSegments = hlsMinimumSegments,
+                    SegmentLength = hlsSegmentLengthSeconds,
+                    BreakOnNonKeyFrames = false,
+                    EnableAudioVbrEncoding = false
+                });
+            }
+
+            // Progressive MP4 remains a non-HLS fallback for servers or media
+            // combinations that cannot use the preferred segmented routes.
+            transcodingProfiles.Add(new TranscodingProfile
+            {
+                Container = "mp4",
+                Type = "Video",
+                AudioCodec = hlsAudioCodecs,
+                VideoCodec = fmp4VideoCodecs,
+                Context = "Streaming",
+                Protocol = "http",
+                MaxAudioChannels = runtime.MaxHlsAudioChannels
+            });
+
+            transcodingProfiles.Add(new TranscodingProfile
+            {
+                Container = "mkv",
+                Type = "Video",
+                AudioCodec = "ac3,eac3,aac,mp3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis",
+                VideoCodec = broadVideoCodecs,
+                Context = "Streaming",
+                Protocol = "http"
+            });
+
             var profile = new DeviceProfile
             {
                 Name = "Samsung Smart TV",
@@ -49,6 +157,24 @@ namespace JellyfinTizen.Core
                             new ProfileCondition { Condition = "EqualsAny", Property = "VideoProfile", Value = "profile 0|profile 2", IsRequired = false }
                         }
                     },
+                    // TrueHD is never a native Tizen playback target. This
+                    // impossible condition makes the incompatibility explicit
+                    // even when a server is permissive about container profiles.
+                    new CodecProfile
+                    {
+                        Type = "VideoAudio",
+                        Codec = "truehd",
+                        Conditions = new List<ProfileCondition>
+                        {
+                            new ProfileCondition
+                            {
+                                Condition = "Equals",
+                                Property = "AudioChannels",
+                                Value = "0",
+                                IsRequired = true
+                            }
+                        }
+                    },
                   
                 },
 
@@ -61,7 +187,7 @@ namespace JellyfinTizen.Core
                     {
                         Type = "Video",
                         Container = "mp4,m4v",
-                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
+                        VideoCodec = broadVideoCodecs,
                         // MP4/ISOBMFF can carry VP9 and AV1, but direct play still depends on
                         // decoder support on the target TV model.
                         // DTS FIX: We intentionally omit "dts,dca" from every video profile.
@@ -80,28 +206,28 @@ namespace JellyfinTizen.Core
                     {
                         Type = "Video",
                         Container = "mkv",
-                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
+                        VideoCodec = broadVideoCodecs,
                         AudioCodec = "aac,mp3,ac3,eac3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis"
                     },
                     new DirectPlayProfile
                     {
                         Type = "Video",
                         Container = "webm",
-                        VideoCodec = "vp8,vp9,av1",
+                        VideoCodec = webmVideoCodecs,
                         AudioCodec = "vorbis,opus"
                     },
                     new DirectPlayProfile
                     {
                         Type = "Video",
                         Container = "ts,mpegts",
-                        VideoCodec = "h264,hevc,vc1,mpeg2video",
+                        VideoCodec = tsVideoCodecs,
                         AudioCodec = "aac,mp3,ac3,eac3,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis"
                     },
                     new DirectPlayProfile
                     {
                         Type = "Video",
                         Container = "m2ts",
-                        VideoCodec = "h264,hevc,vc1,mpeg2video",
+                        VideoCodec = m2tsVideoCodecs,
                         AudioCodec = "aac,mp3,ac3,eac3,mp2,pcm_s16le,pcm_s24le,aac_latm,flac"
                     },
                     new DirectPlayProfile
@@ -135,38 +261,21 @@ namespace JellyfinTizen.Core
                         AudioCodec = "opus,webma"
                     }
                 },
-                TranscodingProfiles = new List<TranscodingProfile>
+                // Explicitly constrain remux/direct-stream outputs. TrueHD is
+                // intentionally absent so Jellyfin selects an AC3-capable
+                // transcoding profile while preserving a compatible video
+                // stream such as 4K HEVC.
+                DirectStreamProfiles = new List<DirectPlayProfile>
                 {
-
-                    new TranscodingProfile
+                    new DirectPlayProfile
                     {
+                        Type = "Video",
                         Container = "mp4",
-                        Type = "Video",
-                        AudioCodec = "ac3,eac3,aac,mp3,opus,ac4",
-                        VideoCodec = "hevc,h264,av1,vp9",
-                        Context = "Streaming",
-                        Protocol = "hls"
-                    },
-                    new TranscodingProfile
-                    {
-                        Container = "ts",
-                        Type = "Video",
-                        AudioCodec = "ac3,eac3,aac,mp3,opus",
-                        VideoCodec = "hevc,h264",
-                        Context = "Streaming",
-                        Protocol = "hls"
-                    },
-
-                    new TranscodingProfile
-                    {
-                        Container = "mkv",
-                        Type = "Video",
-                        AudioCodec = "ac3,eac3,aac,mp3,ac4,mp2,pcm_s16le,pcm_s24le,aac_latm,opus,flac,vorbis",
-                        VideoCodec = "h264,hevc,mpeg2video,vc1,msmpeg4v2,vp8,vp9,av1",
-                        Context = "Streaming",
-                        Protocol = "http"
+                        VideoCodec = directStreamVideoCodecs,
+                        AudioCodec = hlsAudioCodecs
                     }
                 },
+                TranscodingProfiles = transcodingProfiles,
                 SubtitleProfiles = new List<SubtitleProfile>()
             };
 
@@ -209,16 +318,26 @@ namespace JellyfinTizen.Core
                 };
             }
 
-            // When forceBurnIn is true, ensure we only support transcoding to h264
+            // When forceBurnIn is true, use one deterministic H264/TS route.
             if (forceBurnIn)
             {
-                profile.TranscodingProfiles = profile.TranscodingProfiles.FindAll(p => p.VideoCodec.Contains("h264"));
-                foreach (var tp in profile.TranscodingProfiles)
+                profile.TranscodingProfiles = new List<TranscodingProfile>
                 {
-                    tp.VideoCodec = "h264"; // Ensure only h264 for burn-in
-                    tp.Container = "ts"; // TS container is most compatible with hls + burn-in
-                    tp.Protocol = "hls";
-                }
+                    new TranscodingProfile
+                    {
+                        Container = "ts",
+                        Type = "Video",
+                        AudioCodec = hlsAudioCodecs,
+                        VideoCodec = "h264",
+                        Context = "Streaming",
+                        Protocol = "hls",
+                        MaxAudioChannels = runtime.MaxHlsAudioChannels,
+                        MinSegments = hlsMinimumSegments,
+                        SegmentLength = hlsSegmentLengthSeconds,
+                        BreakOnNonKeyFrames = false,
+                        EnableAudioVbrEncoding = false
+                    }
+                };
             }
             else if (preferTsOnlyHls)
             {
@@ -226,6 +345,12 @@ namespace JellyfinTizen.Core
                     !string.Equals(p.Type, "Video", System.StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(p.Protocol, "hls", System.StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(p.Container, "ts", System.StringComparison.OrdinalIgnoreCase));
+            }
+            else if (preferFmp4HlsFirst)
+            {
+                profile.TranscodingProfiles =
+                    PlaybackProfileOrdering.PreferFmp4HlsFirst(
+                        profile.TranscodingProfiles);
             }
             else if (preferTsHlsFirst)
             {
@@ -245,6 +370,14 @@ namespace JellyfinTizen.Core
                     profile.TranscodingProfiles = preferredTsProfiles;
                 }
             }
+
+            TailscaleDebugLog.Add(
+                "PlaybackProfile.Runtime: " +
+                $"tizen={runtime.PlatformVersion:0.0},fallback={runtime.UsedFallback}," +
+                $"fmp4Hls={runtime.SupportsFmp4Hls},hevcTsHls={runtime.SupportsHevcInMpegTsHls}," +
+                $"eac3Hls={runtime.SupportsEac3InHls}," +
+                $"preferFmp4={preferFmp4HlsFirst}," +
+                $"order={string.Join(">", profile.TranscodingProfiles.Select(p => $"{p.Protocol}:{p.Container}"))}");
 
             return profile;
         }

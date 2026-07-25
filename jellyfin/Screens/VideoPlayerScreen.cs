@@ -18,6 +18,7 @@ using System.Net;
 using System.Globalization;
 using System.Text;
 using System.Threading;
+using System.Diagnostics;
 // Alias the UI Timer to avoid ambiguity with System.Threading.Timer
 using Timer = Tizen.NUI.Timer;
 
@@ -30,7 +31,6 @@ namespace JellyfinTizen.Screens
         private int _startPositionMs;
         private TextLabel _errorLabel;
         private bool _playbackFailed;
-        private bool _isStartingPlayback;
         private bool _initialSeekDone = false;
         private View _osd;
         private View _topOsd;
@@ -114,6 +114,7 @@ namespace JellyfinTizen.Screens
         private bool _playerSidecarSubtitleActive;
         private bool _burnIn;
         private string _preferredMediaSourceId;
+        private string _sourceVideoCodecHint;
         private string _externalSubtitlePath = null;
         private string _externalSubtitleLanguage = "EXTERNAL";
         private int? _externalSubtitleIndex = null;
@@ -261,7 +262,8 @@ namespace JellyfinTizen.Screens
             bool burnIn = false,
             string preferredMediaSourceId = null,
             int? audioStreamIndex = null,
-            string initialSubtitleCodec = null
+            string initialSubtitleCodec = null,
+            string initialVideoCodec = null
         )
         {
             _movie = movie;
@@ -274,8 +276,12 @@ namespace JellyfinTizen.Screens
             _initialSubtitleCodecHint = initialSubtitleCodec;
             _burnIn = burnIn;
             _preferredMediaSourceId = preferredMediaSourceId;
+            _sourceVideoCodecHint =
+                NormalizeVideoCodec(initialVideoCodec);
             _overrideAudioIndex = audioStreamIndex;
             _audioSelectionUserOverride = audioStreamIndex.HasValue;
+            _latestRequestedAudioIndex =
+                audioStreamIndex ?? NoPendingAudioSelection;
             _trickplayCacheDir = System.IO.Path.Combine(Application.Current.DirectoryInfo.Data, "trickplay-cache");
             _playbackReportCoordinator = new PlaybackReportCoordinator(
                 SendPlaybackReportAsync,
@@ -285,6 +291,9 @@ namespace JellyfinTizen.Screens
 
         public override void OnShow()
         {
+            Volatile.Write(ref _screenHidden, 0);
+            Interlocked.Exchange(ref _localPlaybackCleanupStarted, 0);
+
             // Delay transparency until the screen is actually shown so
             // details -> player transition can fade cleanly to black.
             Window.Default.BackgroundColor = Color.Transparent;
@@ -319,8 +328,12 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
+            Volatile.Write(ref _screenHidden, 1);
             var stopTask = RequestPlaybackStop(PlaybackStopReason.ScreenHidden);
-            WaitForPlaybackStop(stopTask, PlaybackStopReason.ScreenHidden);
+            InvalidatePlaybackGeneration();
+            FireAndForget(
+                ObservePlaybackStopAsync(stopTask, PlaybackStopReason.ScreenHidden),
+                nameof(ObservePlaybackStopAsync));
             if (Interlocked.Exchange(ref _localPlaybackCleanupStarted, 1) != 0)
             {
                 base.OnHide();
@@ -371,7 +384,7 @@ namespace JellyfinTizen.Screens
                 _smartActionTimer.Stop();
             }
             _smartActionTimer = null;
-            StopPlaybackLocal();
+            AbortPlaybackOnHide();
             Window.Default.BackgroundColor = Color.Black;
             BackgroundColor = Color.Black;
             base.OnHide();
@@ -384,41 +397,65 @@ namespace JellyfinTizen.Screens
 
         private async Task StartPlaybackAsync()
         {
-            if (_isStartingPlayback)
-                return;
+            await RunStartPlaybackTransitionAsync();
+        }
 
-            _isStartingPlayback = true;
-            int playbackToken = ++_playbackToken;
+        private async Task StartPlaybackCoreAsync(
+            int playbackToken,
+            CancellationToken cancellationToken,
+            bool shouldBePlaying)
+        {
             var playbackMovie = _movie;
             if (playbackMovie == null || string.IsNullOrWhiteSpace(playbackMovie.Id))
-            {
-                _isStartingPlayback = false;
                 return;
-            }
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                await EnsureSourceVideoCodecHintAsync(
+                    playbackMovie.Id,
+                    _preferredMediaSourceId,
+                    playbackToken,
+                    cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    return;
+
                 var request = CreatePlaybackStartupRequest(playbackMovie.Id);
                 ResetPlaybackState(request.HasSelectedSubtitle, request.RequestedSubtitleStreamIndex, playbackToken, request.PreferNativeEmbeddedOnStart);
 
-                var plan = await ResolvePlaybackStartupPlanAsync(request, playbackToken);
-                if (plan == null || playbackToken != _playbackToken)
+                var plan = await ResolvePlaybackStartupPlanAsync(
+                    request,
+                    playbackToken,
+                    cancellationToken);
+                if (plan == null || !IsCurrentPlaybackGeneration(playbackToken))
                     return;
 
-                await PreparePlaybackPipelineAsync(plan, playbackToken);
+                await PreparePlaybackPipelineAsync(
+                    plan,
+                    playbackToken,
+                    shouldBePlaying,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
+                LogPlaybackDiagnostic(
+                    "StartPlayback.Cancelled",
+                    $"generation={playbackToken}");
+                await StopPlaybackLocalAsync("startup-cancelled");
             }
             catch (Exception ex)
             {
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("StartPlayback.Exception", ex.Message);
-                if (playbackToken == _playbackToken)
+                await StopPlaybackLocalAsync("startup-failed");
+                if (IsCurrentPlaybackGeneration(playbackToken))
                 {
                     ClearReportingContext();
-                    ShowPlaybackError(ex.Message);
+                    ShowPlaybackError(
+                        ex.Message,
+                        playbackToken);
                 }
-            }
-            finally
-            {
-                _isStartingPlayback = false;
             }
         }
 
@@ -431,6 +468,7 @@ namespace JellyfinTizen.Screens
             public int? RequestedSubtitleStreamIndex;
             public bool BurnInActive;
             public bool PreferTsOnlyHls;
+            public bool PreferFmp4HlsFirst;
             public string RequestedMediaSourceId;
         }
 
@@ -444,6 +482,74 @@ namespace JellyfinTizen.Screens
             public bool PreferNativeEmbeddedOnStart;
         }
 
+        private async Task EnsureSourceVideoCodecHintAsync(
+            string itemId,
+            string mediaSourceId,
+            int playbackToken,
+            CancellationToken cancellationToken)
+        {
+            if (AppState.Jellyfin?.IsEmby != true)
+                return;
+
+            if (string.IsNullOrWhiteSpace(_sourceVideoCodecHint))
+            {
+                UpdateSourceVideoCodecHint(
+                    _currentMediaSource,
+                    "current-source");
+            }
+
+            if (!string.IsNullOrWhiteSpace(_sourceVideoCodecHint))
+                return;
+
+            string videoCodec =
+                await AppState.Jellyfin.GetMediaSourceVideoCodecAsync(
+                    itemId,
+                    mediaSourceId,
+                    cancellationToken);
+            if (!IsCurrentPlaybackGeneration(playbackToken))
+                throw new OperationCanceledException(cancellationToken);
+
+            _sourceVideoCodecHint =
+                NormalizeVideoCodec(videoCodec);
+            string codecForLog =
+                string.IsNullOrWhiteSpace(_sourceVideoCodecHint)
+                    ? "-"
+                    : _sourceVideoCodecHint;
+            LogPlaybackDiagnostic(
+                "PlaybackProfile.CodecLookup",
+                $"server=Emby,source={mediaSourceId ?? "-"}," +
+                $"codec={codecForLog}");
+        }
+
+        private bool ShouldPreferFmp4HlsFirst()
+        {
+            return PlaybackProfileOrdering.ShouldPreferFmp4Hls(
+                AppState.Jellyfin?.IsEmby == true,
+                _sourceVideoCodecHint);
+        }
+
+        private void UpdateSourceVideoCodecHint(
+            MediaSourceInfo mediaSource,
+            string stage)
+        {
+            string videoCodec = NormalizeVideoCodec(
+                mediaSource?.MediaStreams?
+                    .FirstOrDefault(stream =>
+                        string.Equals(
+                            stream.Type,
+                            "Video",
+                            StringComparison.OrdinalIgnoreCase))
+                    ?.Codec);
+            if (string.IsNullOrWhiteSpace(videoCodec))
+                return;
+
+            _sourceVideoCodecHint = videoCodec;
+            LogPlaybackDiagnostic(
+                "PlaybackProfile.CodecResolved",
+                $"stage={stage},source={mediaSource?.Id ?? "-"}," +
+                $"codec={videoCodec}");
+        }
+
         private PlaybackStartupRequest CreatePlaybackStartupRequest(string itemId)
         {
             bool explicitSubtitleOff = _initialSubtitleIndex.HasValue && _initialSubtitleIndex.Value < 0;
@@ -453,6 +559,18 @@ namespace JellyfinTizen.Screens
             if (preferNativeEmbeddedOnStart)
                 requestedSubtitleStreamIndex = null;
 
+            bool burnInActive = _burnIn && hasSelectedSubtitle;
+            bool preferTsOnlyHls =
+                RequiresTsOnlyHlsProfile(
+                    GetRequestedSubtitleCodecHint());
+            bool preferFmp4HlsFirst =
+                !burnInActive &&
+                !preferTsOnlyHls &&
+                ShouldPreferFmp4HlsFirst();
+            string sourceVideoCodecForLog =
+                string.IsNullOrWhiteSpace(_sourceVideoCodecHint)
+                    ? "-"
+                    : _sourceVideoCodecHint;
             var request = new PlaybackStartupRequest
             {
                 ItemId = itemId,
@@ -460,31 +578,42 @@ namespace JellyfinTizen.Screens
                 HasSelectedSubtitle = hasSelectedSubtitle,
                 PreferNativeEmbeddedOnStart = preferNativeEmbeddedOnStart,
                 RequestedSubtitleStreamIndex = requestedSubtitleStreamIndex,
-                BurnInActive = _burnIn && hasSelectedSubtitle,
-                PreferTsOnlyHls = RequiresTsOnlyHlsProfile(GetRequestedSubtitleCodecHint()),
+                BurnInActive = burnInActive,
+                PreferTsOnlyHls = preferTsOnlyHls,
+                PreferFmp4HlsFirst = preferFmp4HlsFirst,
                 RequestedMediaSourceId = _preferredMediaSourceId
             };
 
             if (DebugSwitches.EnablePlaybackDebugOverlay)
-                CaptureStreamDebugEvent("StartPlayback.Request", $"sub={request.RequestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={request.RequestedMediaSourceId ?? "-"}");
+                CaptureStreamDebugEvent("StartPlayback.Request", $"sub={request.RequestedSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "OFF"},audio={_overrideAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"},preferredSource={request.RequestedMediaSourceId ?? "-"},video={sourceVideoCodecForLog},fmp4First={request.PreferFmp4HlsFirst}");
+
+            LogPlaybackDiagnostic(
+                "PlaybackProfile.Selection",
+                $"server={(AppState.Jellyfin?.IsEmby == true ? "Emby" : "Jellyfin")}," +
+                $"sourceCodec={sourceVideoCodecForLog}," +
+                $"order={(request.PreferFmp4HlsFirst ? "fmp4>ts" : "ts>fmp4")}");
 
             return request;
         }
 
-        private async Task<PlaybackStartupPlan> ResolvePlaybackStartupPlanAsync(PlaybackStartupRequest request, int playbackToken)
+        private async Task<PlaybackStartupPlan> ResolvePlaybackStartupPlanAsync(
+            PlaybackStartupRequest request,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             var playbackInfo = await FetchInitialPlaybackInfoAsync(request.ItemId, request.RequestedSubtitleStreamIndex,
                 request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff, request.RequestedMediaSourceId,
-                request.PreferTsOnlyHls, playbackToken);
-            if (playbackInfo == null || playbackToken != _playbackToken)
+                request.PreferTsOnlyHls, request.PreferFmp4HlsFirst, playbackToken, cancellationToken);
+            if (playbackInfo == null || !IsCurrentPlaybackGeneration(playbackToken))
                 return null;
 
             var fallbackResult = await TryFallbackPlaybackInfoAsync(request.ItemId, playbackInfo,
                 request.RequestedSubtitleStreamIndex, request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff,
-                request.RequestedMediaSourceId, request.PreferTsOnlyHls, playbackToken);
+                request.RequestedMediaSourceId, request.PreferTsOnlyHls, request.PreferFmp4HlsFirst,
+                playbackToken, cancellationToken);
             playbackInfo = fallbackResult.playbackInfo;
             request.RequestedMediaSourceId = fallbackResult.requestedMediaSourceId;
-            if (playbackInfo == null || playbackToken != _playbackToken)
+            if (playbackInfo == null || !IsCurrentPlaybackGeneration(playbackToken))
                 return null;
 
             bool assignedStartupAudioOverride = ResolveStartupAudioDefault(playbackInfo);
@@ -506,16 +635,18 @@ namespace JellyfinTizen.Screens
             {
                 var refineResult = await RefinePlaybackInfoWithResolvedSourceAsync(request.ItemId, playbackInfo,
                     request.RequestedSubtitleStreamIndex, request.BurnInActive, _overrideAudioIndex, request.ExplicitSubtitleOff,
-                    request.RequestedMediaSourceId, request.PreferTsOnlyHls, playbackToken);
+                    request.RequestedMediaSourceId, request.PreferTsOnlyHls, request.PreferFmp4HlsFirst,
+                    playbackToken, cancellationToken);
                 playbackInfo = refineResult.playbackInfo;
                 request.RequestedMediaSourceId = refineResult.requestedMediaSourceId;
-                if (playbackInfo == null || playbackToken != _playbackToken)
+                if (playbackInfo == null || !IsCurrentPlaybackGeneration(playbackToken))
                     return null;
             }
 
             var resolved = await ResolveAndValidateMediaSourceAsync(playbackInfo, request.ItemId, _overrideAudioIndex,
-                _initialSubtitleIndex, request.HasSelectedSubtitle, request.BurnInActive, playbackToken);
-            if (resolved.mediaSource == null || playbackToken != _playbackToken)
+                _initialSubtitleIndex, request.HasSelectedSubtitle, request.BurnInActive,
+                request.PreferFmp4HlsFirst, playbackToken, cancellationToken);
+            if (resolved.mediaSource == null || !IsCurrentPlaybackGeneration(playbackToken))
                 return null;
 
             return new PlaybackStartupPlan
@@ -529,13 +660,20 @@ namespace JellyfinTizen.Screens
             };
         }
 
-        private async Task PreparePlaybackPipelineAsync(PlaybackStartupPlan plan, int playbackToken)
+        private async Task PreparePlaybackPipelineAsync(
+            PlaybackStartupPlan plan,
+            int playbackToken,
+            bool shouldBePlaying,
+            CancellationToken cancellationToken)
         {
-            InitializePlaybackContext(plan.PlaybackInfo);
+            InitializePlaybackContext(plan.PlaybackInfo, playbackToken);
             string streamUrl = BuildStreamUrl(plan.MediaSource, plan.ItemId, _playSessionId, plan.BurnInActive,
                 _overrideAudioIndex, plan.EffectiveHasSelectedSubtitle, _initialSubtitleIndex, plan.PreferNativeEmbeddedOnStart);
             if (string.IsNullOrEmpty(streamUrl))
-                return;
+            {
+                throw new InvalidOperationException(
+                    "Jellyfin did not provide a playable stream URL for the selected route.");
+            }
 
             bool requiresServerManagedStream = plan.BurnInActive;
             bool supportsDirectPlay = plan.MediaSource.SupportsDirectPlay;
@@ -551,36 +689,85 @@ namespace JellyfinTizen.Screens
                 CaptureSubtitleDebugEvent("StartPlayback.StreamReady", details: $"route={_playMethod},reported={reportedPlayMethod},burnInActive={plan.BurnInActive}");
             }
 
+            bool isHls = IsHlsStream(streamUrl, plan.MediaSource);
+            LogPlaybackRouteDiagnostics(
+                streamUrl,
+                plan.MediaSource,
+                reportedPlayMethod,
+                playbackToken);
             streamUrl = RewriteStreamUrlForTailscale(streamUrl);
-            await PreparePlayerAsync(streamUrl, plan.ItemId, _playSessionId, plan.MediaSource.Id, reportedPlayMethod, playbackToken);
-            if (playbackToken != _playbackToken)
+            await WaitForHlsManifestReadyAsync(
+                streamUrl,
+                isHls,
+                playbackToken,
+                cancellationToken);
+            if (!IsCurrentPlaybackGeneration(playbackToken))
+                return;
+
+            var player = CreateNativePlayer(playbackToken);
+            await PreparePlayerAsync(
+                player,
+                streamUrl,
+                plan.ItemId,
+                _playSessionId,
+                plan.MediaSource.Id,
+                reportedPlayMethod,
+                isHls,
+                playbackToken,
+                cancellationToken);
+            if (!IsCurrentPlayer(player, playbackToken))
                 return;
 
             ApplyPendingNativeAudioOverride(playbackToken, plan.MediaSource);
             var subtitleInitResult = await ConfigureSubtitlesPreparedAsync(plan.MediaSource, plan.BurnInActive,
-                plan.EffectiveHasSelectedSubtitle, _initialSubtitleIndex, playbackToken);
+                plan.EffectiveHasSelectedSubtitle, _initialSubtitleIndex, plan.ItemId,
+                playbackToken, cancellationToken);
             var (pendingStartupNativeEmbeddedSubtitleIndex, pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream) = subtitleInitResult;
             if (_useParsedSubtitleRenderer)
                 TryDisableNativeSubtitleTrack();
 
-            await StartPlaybackAndSeekAsync(_startPositionMs, playbackToken);
-            if (playbackToken != _playbackToken)
+            await StartPlaybackAndSeekAsync(
+                player,
+                _startPositionMs,
+                playbackToken,
+                shouldBePlaying,
+                isHls,
+                cancellationToken);
+            if (!IsCurrentPlayer(player, playbackToken))
                 return;
 
             ApplyDisplayModeForCurrentVideo();
             ApplyPendingNativeAudioOverride(playbackToken, plan.MediaSource);
             await StabilizeSubtitlesPostStartAsync(plan.MediaSource, pendingStartupNativeEmbeddedSubtitleIndex,
-                pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream, playbackToken);
-            if (playbackToken != _playbackToken)
+                pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream,
+                playbackToken, cancellationToken);
+            if (!IsCurrentPlayer(player, playbackToken))
                 return;
 
-            FinalizePlaybackReporting(plan.ItemId, _playSessionId, plan.MediaSource.Id, reportedPlayMethod, _startPositionMs, playbackToken);
+            FinalizePlaybackReporting(
+                plan.ItemId,
+                _playSessionId,
+                plan.MediaSource.Id,
+                reportedPlayMethod,
+                _startPositionMs,
+                playbackToken,
+                shouldBePlaying);
         }
 
-        private void ShowPlaybackError(string message)
+        private void ShowPlaybackError(
+            string message,
+            int? playbackGeneration = null)
         {
             Tizen.Applications.CoreApplication.Post(() =>
             {
+                if (IsScreenHidden ||
+                    (playbackGeneration.HasValue &&
+                     !IsCurrentPlaybackGeneration(
+                         playbackGeneration.Value)))
+                {
+                    return;
+                }
+
                 if (_errorLabel == null)
                 {
                     _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
@@ -630,18 +817,6 @@ namespace JellyfinTizen.Screens
             _activeSubtitleWasExternal = false;
             _playerSidecarSubtitleActive = false;
             _forceNativeEmbeddedSelectionOnRestart = false;
-
-            _player = new Player();
-            _player.BufferingTime = new PlayerBufferingTime(PlayerBufferInitialMs, PlayerBufferResumeMs);
-
-            _player.ErrorOccurred += OnPlayerErrorOccurred;
-            _player.BufferingProgressChanged += OnBufferingProgressChanged;
-            _player.PlaybackCompleted += OnPlaybackCompleted;
-            _player.SubtitleUpdated += OnSubtitleUpdated;
-
-            _player.Display = new Display(Window.Default);
-            _player.DisplaySettings.Mode = PlayerDisplayMode.LetterBox;
-            _player.DisplaySettings.IsVisible = true;
             _isAnamorphicVideo = false;
             SetAspectToggleVisibility(visible: false);
 
@@ -658,7 +833,9 @@ namespace JellyfinTizen.Screens
             bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
-            int playbackToken)
+            bool preferFmp4HlsFirst,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
                 itemId,
@@ -667,8 +844,10 @@ namespace JellyfinTizen.Screens
                 overrideAudioIndex,
                 subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: requestedMediaSourceId,
-                preferTsOnlyHls: preferTsOnlyHls);
-            if (playbackToken != _playbackToken)
+                preferTsOnlyHls: preferTsOnlyHls,
+                preferFmp4HlsFirst: preferFmp4HlsFirst,
+                cancellationToken: cancellationToken);
+            if (!IsCurrentPlaybackGeneration(playbackToken))
                 return null;
             return playbackInfo;
         }
@@ -682,7 +861,9 @@ namespace JellyfinTizen.Screens
             bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
-            int playbackToken)
+            bool preferFmp4HlsFirst,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             if (currentPlaybackInfo?.MediaSources != null && currentPlaybackInfo.MediaSources.Count > 0)
                 return (currentPlaybackInfo, requestedMediaSourceId);
@@ -697,8 +878,10 @@ namespace JellyfinTizen.Screens
                 overrideAudioIndex,
                 subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: null,
-                preferTsOnlyHls: preferTsOnlyHls);
-            if (playbackToken != _playbackToken)
+                preferTsOnlyHls: preferTsOnlyHls,
+                preferFmp4HlsFirst: preferFmp4HlsFirst,
+                cancellationToken: cancellationToken);
+            if (!IsCurrentPlaybackGeneration(playbackToken))
                 return (null, requestedMediaSourceId);
 
             if (fallbackPlaybackInfo?.MediaSources != null && fallbackPlaybackInfo.MediaSources.Count > 0)
@@ -716,7 +899,9 @@ namespace JellyfinTizen.Screens
             bool explicitSubtitleOff,
             string requestedMediaSourceId,
             bool preferTsOnlyHls,
-            int playbackToken)
+            bool preferFmp4HlsFirst,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             string resolvedSourceId = string.IsNullOrWhiteSpace(requestedMediaSourceId)
                 ? ResolvePreferredMediaSource(currentPlaybackInfo)?.Id
@@ -733,8 +918,10 @@ namespace JellyfinTizen.Screens
                 overrideAudioIndex,
                 subtitleHandlingDisabled: explicitSubtitleOff,
                 mediaSourceId: requestedMediaSourceId,
-                preferTsOnlyHls: preferTsOnlyHls);
-            if (playbackToken != _playbackToken)
+                preferTsOnlyHls: preferTsOnlyHls,
+                preferFmp4HlsFirst: preferFmp4HlsFirst,
+                cancellationToken: cancellationToken);
+            if (!IsCurrentPlaybackGeneration(playbackToken))
                 return (null, requestedMediaSourceId);
 
             if (refinedPlaybackInfo?.MediaSources != null && refinedPlaybackInfo.MediaSources.Count > 0)
@@ -751,12 +938,17 @@ namespace JellyfinTizen.Screens
                 int? initialSubtitleIndex,
                 bool hasSelectedSubtitle,
                 bool burnInActive,
-                int playbackToken)
+                bool preferFmp4HlsFirst,
+                int playbackToken,
+                CancellationToken cancellationToken)
         {
             var mediaSource = ResolvePreferredMediaSource(playbackInfo);
             if (mediaSource == null)
                 return (null, null, false, burnInActive);
 
+            UpdateSourceVideoCodecHint(
+                mediaSource,
+                "playback-info");
             _currentMediaSource = mediaSource;
             _useFullscreenAspectMode = AppState.TryGetAspectMode(playbackMovieId, mediaSource.Id) ?? false;
             AlignRequestedSubtitleIndexForCurrentMediaSource(mediaSource);
@@ -778,8 +970,10 @@ namespace JellyfinTizen.Screens
                     forceBurnIn: false,
                     audioStreamIndex: overrideAudioIndex,
                     subtitleHandlingDisabled: true,
-                    mediaSourceId: mediaSource.Id);
-                if (playbackToken != _playbackToken)
+                    mediaSourceId: mediaSource.Id,
+                    preferFmp4HlsFirst: preferFmp4HlsFirst,
+                    cancellationToken: cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
                     return (null, null, false, burnInActive);
 
                 var subtitleOffSource = subtitleOffPlaybackInfo?.MediaSources?
@@ -793,6 +987,9 @@ namespace JellyfinTizen.Screens
                 {
                     playbackInfo = subtitleOffPlaybackInfo;
                     mediaSource = subtitleOffSource;
+                    UpdateSourceVideoCodecHint(
+                        mediaSource,
+                        "subtitle-off-playback-info");
                     _currentMediaSource = mediaSource;
                     _useFullscreenAspectMode = AppState.TryGetAspectMode(playbackMovieId, mediaSource.Id) ?? false;
                 }
@@ -805,13 +1002,19 @@ namespace JellyfinTizen.Screens
             return (mediaSource, playbackInfo, effectiveHasSelectedSubtitle, burnInActive);
         }
 
-        private void InitializePlaybackContext(PlaybackInfoResponse playbackInfo)
+        private void InitializePlaybackContext(
+            PlaybackInfoResponse playbackInfo,
+            int playbackToken)
         {
             _playSessionId = playbackInfo.PlaySessionId;
-            _ = LoadMediaSegmentsAsync();
+            FireAndForget(
+                LoadMediaSegmentsAsync(playbackToken, _movie?.Id),
+                nameof(LoadMediaSegmentsAsync));
             UpdateSmartActionTimerState();
             ApplyDisplayModeForCurrentVideo();
-            _ = LoadTrickplayInfoAsync();
+            FireAndForget(
+                LoadTrickplayInfoAsync(playbackToken, _movie?.Id),
+                nameof(LoadTrickplayInfoAsync));
         }
 
         private string RewriteStreamUrlForTailscale(string url)
@@ -862,6 +1065,7 @@ namespace JellyfinTizen.Screens
             var apiKey = AppState.AccessToken;
             var serverUrl = AppState.Jellyfin.ServerUrl;
             bool supportsDirectPlay = mediaSource.SupportsDirectPlay;
+            bool supportsDirectStream = mediaSource.SupportsDirectStream;
             bool supportsTranscoding = mediaSource.SupportsTranscoding;
             bool hasTranscodeUrl = !string.IsNullOrEmpty(mediaSource.TranscodingUrl);
             bool requiresServerManagedStream = burnInActive;
@@ -874,13 +1078,22 @@ namespace JellyfinTizen.Screens
                     streamUrl = UpsertQueryParam(streamUrl, "AudioStreamIndex", overrideAudioIndex.Value.ToString());
                 return streamUrl;
             }
-            else if (supportsTranscoding || requiresServerManagedStream)
+            else if (
+                supportsDirectStream ||
+                supportsTranscoding ||
+                requiresServerManagedStream)
             {
                 _playMethod = "Transcode";
                 if (!hasTranscodeUrl)
                 {
                     if (DebugSwitches.EnablePlaybackDebugOverlay)
-                        CaptureStreamDebugEvent("StartPlayback.MissingTranscodingUrl", $"mediaSource={mediaSource.Id},burnIn={burnInActive},supportsTranscoding={supportsTranscoding}");
+                    {
+                        CaptureStreamDebugEvent(
+                            "StartPlayback.MissingTranscodingUrl",
+                            $"mediaSource={mediaSource.Id},burnIn={burnInActive}," +
+                            $"supportsDirectStream={supportsDirectStream}," +
+                            $"supportsTranscoding={supportsTranscoding}");
+                    }
                     return null;
                 }
 
@@ -963,36 +1176,82 @@ namespace JellyfinTizen.Screens
         }
 
         private async Task PreparePlayerAsync(
+            Player player,
             string streamUrl,
             string playbackMovieId,
             string playSessionId,
             string mediaSourceId,
             string reportedPlayMethod,
-            int playbackToken)
+            bool isHls,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             var source = new MediaUriSource(streamUrl);
             SetReportingContext(playbackMovieId, playSessionId, mediaSourceId, reportedPlayMethod);
-            _player.SetSource(source);
+            if (!IsCurrentPlayer(player, playbackToken))
+                throw new OperationCanceledException(cancellationToken);
 
-            await WithTimeout(_player.PrepareAsync(), AppState.PlayerPrepareTimeoutMs);
-            if (playbackToken != _playbackToken)
-                return;
+            player.SetSource(source);
 
-            if (_player.State != PlayerState.Ready)
+            using var prepareCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            int prepareTimeoutMs = isHls
+                ? AppState.HlsPlayerPrepareTimeoutMs
+                : AppState.PlayerPrepareTimeoutMs;
+            prepareCancellation.CancelAfter(prepareTimeoutMs);
+            var prepareStopwatch = Stopwatch.StartNew();
+            LogPlaybackDiagnostic(
+                "Prepare.Begin",
+                $"generation={playbackToken},route={(isHls ? "hls" : "direct")},timeoutMs={prepareTimeoutMs}");
+            try
             {
-                throw new InvalidOperationException($"Player not in Ready state after preparation. Current state: {_player.State}");
+                await player.PrepareAsync(prepareCancellation.Token);
+            }
+            catch (OperationCanceledException) when (
+                !cancellationToken.IsCancellationRequested &&
+                prepareCancellation.IsCancellationRequested)
+            {
+                LogPlaybackDiagnostic(
+                    "Prepare.Timeout",
+                    $"generation={playbackToken},route={(isHls ? "hls" : "direct")},elapsedMs={prepareStopwatch.ElapsedMilliseconds},timeoutMs={prepareTimeoutMs}");
+                throw new TimeoutException(
+                    isHls
+                        ? "Native HLS player preparation timed out."
+                        : "Player preparation timed out.");
+            }
+            catch (OperationCanceledException)
+            {
+                LogPlaybackDiagnostic(
+                    "Prepare.Cancelled",
+                    $"generation={playbackToken},elapsedMs={prepareStopwatch.ElapsedMilliseconds}");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                LogPlaybackDiagnostic(
+                    "Prepare.Failed",
+                    $"generation={playbackToken},elapsedMs={prepareStopwatch.ElapsedMilliseconds},error={ex.GetType().Name}");
+                throw;
+            }
+
+            if (!IsCurrentPlayer(player, playbackToken))
+                throw new OperationCanceledException(cancellationToken);
+
+            LogPlaybackDiagnostic(
+                "Prepare.Complete",
+                $"generation={playbackToken},elapsedMs={prepareStopwatch.ElapsedMilliseconds}");
+            LogPlaybackMemorySnapshot(
+                "after-prepare",
+                player,
+                playbackToken);
+
+            if (player.State != PlayerState.Ready)
+            {
+                throw new InvalidOperationException(
+                    $"Player not in Ready state after preparation. Current state: {player.State}");
             }
 
             ApplyDisplayModeForCurrentVideo();
-        }
-
-        private static async Task WithTimeout(Task task, int timeoutMs)
-        {
-            var delayTask = Task.Delay(timeoutMs);
-            var completedTask = await Task.WhenAny(task, delayTask);
-            if (completedTask == delayTask)
-                throw new TimeoutException("Player preparation timed out.");
-            await task;
         }
 
         private async Task<(int? pendingStartupNativeEmbeddedSubtitleIndex, MediaStream pendingStartupNativeEmbeddedSubtitleStream, MediaStream pendingStartupParsedSubtitleStream)> ConfigureSubtitlesPreparedAsync(
@@ -1000,8 +1259,14 @@ namespace JellyfinTizen.Screens
             bool burnInActive,
             bool effectiveHasSelectedSubtitle,
             int? initialSubtitleIndex,
-            int playbackToken)
+            string playbackItemId,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentPlaybackGeneration(playbackToken))
+                throw new OperationCanceledException(cancellationToken);
+
             try { _ = _player.StreamInfo.GetVideoProperties(); } catch { }
             try { _ = _player.AudioTrackInfo.GetCount(); } catch { }
 
@@ -1049,7 +1314,16 @@ namespace JellyfinTizen.Screens
                         }
                         else
                         {
-                            bool downloadedApplied = await DownloadAndSetSubtitle(mediaSource.Id, selectedSubStream);
+                            bool downloadedApplied = await DownloadAndSetSubtitle(
+                                playbackItemId,
+                                mediaSource.Id,
+                                selectedSubStream,
+                                playbackToken,
+                                cancellationToken);
+                            if (!IsCurrentPlaybackGeneration(playbackToken))
+                                throw new OperationCanceledException(
+                                    cancellationToken);
+
                             if (downloadedApplied && _useParsedSubtitleRenderer)
                                 pendingStartupParsedSubtitleStream = selectedSubStream;
                             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent(
@@ -1060,6 +1334,12 @@ namespace JellyfinTizen.Screens
                     }
                 }
             }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
+                throw;
+            }
             catch { }
 
             if (_useParsedSubtitleRenderer) TryDisableNativeSubtitleTrack();
@@ -1067,14 +1347,52 @@ namespace JellyfinTizen.Screens
             return (pendingStartupNativeEmbeddedSubtitleIndex, pendingStartupNativeEmbeddedSubtitleStream, pendingStartupParsedSubtitleStream);
         }
 
-        private async Task StartPlaybackAndSeekAsync(int startPositionMs, int playbackToken)
+        private async Task StartPlaybackAndSeekAsync(
+            Player player,
+            int startPositionMs,
+            int playbackToken,
+            bool shouldBePlaying,
+            bool isHls,
+            CancellationToken cancellationToken)
         {
-            _player.Start();
+            if (!IsCurrentPlayer(player, playbackToken))
+                throw new OperationCanceledException(cancellationToken);
 
-            // Apply startup seek after Start() for faster resume - matches litefin's approach
-            // Litefin seeks after play() to avoid decoder initialization delays
+            player.Start();
+            _playbackShouldBePlaying = true;
+            StartFirstPlaybackPositionObserver(
+                player,
+                playbackToken,
+                cancellationToken);
+
+            // Apply startup seek only after Start so the native decoder is initialized.
             if (startPositionMs > 0)
-                await _player.SetPlayPositionAsync(startPositionMs, false);
+            {
+                if (isHls)
+                {
+                    await WaitForHlsInitialSeekReadyAsync(
+                        player,
+                        playbackToken,
+                        cancellationToken);
+                }
+
+                await SeekPlayerUnderGateAsync(
+                    player,
+                    playbackToken,
+                    startPositionMs,
+                    wasPlayingBeforeSeek: true,
+                    "StartupSeek",
+                    cancellationToken);
+            }
+
+            if (!IsCurrentPlayer(player, playbackToken))
+                throw new OperationCanceledException(cancellationToken);
+
+            if (!shouldBePlaying)
+            {
+                player.Pause();
+                _playbackShouldBePlaying = false;
+            }
         }
 
         private async Task StabilizeSubtitlesPostStartAsync(
@@ -1082,13 +1400,15 @@ namespace JellyfinTizen.Screens
             int? pendingStartupNativeEmbeddedSubtitleIndex,
             MediaStream pendingStartupNativeEmbeddedSubtitleStream,
             MediaStream pendingStartupParsedSubtitleStream,
-            int playbackToken)
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             if (_useParsedSubtitleRenderer && pendingStartupParsedSubtitleStream != null)
             {
                 bool parserNativeOffStable = await StabilizeStartupParsedSubtitleRendererAsync(
                     pendingStartupParsedSubtitleStream,
-                    playbackToken);
+                    playbackToken,
+                    cancellationToken);
                 if (DebugSwitches.EnablePlaybackDebugOverlay)
                     CaptureSubtitleDebugEvent(
                         "StartPlayback.ParserPostStart",
@@ -1119,7 +1439,8 @@ namespace JellyfinTizen.Screens
 
                 bool startupNativeResult = await TryApplyStartupNativeEmbeddedSubtitleAsync(
                     pendingStartupNativeEmbeddedSubtitleIndex.Value,
-                    playbackToken);
+                    playbackToken,
+                    cancellationToken);
                 if (DebugSwitches.EnablePlaybackDebugOverlay)
                     CaptureSubtitleDebugEvent(
                         "StartPlayback.NativePostStart",
@@ -1134,7 +1455,8 @@ namespace JellyfinTizen.Screens
             string mediaSourceId,
             string reportedPlayMethod,
             int startPositionMs,
-            int playbackToken)
+            int playbackToken,
+            bool shouldBePlaying)
         {
             ApplySubtitleOffset();
             _ = RefreshAnamorphicStateAsync(playbackMovieId, playbackToken);
@@ -1146,7 +1468,7 @@ namespace JellyfinTizen.Screens
                 mediaSourceId,
                 reportedPlayMethod,
                 Math.Max(0, (long)startPositionMs) * 10000,
-                isPaused: false,
+                isPaused: !shouldBePlaying,
                 eventName: "TimeUpdate",
                 _overrideAudioIndex,
                 GetReportedSubtitleStreamIndex());
@@ -1156,10 +1478,19 @@ namespace JellyfinTizen.Screens
                 out _);
         }
 
-        private async Task<bool> DownloadAndSetSubtitle(string mediaSourceId, MediaStream subtitleStream)
+        private async Task<bool> DownloadAndSetSubtitle(
+            string itemId,
+            string mediaSourceId,
+            MediaStream subtitleStream,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    throw new OperationCanceledException(cancellationToken);
+
                 bool isDirectPlay = string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase);
                 bool canDownloadSubtitle = subtitleStream != null && (subtitleStream.IsExternal || !isDirectPlay);
                 if (!canDownloadSubtitle)
@@ -1169,7 +1500,14 @@ namespace JellyfinTizen.Screens
                     return false;
                 }
 
-                subtitleStream = await ResolveSubtitleDeliveryStreamAsync(mediaSourceId, subtitleStream);
+                subtitleStream = await ResolveSubtitleDeliveryStreamAsync(
+                    itemId,
+                    mediaSourceId,
+                    subtitleStream,
+                    playbackToken,
+                    cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    throw new OperationCanceledException(cancellationToken);
 
                 if (DebugSwitches.EnablePlaybackDebugOverlay)
                 {
@@ -1217,7 +1555,10 @@ namespace JellyfinTizen.Screens
                 using var request = new HttpRequestMessage(HttpMethod.Get, downloadUrl);
                 jellyfinService?.ApplyAuthorizationHeader(request.Headers, apiKey);
 
-                using var response = await client.SendAsync(request);
+                using var response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
                 response.EnsureSuccessStatusCode();
 
                 // OOM protection: Check content length before downloading
@@ -1229,7 +1570,34 @@ namespace JellyfinTizen.Screens
                     return false;
                 }
 
-                var data = await response.Content.ReadAsByteArrayAsync();
+                using var responseStream =
+                    await response.Content.ReadAsStreamAsync(cancellationToken);
+                using var subtitleBuffer = new MemoryStream();
+                var readBuffer = new byte[81920];
+                while (true)
+                {
+                    int read = await responseStream.ReadAsync(
+                        readBuffer,
+                        0,
+                        readBuffer.Length,
+                        cancellationToken);
+                    if (read <= 0)
+                        break;
+
+                    if (subtitleBuffer.Length + read > SubtitleMaxSizeBytes)
+                    {
+                        if (DebugSwitches.EnablePlaybackDebugOverlay)
+                            CaptureSubtitleDebugEvent(
+                                "Subtitle.DownloadTooLarge",
+                                subtitleStream,
+                                $"size>{SubtitleMaxSizeBytes}");
+                        return false;
+                    }
+
+                    subtitleBuffer.Write(readBuffer, 0, read);
+                }
+
+                var data = subtitleBuffer.ToArray();
                 if (data.Length > SubtitleMaxSizeBytes)
                 {
                     if (DebugSwitches.EnablePlaybackDebugOverlay)
@@ -1237,7 +1605,12 @@ namespace JellyfinTizen.Screens
                     return false;
                 }
 
-                await File.WriteAllBytesAsync(localPath, data);
+                await File.WriteAllBytesAsync(
+                    localPath,
+                    data,
+                    cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    throw new OperationCanceledException(cancellationToken);
                 _externalSubtitlePath = localPath;
 
                 // Prefer app-rendered external subtitles to avoid sidecar/native switch glitches on Tizen.
@@ -1261,19 +1634,36 @@ namespace JellyfinTizen.Screens
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadApplied", subtitleStream, $"parsed={_useParsedSubtitleRenderer},ext={ext},path={System.IO.Path.GetFileName(localPath)}");
                 return true;
             }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
+                return false;
+            }
             catch (Exception)
             {
-                _externalSubtitlePath = null;
-                _useParsedSubtitleRenderer = false;
-                _playerSidecarSubtitleActive = false;
-                ClearParsedSubtitleCues();
-                StopSubtitleRenderTimer();
-                if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.DownloadFailed", subtitleStream);
+                if (IsCurrentPlaybackGeneration(playbackToken))
+                {
+                    _externalSubtitlePath = null;
+                    _useParsedSubtitleRenderer = false;
+                    _playerSidecarSubtitleActive = false;
+                    ClearParsedSubtitleCues();
+                    StopSubtitleRenderTimer();
+                    if (DebugSwitches.EnablePlaybackDebugOverlay)
+                        CaptureSubtitleDebugEvent(
+                            "Subtitle.DownloadFailed",
+                            subtitleStream);
+                }
                 return false;
             }
         }
 
-        private async Task<MediaStream> ResolveSubtitleDeliveryStreamAsync(string mediaSourceId, MediaStream subtitleStream)
+        private async Task<MediaStream> ResolveSubtitleDeliveryStreamAsync(
+            string itemId,
+            string mediaSourceId,
+            MediaStream subtitleStream,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             if (subtitleStream == null)
                 return null;
@@ -1281,21 +1671,29 @@ namespace JellyfinTizen.Screens
             if (!string.IsNullOrWhiteSpace(subtitleStream.DeliveryUrl))
                 return subtitleStream;
 
-            if (string.IsNullOrWhiteSpace(_movie?.Id) || string.IsNullOrWhiteSpace(mediaSourceId))
+            if (string.IsNullOrWhiteSpace(itemId) || string.IsNullOrWhiteSpace(mediaSourceId))
                 return subtitleStream;
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    throw new OperationCanceledException(cancellationToken);
+
                 if (DebugSwitches.EnablePlaybackDebugOverlay)
                     CaptureSubtitleDebugEvent("Subtitle.ResolveDeliveryStart", subtitleStream, $"mediaSource={mediaSourceId},playMethod={_playMethod}");
 
                 var refreshedInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(
-                    _movie.Id,
+                    itemId,
                     subtitleStream.Index,
                     forceBurnIn: false,
                     audioStreamIndex: _overrideAudioIndex,
                     subtitleHandlingDisabled: false,
-                    mediaSourceId: mediaSourceId);
+                    mediaSourceId: mediaSourceId,
+                    preferFmp4HlsFirst: ShouldPreferFmp4HlsFirst(),
+                    cancellationToken: cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    throw new OperationCanceledException(cancellationToken);
 
                 var refreshedSource = refreshedInfo?.MediaSources?
                     .FirstOrDefault(s => string.Equals(s.Id, mediaSourceId, StringComparison.OrdinalIgnoreCase));
@@ -1322,6 +1720,12 @@ namespace JellyfinTizen.Screens
                     CaptureSubtitleDebugEvent("Subtitle.ResolveDeliveryApplied", subtitleStream, $"deliveryExt={TryExtractSubtitleUrlExtension(subtitleStream.DeliveryUrl)}");
 
                 return subtitleStream;
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
+                throw;
             }
             catch
             {
@@ -1860,7 +2264,10 @@ namespace JellyfinTizen.Screens
             }
         }
 
-        private async Task<bool> TryApplyStartupNativeEmbeddedSubtitleAsync(int jellyfinStreamIndex, int playbackToken)
+        private async Task<bool> TryApplyStartupNativeEmbeddedSubtitleAsync(
+            int jellyfinStreamIndex,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             var switchableEmbedded = GetNativeSwitchableEmbeddedSubtitleStreams(_currentMediaSource);
             var targetStream = switchableEmbedded.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
@@ -1885,7 +2292,9 @@ namespace JellyfinTizen.Screens
                     return false;
 
                 if (attempt > 0)
-                    await Task.Delay(130 + (attempt * 45));
+                    await Task.Delay(
+                        130 + (attempt * 45),
+                        cancellationToken);
 
                 if (playbackToken != _playbackToken || _player == null)
                     return false;
@@ -1893,7 +2302,7 @@ namespace JellyfinTizen.Screens
                 if (primeFirstEmbeddedIndex.HasValue)
                 {
                     TrySelectNativeEmbeddedSubtitle(primeFirstEmbeddedIndex.Value);
-                    await Task.Delay(220);
+                    await Task.Delay(220, cancellationToken);
 
                     if (playbackToken != _playbackToken || _player == null)
                         return false;
@@ -1911,7 +2320,8 @@ namespace JellyfinTizen.Screens
                         switchableEmbedded,
                         targetSwitchableOrdinal,
                         playbackToken,
-                        attempt + 1);
+                        attempt + 1,
+                        cancellationToken);
                     if (stabilizeResult)
                         return true;
                 }
@@ -1929,7 +2339,8 @@ namespace JellyfinTizen.Screens
             List<MediaStream> switchableEmbedded,
             int targetSwitchableOrdinal,
             int playbackToken,
-            int attemptNumber)
+            int attemptNumber,
+            CancellationToken cancellationToken)
         {
             const int stabilizeWindowMs = 600;
             const int stabilizePollMs = 90;
@@ -1947,7 +2358,7 @@ namespace JellyfinTizen.Screens
 
             for (int tick = 1; tick <= maxTicks; tick++)
             {
-                await Task.Delay(stabilizePollMs);
+                await Task.Delay(stabilizePollMs, cancellationToken);
                 if (playbackToken != _playbackToken || _player == null)
                     return true;
 
@@ -2017,7 +2428,10 @@ namespace JellyfinTizen.Screens
             return successAfterWindow;
         }
 
-        private async Task<bool> StabilizeStartupParsedSubtitleRendererAsync(MediaStream targetStream, int playbackToken)
+        private async Task<bool> StabilizeStartupParsedSubtitleRendererAsync(
+            MediaStream targetStream,
+            int playbackToken,
+            CancellationToken cancellationToken)
         {
             const int stabilizeWindowMs = 600;
             const int stabilizePollMs = 90;
@@ -2038,7 +2452,7 @@ namespace JellyfinTizen.Screens
 
             for (int tick = 1; tick <= maxTicks; tick++)
             {
-                await Task.Delay(stabilizePollMs);
+                await Task.Delay(stabilizePollMs, cancellationToken);
                 if (playbackToken != _playbackToken || _player == null)
                     return true;
 
@@ -2378,16 +2792,32 @@ namespace JellyfinTizen.Screens
 
         private void StopSubtitleRenderTimer()
         {
+            var subtitleRenderTimer = _subtitleRenderTimer;
+            _subtitleRenderTimer = null;
             try
             {
-                _subtitleRenderTimer?.Stop();
-                _subtitleRenderTimer = null;
+                if (subtitleRenderTimer == null)
+                    return;
+
+                subtitleRenderTimer.Tick -= OnSubtitleRenderTick;
+                subtitleRenderTimer.Stop();
             }
             catch { }
         }
 
         private bool OnSubtitleRenderTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _subtitleRenderTimer) ||
+                !IsCurrentPlayer(
+                    _player,
+                    Volatile.Read(ref _activeNativePlayerGeneration)))
+            {
+                return false;
+            }
+
+            if (Volatile.Read(ref _nativeSeekInProgress) != 0)
+                return true;
+
             UpdateParsedSubtitleRender();
             return true;
         }
@@ -2812,16 +3242,39 @@ namespace JellyfinTizen.Screens
             CreateSubtitleOverlay();
             CreateSubtitleText();
 
-            _osdTimer = new Timer(5000);
-            _osdTimer.Tick += OnOsdTimerTick;
-            _progressTimer = new Timer(500);
-            _progressTimer.Tick += OnProgressTimerTick;
+            EnsureOsdTimersCreated();
         }
 
         private bool OnProgressTimerTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _progressTimer) ||
+                !IsCurrentPlayer(
+                    _player,
+                    Volatile.Read(ref _activeNativePlayerGeneration)))
+            {
+                return false;
+            }
+
+            if (Volatile.Read(ref _nativeSeekInProgress) != 0)
+                return true;
+
             UpdateProgress();
             return true;
+        }
+
+        private void EnsureOsdTimersCreated()
+        {
+            if (_osdTimer == null)
+            {
+                _osdTimer = new Timer(5000);
+                _osdTimer.Tick += OnOsdTimerTick;
+            }
+
+            if (_progressTimer == null)
+            {
+                _progressTimer = new Timer(500);
+                _progressTimer.Tick += OnProgressTimerTick;
+            }
         }
 
         private static string UpsertQueryParam(string url, string key, string value)
@@ -3257,20 +3710,52 @@ namespace JellyfinTizen.Screens
             if (TrySelectNativeAudioTrack(requestedStreamIndex))
                 return;
 
-            _ = RetryNativeAudioOverrideSelectionAsync(playbackToken, requestedStreamIndex);
+            FireAndForget(
+                RetryNativeAudioOverrideSelectionAsync(
+                    playbackToken,
+                    requestedStreamIndex,
+                    CurrentPlaybackCancellationToken),
+                nameof(RetryNativeAudioOverrideSelectionAsync));
         }
 
-        private async Task RetryNativeAudioOverrideSelectionAsync(int playbackToken, int jellyfinStreamIndex)
+        private async Task RetryNativeAudioOverrideSelectionAsync(
+            int playbackToken,
+            int jellyfinStreamIndex,
+            CancellationToken cancellationToken)
         {
-            await Task.Delay(140);
-            if (playbackToken != _playbackToken)
+            bool gateAcquired = false;
+            try
+            {
+                await Task.Delay(140, cancellationToken);
+                await _playbackTransitionGate.WaitAsync(cancellationToken);
+                gateAcquired = true;
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested)
+            {
                 return;
+            }
 
-            TrySelectNativeAudioTrack(jellyfinStreamIndex);
+            try
+            {
+                var player = _player;
+                if (!IsCurrentPlayer(player, playbackToken))
+                    return;
+
+                TrySelectNativeAudioTrack(jellyfinStreamIndex);
+            }
+            finally
+            {
+                if (gateAcquired)
+                    _playbackTransitionGate.Release();
+            }
         }
 
         private bool OnOsdTimerTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _osdTimer))
+                return false;
+
             // Never auto-hide while seek preview is active; otherwise preview can snap back to current time.
             if (_isSeeking || _isQueuedDirectionalSeekActive)
                 return true;
@@ -3685,6 +4170,9 @@ namespace JellyfinTizen.Screens
 
         private bool OnPlayPauseFeedbackTimerTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _playPauseFeedbackTimer))
+                return false;
+
             _playPauseFeedbackTimer?.Stop();
             if (_playPauseFeedbackContainer != null)
             {
@@ -3928,14 +4416,28 @@ namespace JellyfinTizen.Screens
             );
         }
 
-        private async Task LoadMediaSegmentsAsync()
+        private async Task LoadMediaSegmentsAsync(
+            int playbackToken,
+            string itemId)
         {
+            var cancellationToken = CurrentPlaybackCancellationToken;
             try
             {
-                var segments = await AppState.Jellyfin.GetMediaSegmentsAsync(_movie.Id, "Intro", "Outro");
+                var segments = await AppState.Jellyfin.GetMediaSegmentsAsync(
+                    itemId,
+                    cancellationToken,
+                    "Intro",
+                    "Outro");
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    return;
+
                 if (segments == null || segments.Count == 0)
                 {
-                    RunOnUiThread(UpdateSmartActionTimerState);
+                    RunOnUiThread(() =>
+                    {
+                        if (IsCurrentPlaybackGeneration(playbackToken))
+                            UpdateSmartActionTimerState();
+                    });
                     return;
                 }
 
@@ -3953,13 +4455,29 @@ namespace JellyfinTizen.Screens
                     _hasOutroSegment = true;
                 }
 
-                RunOnUiThread(UpdateSmartActionTimerState);
+                RunOnUiThread(() =>
+                {
+                    if (IsCurrentPlaybackGeneration(playbackToken))
+                        UpdateSmartActionTimerState();
+                });
+            }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
             }
             catch
             {
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    return;
+
                 _hasIntroSegment = false;
                 _hasOutroSegment = false;
-                RunOnUiThread(UpdateSmartActionTimerState);
+                RunOnUiThread(() =>
+                {
+                    if (IsCurrentPlaybackGeneration(playbackToken))
+                        UpdateSmartActionTimerState();
+                });
             }
         }
 
@@ -3989,6 +4507,18 @@ namespace JellyfinTizen.Screens
 
         private bool OnSmartActionTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _smartActionTimer) ||
+                !IsCurrentPlayer(
+                    _player,
+                    Volatile.Read(ref _activeNativePlayerGeneration)))
+            {
+                return false;
+            }
+
+            if (IsPlaybackTransitionRunning ||
+                Volatile.Read(ref _nativeSeekInProgress) != 0)
+                return true;
+
             EvaluateSmartActions();
             return true;
         }
@@ -4119,9 +4649,14 @@ namespace JellyfinTizen.Screens
 
         private async Task SkipIntroAsync()
         {
-            if (_player == null || !_hasIntroSegment)
+            if (_player == null ||
+                !_hasIntroSegment ||
+                IsPlaybackTransitionRunning)
+            {
                 return;
+            }
 
+            int playbackToken = Volatile.Read(ref _playbackToken);
             int duration = GetDuration();
             int targetMs = _introSegment.EndMs + IntroSkipSafetyMs;
             if (duration > 0)
@@ -4134,14 +4669,18 @@ namespace JellyfinTizen.Screens
                 _isSeeking = true;
                 _seekPreviewMs = targetMs;
                 UpdatePreviewBar();
-                // Direct seek without complex error handling - matches litefin's approach
-                await _player.SetPlayPositionAsync(targetMs, false);
+                await SeekCurrentPlayerAsync(
+                    targetMs,
+                    "SkipIntro");
             }
             finally
             {
-                _isSeeking = false;
-                UpdateProgress();
-                HideSmartPopup();
+                if (IsCurrentPlaybackGeneration(playbackToken))
+                {
+                    _isSeeking = false;
+                    UpdateProgress();
+                    HideSmartPopup();
+                }
             }
         }
 
@@ -4467,12 +5006,22 @@ namespace JellyfinTizen.Screens
 
         private void UpdateProgress()
         {
-            if (_player == null || _progressTrack == null) return;
+            var player = _player;
+            int playbackGeneration =
+                Volatile.Read(ref _activeNativePlayerGeneration);
+            if (player == null || _progressTrack == null) return;
 
             int duration = GetDuration();
             if (duration <= 0) return;
 
             int rawPos = _isSeeking ? _seekPreviewMs : GetPlayPositionMs();
+            if (!_isSeeking)
+            {
+                MaybeLogFirstPlaybackPosition(
+                    player,
+                    playbackGeneration,
+                    rawPos);
+            }
             if (!_isSeeking && !_initialSeekDone && _startPositionMs > 0)
             {
                 if (Math.Abs(rawPos - _startPositionMs) > 2000 && rawPos < 2000) rawPos = _startPositionMs;
@@ -4525,7 +5074,7 @@ namespace JellyfinTizen.Screens
 
         private void BeginSeek()
         {
-            if (_player == null)
+            if (_player == null || IsPlaybackTransitionRunning)
                 return;
 
             _isSeeking = true;
@@ -4536,45 +5085,33 @@ namespace JellyfinTizen.Screens
         private async Task CommitSeekAsync(int visualHoldMs = 0)
         {
             if (!_isSeeking || _player == null || IsStopRequested()) return;
-            var player = _player;
+            int playbackToken = Volatile.Read(ref _playbackToken);
             int seekTargetMs = _seekPreviewMs;
             try
             {
-                if (visualHoldMs > 0)
-                {
-                    await Task.Delay(visualHoldMs);
-                }
-                if (IsStopRequested())
-                    return;
-
                 // Pause progress timer during seek to reduce CPU/memory pressure
                 _progressTimer?.Stop();
-
-                // Direct seek without retry logic - matches litefin's fast approach
-                // AVPlay seekTo is reliable and doesn't need complex retry/timeout mechanisms
-                await player.SetPlayPositionAsync(seekTargetMs, false);
-                _lastKnownPositionTicks = Math.Max(0, (long)seekTargetMs) * 10000;
-            }
-            catch (Exception ex)
-            {
-                // Log seek failure but don't attempt recovery - let player continue from current position
-                Tizen.Log.Warn(
-                    "PlaybackLifecycle",
-                    $"Seek failed targetMs={seekTargetMs} generation={_activeReportGeneration} error={ex.GetType().Name}");
+                await SeekCurrentPlayerAsync(
+                    seekTargetMs,
+                    "Seek",
+                    visualHoldMs);
             }
             finally
             {
-                _isSeeking = false;
-                _pendingSeekDeltaSeconds = 0;
-                _isQueuedDirectionalSeekActive = false;
-                _hiddenSeekBurstCount = 0;
-                _hiddenSeekBurstDirection = 0;
-                HideSeekFeedback();
-                HideTrickplayPreview();
-                if (!IsStopRequested())
+                if (IsCurrentPlaybackGeneration(playbackToken))
                 {
-                    _progressTimer?.Start();
-                    UpdateProgress();
+                    _isSeeking = false;
+                    _pendingSeekDeltaSeconds = 0;
+                    _isQueuedDirectionalSeekActive = false;
+                    _hiddenSeekBurstCount = 0;
+                    _hiddenSeekBurstDirection = 0;
+                    HideSeekFeedback();
+                    HideTrickplayPreview();
+                    if (!IsStopRequested())
+                    {
+                        _progressTimer?.Start();
+                        UpdateProgress();
+                    }
                 }
             }
         }
@@ -4693,8 +5230,13 @@ namespace JellyfinTizen.Screens
 
         private bool OnSeekCommitTimerTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _seekCommitTimer))
+                return false;
+
             _seekCommitTimer?.Stop();
-            _ = CommitSeekAsync(220);
+            FireAndForget(
+                CommitSeekAsync(220),
+                nameof(CommitSeekAsync));
             return false;
         }
 
@@ -4722,19 +5264,37 @@ namespace JellyfinTizen.Screens
             _ = UpdateTrickplayPreviewAsync();
         }
 
-        private async Task LoadTrickplayInfoAsync()
+        private async Task LoadTrickplayInfoAsync(
+            int playbackToken,
+            string itemId)
         {
+            var cancellationToken = CurrentPlaybackCancellationToken;
             try
             {
-                _trickplayInfo = await AppState.Jellyfin.GetTrickplayInfoAsync(_movie.Id);
+                var trickplayInfo =
+                    await AppState.Jellyfin.GetTrickplayInfoAsync(
+                        itemId,
+                        cancellationToken);
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    return;
+
+                _trickplayInfo = trickplayInfo;
                 _trickplayLastThumbnailIndex = -1;
                 _trickplayLastTileIndex = -1;
                 _trickplayUpdateToken++;
                 if (_trickplayInfo == null)
                     HideTrickplayPreview();
             }
+            catch (OperationCanceledException) when (
+                cancellationToken.IsCancellationRequested ||
+                !IsCurrentPlaybackGeneration(playbackToken))
+            {
+            }
             catch
             {
+                if (!IsCurrentPlaybackGeneration(playbackToken))
+                    return;
+
                 _trickplayInfo = null;
                 HideTrickplayPreview();
             }
@@ -5045,6 +5605,9 @@ namespace JellyfinTizen.Screens
 
         private void ShowSubtitleOverlay()
         {
+            if (IsPlaybackTransitionRunning || IsStopRequested())
+                return;
+
             if (_player == null) return;
             if (_subtitleOverlay == null) CreateSubtitleOverlay();
             HideAudioOverlay();
@@ -5637,8 +6200,12 @@ namespace JellyfinTizen.Screens
 
         private async Task SelectSubtitleAsync()
         {
+            if (IsPlaybackTransitionRunning || IsStopRequested())
+                return;
             if (_subtitleListContainer == null) return;
             if (_subtitleIndex < 0 || _subtitleIndex >= _subtitleListContainer.ChildCount) return;
+            int selectionGeneration = Volatile.Read(ref _playbackToken);
+            var selectionCancellationToken = BeginSubtitleOperation();
             var selectedRow = _subtitleListContainer.GetChildAt((uint)_subtitleIndex);
             string selectedName = selectedRow.Name;
             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureStreamDebugEvent("Subtitle.UISelect", $"row={_subtitleIndex},name={selectedName}");
@@ -5684,11 +6251,10 @@ namespace JellyfinTizen.Screens
                 {
                     if (DebugSwitches.EnablePlaybackDebugOverlay && requiresRestartForUnsupportedSubtitleOff)
                         CaptureSubtitleDebugEvent("Subtitle.BurnInOffRestart", activeStreamBeforeOff, "reason=unsupportedByProfile");
-                    long currentPos = GetPlayPositionMs();
-                    EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-                    StopPlaybackLocal();
-                    _startPositionMs = (int)currentPos;
-                    StartPlayback();
+                    await RestartPlaybackAsync(
+                        "Subtitle.OffRestart",
+                        PlaybackStopReason.PlaybackRestart,
+                        applySelection: null);
                     return;
                 }
                 // No restart path — persist "subtitles off" immediately so a later
@@ -5750,11 +6316,10 @@ namespace JellyfinTizen.Screens
             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleTopology("Subtitle.SelectTopology", _currentMediaSource);
             if (_burnIn)
             {
-                long currentPos = GetPlayPositionMs();
-                EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-                StopPlaybackLocal();
-                _startPositionMs = (int)currentPos;
-                StartPlayback();
+                await RestartPlaybackAsync(
+                    "Subtitle.BurnInRestart",
+                    PlaybackStopReason.PlaybackRestart,
+                    applySelection: null);
                 return;
             }
 
@@ -5768,11 +6333,10 @@ namespace JellyfinTizen.Screens
                     if (DebugSwitches.EnablePlaybackDebugOverlay)
                         CaptureSubtitleDebugEvent("Subtitle.DirectPlayToBurnInRestart", subStream, $"reason=unsupportedByProfile,newCodec={subStream?.Codec ?? "-"}");
                     _forceNativeEmbeddedSelectionOnRestart = false;
-                    long currentPos = GetPlayPositionMs();
-                    EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-                    StopPlaybackLocal();
-                    _startPositionMs = (int)currentPos;
-                    StartPlayback();
+                    await RestartPlaybackAsync(
+                        "Subtitle.DirectPlayToBurnInRestart",
+                        PlaybackStopReason.PlaybackRestart,
+                        applySelection: null);
                     return;
                 }
 
@@ -5784,11 +6348,10 @@ namespace JellyfinTizen.Screens
                 {
                     if (DebugSwitches.EnablePlaybackDebugOverlay)
                         CaptureSubtitleDebugEvent("Subtitle.BurnInSwitchRestart", subStream, $"reason=unsupportedByProfile,prevCodec={previousSubStream?.Codec ?? "-"},newCodec={subStream?.Codec ?? "-"}");
-                    long currentPos = GetPlayPositionMs();
-                    EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-                    StopPlaybackLocal();
-                    _startPositionMs = (int)currentPos;
-                    StartPlayback();
+                    await RestartPlaybackAsync(
+                        "Subtitle.BurnInSwitchRestart",
+                        PlaybackStopReason.PlaybackRestart,
+                        applySelection: null);
                     return;
                 }
 
@@ -5813,16 +6376,28 @@ namespace JellyfinTizen.Screens
 
                     if (!TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
                     {
-                        await Task.Delay(120);
+                        try
+                        {
+                            await Task.Delay(
+                                120,
+                                selectionCancellationToken);
+                        }
+                        catch (OperationCanceledException) when (
+                            selectionCancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
+                        if (!IsCurrentPlaybackGeneration(selectionGeneration))
+                            return;
+
                         if (!TrySelectNativeEmbeddedSubtitle(jellyfinStreamIndex))
                         {
                             if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.NativeSwitchFailRestart", subStream);
-                            _forceNativeEmbeddedSelectionOnRestart = true;
-                            long currentPos = GetPlayPositionMs();
-                            EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-                            StopPlaybackLocal();
-                            _startPositionMs = (int)currentPos;
-                            StartPlayback();
+                            await RestartPlaybackAsync(
+                                "Subtitle.NativeSwitchFailRestart",
+                                PlaybackStopReason.PlaybackRestart,
+                                () => _forceNativeEmbeddedSelectionOnRestart = true);
                             return;
                         }
                     }
@@ -5834,7 +6409,14 @@ namespace JellyfinTizen.Screens
                 }
 
                 // Non-directplay path always relies on Jellyfin delivery URL + parsed renderer.
-                if (await DownloadAndSetSubtitle(_currentMediaSource.Id, subStream))
+                string itemId = _movie?.Id;
+                string mediaSourceId = _currentMediaSource?.Id;
+                if (await DownloadAndSetSubtitle(
+                        itemId,
+                        mediaSourceId,
+                        subStream,
+                        selectionGeneration,
+                        selectionCancellationToken))
                 {
                     ApplySubtitleOffset();
                     if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ParserSwitchSuccess", subStream);
@@ -5843,6 +6425,9 @@ namespace JellyfinTizen.Screens
                     ReportProgressToServer(force: true);
                     return;
                 }
+
+                if (!IsCurrentPlaybackGeneration(selectionGeneration))
+                    return;
 
                 if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("Subtitle.ParserSwitchFail", subStream);
             }
@@ -5871,6 +6456,9 @@ namespace JellyfinTizen.Screens
 
         private void ShowAudioOverlay()
         {
+            if (IsPlaybackTransitionRunning || IsStopRequested())
+                return;
+
             if (_player == null) return;
             if (_audioOverlay == null) CreateAudioOverlay();
             HideSubtitleOverlay();
@@ -6049,10 +6637,18 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
+            var player = sender as Player;
+            int generation = Volatile.Read(
+                ref _activeNativePlayerGeneration);
+            string subtitleText = e?.Text;
+            uint subtitleDuration = e?.Duration ?? 0;
             RunOnUiThread(() =>
             {
-                string text = e.Text;
-                string normalizedText = NormalizeParsedCueText(text);
+                if (!IsCurrentPlayer(player, generation))
+                    return;
+
+                string normalizedText =
+                    NormalizeParsedCueText(subtitleText);
                 _subtitleHideTimer?.Stop();
 
                 if (_subtitleText == null || !_subtitleEnabled || string.IsNullOrWhiteSpace(normalizedText))
@@ -6065,7 +6661,10 @@ namespace JellyfinTizen.Screens
                 _subtitleText.Text = normalizedText;
                 _subtitleText.Show();
 
-                uint hideDurationMs = (uint)Math.Clamp((long)e.Duration, 200L, uint.MaxValue);
+                uint hideDurationMs = (uint)Math.Clamp(
+                    (long)subtitleDuration,
+                    200L,
+                    uint.MaxValue);
                 RestartSubtitleHideTimer(hideDurationMs);
             });
         }
@@ -6082,6 +6681,9 @@ namespace JellyfinTizen.Screens
 
         private bool OnSubtitleHideTimerTick(object sender, Timer.TickEventArgs e)
         {
+            if (!ReferenceEquals(sender, _subtitleHideTimer))
+                return false;
+
             if (_subtitleText == null)
                 return false;
 
@@ -6105,6 +6707,8 @@ namespace JellyfinTizen.Screens
 
         private void SelectAudioTrack()
         {
+            if (IsPlaybackTransitionRunning || IsStopRequested())
+                return;
             if (_audioListContainer == null) return;
             if (_audioIndex < 0 || _audioIndex >= _audioListContainer.ChildCount) return;
             var selectedRow = _audioListContainer.GetChildAt((uint)_audioIndex);
@@ -6112,33 +6716,13 @@ namespace JellyfinTizen.Screens
             if (!int.TryParse(selectedRow.Name, out int jellyfinStreamIndex)) return;
 
             HideAudioOverlay();
-            var selectedStream = _currentMediaSource?.MediaStreams?.FirstOrDefault(s => s.Index == jellyfinStreamIndex);
-            string codec = selectedStream?.Codec?.ToLower() ?? "";
-
-            bool isDirectPlayableByProfile = IsAudioCodecDirectPlayableByProfile(codec);
-            bool canTryNativeDirectPlaySwitch =
-                string.Equals(_playMethod, "DirectPlay", StringComparison.OrdinalIgnoreCase) &&
-                isDirectPlayableByProfile;
-
+            Interlocked.Exchange(
+                ref _latestRequestedAudioIndex,
+                jellyfinStreamIndex);
             _audioSelectionUserOverride = true;
-            if (canTryNativeDirectPlaySwitch)
-            {
-                if (TrySelectNativeAudioTrack(jellyfinStreamIndex))
-                {
-                    // Native switch redraws play state without a server restart, so the
-                    // periodic progress report would lag the new track by up to one tick.
-                    // Mirror litefin's `mediastreamschange` by pushing a progress report now.
-                    ReportProgressToServer(force: true);
-                    return;
-                }
-            }
-
-            long currentPos = GetPlayPositionMs();
-            _overrideAudioIndex = jellyfinStreamIndex;
-            EndPlaybackWithoutStop(PlaybackStopReason.PlaybackRestart);
-            StopPlaybackLocal();
-            _startPositionMs = (int)currentPos;
-            StartPlayback();
+            FireAndForget(
+                SwitchAudioTrackAsync(jellyfinStreamIndex),
+                nameof(SwitchAudioTrackAsync));
         }
 
         private void ShowOSD()
@@ -6146,6 +6730,7 @@ namespace JellyfinTizen.Screens
             EnsureOsdCreated();
             if (_osd == null)
                 return;
+            EnsureOsdTimersCreated();
 
             var wasVisible = _osdVisible;
             if (!wasVisible) _osdFocusRow = 0;
@@ -6323,7 +6908,22 @@ namespace JellyfinTizen.Screens
             CreateOSD();
         }
 
-        private bool OnReportProgressTick(object sender, Timer.TickEventArgs e) { ReportProgressToServer(force: false); return true; }
+        private bool OnReportProgressTick(object sender, Timer.TickEventArgs e)
+        {
+            if (!ReferenceEquals(sender, _reportProgressTimer) ||
+                !IsCurrentPlayer(
+                    _player,
+                    Volatile.Read(ref _activeNativePlayerGeneration)))
+            {
+                return false;
+            }
+
+            if (IsPlaybackTransitionRunning)
+                return true;
+
+            ReportProgressToServer(force: false);
+            return true;
+        }
 
         private void SetReportingContext(string itemId, string playSessionId, string mediaSourceId, string playMethod)
         {
@@ -6437,8 +7037,11 @@ namespace JellyfinTizen.Screens
         private bool TryGetLivePlayerPositionTicks(out long positionTicks)
         {
             positionTicks = 0;
-            if (_player == null)
+            if (_player == null ||
+                Volatile.Read(ref _nativeSeekInProgress) != 0)
+            {
                 return false;
+            }
 
             try
             {
@@ -6460,13 +7063,15 @@ namespace JellyfinTizen.Screens
 
         private void StopPlaybackReportTimer()
         {
-            if (_reportProgressTimer == null)
+            var reportProgressTimer = _reportProgressTimer;
+            _reportProgressTimer = null;
+            if (reportProgressTimer == null)
                 return;
 
             try
             {
-                _reportProgressTimer.Tick -= OnReportProgressTick;
-                _reportProgressTimer.Stop();
+                reportProgressTimer.Tick -= OnReportProgressTick;
+                reportProgressTimer.Stop();
             }
             catch (Exception ex)
             {
@@ -6478,11 +7083,8 @@ namespace JellyfinTizen.Screens
 
         private void StartPlaybackReportTimer()
         {
-            if (_reportProgressTimer == null)
-                _reportProgressTimer = new Timer(5000);
-
-            _reportProgressTimer.Tick -= OnReportProgressTick;
-            _reportProgressTimer.Stop();
+            StopPlaybackReportTimer();
+            _reportProgressTimer = new Timer(5000);
             _reportProgressTimer.Tick += OnReportProgressTick;
             _reportProgressTimer.Start();
         }
@@ -6544,35 +7146,6 @@ namespace JellyfinTizen.Screens
             TailscaleDebugLog.Add($"[PlaybackLifecycle] {message}");
         }
 
-        private void WaitForPlaybackStop(Task<PlaybackStopResult> stopTask, PlaybackStopReason reason)
-        {
-            if (stopTask == null)
-                return;
-
-            try
-            {
-                if (!stopTask.Wait(AppState.PlaybackLifecycleFlushTimeoutMs))
-                {
-                    Tizen.Log.Warn(
-                        "PlaybackLifecycle",
-                        $"Lifecycle flush timed out generation={_activeReportGeneration} reason={reason}");
-                    _playbackReportCoordinator.CancelPendingReports();
-                    if (!stopTask.Wait(500))
-                    {
-                        Tizen.Log.Warn(
-                            "PlaybackLifecycle",
-                            $"Lifecycle cancellation did not drain generation={_activeReportGeneration} reason={reason}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Tizen.Log.Error(
-                    "PlaybackLifecycle",
-                    $"Lifecycle flush failed generation={_activeReportGeneration} reason={reason} error={ex.GetType().Name}");
-            }
-        }
-
         private static string ShortPlaybackId(string value)
         {
             if (string.IsNullOrWhiteSpace(value))
@@ -6589,7 +7162,30 @@ namespace JellyfinTizen.Screens
             bool shouldNavigate =
                 Interlocked.CompareExchange(ref _navigateBackAfterStopRequested, 1, 0) == 0;
             var stopTask = RequestPlaybackStop(reason);
-            await stopTask.ConfigureAwait(false);
+            if (shouldNavigate)
+            {
+                InvalidatePlaybackGeneration();
+                bool gateAcquired = false;
+                Interlocked.Increment(ref _playbackTransitionCount);
+                try
+                {
+                    // Invalidation cancels PrepareAsync/HLS/subtitle work before
+                    // we wait. Joining the same gate preserves the invariant that
+                    // teardown never overlaps creation, preparation or seek.
+                    await _playbackTransitionGate.WaitAsync();
+                    gateAcquired = true;
+                    await StopPlaybackLocalAsync(
+                        $"navigation-{reason}");
+                }
+                finally
+                {
+                    if (gateAcquired)
+                        _playbackTransitionGate.Release();
+                    Interlocked.Decrement(ref _playbackTransitionCount);
+                }
+            }
+
+            await stopTask;
 
             if (!shouldNavigate)
                 return;
@@ -6607,7 +7203,11 @@ namespace JellyfinTizen.Screens
                 return;
             }
 
-            if (_player == null || _isSeeking || _isFinished || _currentMediaSource == null)
+            if (_player == null ||
+                _isSeeking ||
+                Volatile.Read(ref _nativeSeekInProgress) != 0 ||
+                _isFinished ||
+                _currentMediaSource == null)
                 return;
             if (string.IsNullOrWhiteSpace(_activeReportItemId) ||
                 string.IsNullOrWhiteSpace(_activeReportPlaySessionId) ||
@@ -6669,6 +7269,12 @@ namespace JellyfinTizen.Screens
 
         private void OnPlaybackCompleted(object sender, EventArgs e)
         {
+            var player = sender as Player;
+            int generation = Volatile.Read(
+                ref _activeNativePlayerGeneration);
+            if (!IsCurrentPlayer(player, generation))
+                return;
+
             if (_suppressPlaybackCompletedNavigation)
                 return;
 
@@ -6676,45 +7282,140 @@ namespace JellyfinTizen.Screens
             _isFinished = true;
             EndPlaybackWithoutStop(PlaybackStopReason.PlaybackCompleted);
             FinalizeCurrentItemAsPlayed();
-            RunOnUiThread(() => { if (_movie.ItemType == "Episode") PlayNextEpisode(); else NavigationService.NavigateBack(); });
+            RunOnUiThread(() =>
+            {
+                if (!IsCurrentPlayer(player, generation))
+                    return;
+
+                if (_movie.ItemType == "Episode")
+                    PlayNextEpisode();
+                else
+                    NavigationService.NavigateBack();
+            });
         }
 
-        private void StopPlaybackLocal()
+        private void AbortPlaybackOnHide()
         {
-            _playbackToken++;
-            _suppressPlaybackCompletedNavigation = true;
+            // OnHide has already invalidated the generation and canceled all
+            // managed operations. Finish native teardown through the same gate
+            // without blocking the NUI thread; stale startup/seek continuations
+            // cannot publish state because the screen is marked hidden.
+            FireAndForget(
+                StopPlaybackAfterHideAsync(),
+                nameof(StopPlaybackAfterHideAsync));
+        }
+
+        private async Task StopPlaybackAfterHideAsync()
+        {
+            bool gateAcquired = false;
+            Interlocked.Increment(ref _playbackTransitionCount);
             try
             {
-                _osdVisible = false;
-                _audioOverlayVisible = false;
-                _subtitleOverlayVisible = false;
-                _playbackInfoOverlayVisible = false;
-                _subtitleOffsetAdjustMode = false;
-                UiAnimator.StopAndDispose(ref _osdAnimation);
-                UiAnimator.StopAndDispose(ref _topOsdAnimation);
-                UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation);
-                UiAnimator.StopAndDispose(ref _audioOverlayAnimation);
-                UiAnimator.StopAndDispose(ref _playbackInfoOverlayAnimation);
-                UiAnimator.StopAndDispose(ref _subtitleTextAnimation);
-                UiAnimator.StopAndDispose(ref _seekFeedbackAnimation);
-                UiAnimator.StopAndDispose(ref _playPauseFadeAnimation);
-                UiAnimator.StopAndDisposeAll(_focusAnimations);
-                if (_playPauseFeedbackTimer != null)
-                {
-                    _playPauseFeedbackTimer.Tick -= OnPlayPauseFeedbackTimerTick;
-                    _playPauseFeedbackTimer.Stop();
-                }
-                _playPauseFeedbackTimer = null;
-                if (_seekCommitTimer != null)
-                {
-                    _seekCommitTimer.Tick -= OnSeekCommitTimerTick;
-                    _seekCommitTimer.Stop();
-                }
-                _seekCommitTimer = null;
-                _pendingSeekDeltaSeconds = 0;
-                _isQueuedDirectionalSeekActive = false;
-                _isSeeking = false;
-                _seekPreviewMs = 0;
+                await _playbackTransitionGate.WaitAsync();
+                gateAcquired = true;
+                await StopPlaybackLocalAsync("screen-hide");
+            }
+            finally
+            {
+                if (gateAcquired)
+                    _playbackTransitionGate.Release();
+                Interlocked.Decrement(ref _playbackTransitionCount);
+            }
+        }
+
+        private Task StopPlaybackLocalAsync(string stage)
+        {
+            StopPlaybackLocalCore(stage);
+            return Task.CompletedTask;
+        }
+
+        private void StopPlaybackLocalCore(string stage)
+        {
+            _suppressPlaybackCompletedNavigation = true;
+            CancelPlaybackOperationTokens();
+            CancelPendingSeeksForStop();
+            StopPlaybackReportTimer();
+
+            var player = Interlocked.Exchange(ref _player, null);
+            var eventBindings =
+                Interlocked.Exchange(ref _playerEventBindings, null);
+            int nativeGeneration =
+                Interlocked.Exchange(ref _activeNativePlayerGeneration, -1);
+            int diagnosticGeneration = nativeGeneration >= 0
+                ? nativeGeneration
+                : Volatile.Read(ref _playbackToken);
+
+            LogPlaybackMemorySnapshot(
+                $"before-teardown-{stage}",
+                player,
+                diagnosticGeneration,
+                allowNativeStateRead:
+                    Volatile.Read(ref _nativeSeekInProgress) == 0);
+
+            _osdVisible = false;
+            _audioOverlayVisible = false;
+            _subtitleOverlayVisible = false;
+            _playbackInfoOverlayVisible = false;
+            _subtitleOffsetAdjustMode = false;
+            _pendingSeekDeltaSeconds = 0;
+            _isQueuedDirectionalSeekActive = false;
+            _isSeeking = false;
+            Interlocked.Exchange(ref _nativeSeekInProgress, 0);
+            _seekPreviewMs = 0;
+            _subtitleHideDeadlineUtc = DateTime.MinValue;
+
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _osdAnimation),
+                "animation-osd");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _topOsdAnimation),
+                "animation-top-osd");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _subtitleOverlayAnimation),
+                "animation-subtitle-overlay");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _audioOverlayAnimation),
+                "animation-audio-overlay");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _playbackInfoOverlayAnimation),
+                "animation-playback-info");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _subtitleTextAnimation),
+                "animation-subtitle-text");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _seekFeedbackAnimation),
+                "animation-seek-feedback");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDispose(ref _playPauseFadeAnimation),
+                "animation-play-pause");
+            RunPlaybackCleanupStep(
+                () => UiAnimator.StopAndDisposeAll(_focusAnimations),
+                "animation-focus");
+
+            var playPauseFeedbackTimer = _playPauseFeedbackTimer;
+            _playPauseFeedbackTimer = null;
+            RunPlaybackCleanupStep(() =>
+            {
+                if (playPauseFeedbackTimer == null)
+                    return;
+
+                playPauseFeedbackTimer.Tick -= OnPlayPauseFeedbackTimerTick;
+                playPauseFeedbackTimer.Stop();
+            }, "play-pause-feedback-timer");
+
+            var seekCommitTimer = _seekCommitTimer;
+            _seekCommitTimer = null;
+            RunPlaybackCleanupStep(() =>
+            {
+                if (seekCommitTimer == null)
+                    return;
+
+                seekCommitTimer.Tick -= OnSeekCommitTimerTick;
+                seekCommitTimer.Stop();
+            }, "seek-commit-timer");
+
+            try
+            {
                 _seekFeedbackContainer?.Hide();
                 HideTrickplayPreview();
                 HideSmartPopup();
@@ -6735,20 +7436,6 @@ namespace JellyfinTizen.Screens
                     $"Local playback UI cleanup failed generation={_activeReportGeneration} error={ex.GetType().Name}");
             }
 
-            ClearReportingContext();
-            _currentMediaSource = null;
-            _playSessionId = null;
-            _externalSubtitlePath = null;
-            _activeSubtitleWasExternal = false;
-            _forceNativeEmbeddedSelectionOnRestart = false;
-            _playerSidecarSubtitleActive = false;
-            if (DebugSwitches.EnablePlaybackDebugOverlay) CaptureSubtitleDebugEvent("StopPlayback");
-
-            CleanupNativePlaybackResources();
-        }
-
-        private void CleanupNativePlaybackResources()
-        {
             var progressTimer = _progressTimer;
             _progressTimer = null;
             RunPlaybackCleanupStep(() =>
@@ -6793,21 +7480,30 @@ namespace JellyfinTizen.Screens
                 subtitleHideTimer.Stop();
             }, "subtitle-hide-timer");
 
-            var player = _player;
-            _player = null;
-            if (player != null)
+            var smartActionTimer = _smartActionTimer;
+            _smartActionTimer = null;
+            RunPlaybackCleanupStep(() =>
+            {
+                if (smartActionTimer == null)
+                    return;
+
+                smartActionTimer.Tick -= OnSmartActionTick;
+                smartActionTimer.Stop();
+            }, "smart-action-timer");
+
+            if (player != null && eventBindings != null)
             {
                 RunPlaybackCleanupStep(
-                    () => player.PlaybackCompleted -= OnPlaybackCompleted,
+                    () => player.PlaybackCompleted -= eventBindings.PlaybackCompleted,
                     "unsubscribe-completed");
                 RunPlaybackCleanupStep(
-                    () => player.ErrorOccurred -= OnPlayerErrorOccurred,
+                    () => player.ErrorOccurred -= eventBindings.ErrorOccurred,
                     "unsubscribe-error");
                 RunPlaybackCleanupStep(
-                    () => player.BufferingProgressChanged -= OnBufferingProgressChanged,
+                    () => player.BufferingProgressChanged -= eventBindings.BufferingProgressChanged,
                     "unsubscribe-buffering");
                 RunPlaybackCleanupStep(
-                    () => player.SubtitleUpdated -= OnSubtitleUpdated,
+                    () => player.SubtitleUpdated -= eventBindings.SubtitleUpdated,
                     "unsubscribe-subtitle");
             }
 
@@ -6815,12 +7511,51 @@ namespace JellyfinTizen.Screens
             _useParsedSubtitleRenderer = false;
             RunPlaybackCleanupStep(ClearParsedSubtitleCues, "clear-subtitle-cues");
 
-            if (player == null)
-                return;
+            if (player != null)
+            {
+                try
+                {
+                    RunPlaybackCleanupStep(
+                        () => player.DisplaySettings.IsVisible = false,
+                        "player-hide-display");
+                    RunPlaybackCleanupStep(player.Stop, "player-stop");
+                }
+                finally
+                {
+                    try
+                    {
+                        RunPlaybackCleanupStep(player.Unprepare, "player-unprepare");
+                    }
+                    finally
+                    {
+                        // Dispose is the final guaranteed native release attempt even
+                        // when Stop or Unprepare fails on partially prepared firmware.
+                        RunPlaybackCleanupStep(player.Dispose, "player-dispose");
+                    }
+                }
 
-            RunPlaybackCleanupStep(player.Stop, "player-stop");
-            RunPlaybackCleanupStep(player.Unprepare, "player-unprepare");
-            RunPlaybackCleanupStep(player.Dispose, "player-dispose");
+                Interlocked.Exchange(
+                    ref _lastNativePlayerDisposeTimestamp,
+                    Stopwatch.GetTimestamp());
+            }
+
+            LogPlaybackMemorySnapshot(
+                $"after-dispose-{stage}",
+                null,
+                diagnosticGeneration);
+
+            // Reporting data is captured by RequestPlaybackStop or
+            // EndPlaybackWithoutStop before teardown enters this method.
+            ClearReportingContext();
+            _currentMediaSource = null;
+            _playSessionId = null;
+            _externalSubtitlePath = null;
+            _activeSubtitleWasExternal = false;
+            _forceNativeEmbeddedSelectionOnRestart = false;
+            _playerSidecarSubtitleActive = false;
+            _playbackShouldBePlaying = false;
+            if (DebugSwitches.EnablePlaybackDebugOverlay)
+                CaptureSubtitleDebugEvent("StopPlayback");
         }
 
         private void RunPlaybackCleanupStep(Action action, string operation)
@@ -6839,10 +7574,76 @@ namespace JellyfinTizen.Screens
 
         private void OnPlayerErrorOccurred(object sender, PlayerErrorOccurredEventArgs e)
         {
+            var player = sender as Player;
+            int generation = Volatile.Read(
+                ref _activeNativePlayerGeneration);
+            string error = e?.Error.ToString() ?? "Unknown";
+            LogPlaybackDiagnostic(
+                "Player.Error",
+                $"generation={generation},error={error},route={_reportedPlayMethod}");
+
+            RunOnUiThread(() =>
+            {
+                if (!IsCurrentPlayer(player, generation))
+                    return;
+
+                _playbackShouldBePlaying = false;
+                ShowPlaybackError(
+                    $"The native player reported {error}.",
+                    generation);
+            });
         }
 
         private void OnBufferingProgressChanged(object sender, BufferingProgressChangedEventArgs e)
         {
+            var player = sender as Player;
+            int generation = Volatile.Read(
+                ref _activeNativePlayerGeneration);
+            if (!IsCurrentPlayer(player, generation))
+                return;
+
+            int percent = Math.Clamp(e?.Percent ?? 0, 0, 100);
+            if (percent < 100 &&
+                Interlocked.CompareExchange(
+                    ref _bufferingActive,
+                    1,
+                    0) == 0)
+            {
+                Interlocked.Exchange(
+                    ref _bufferingStartedTimestamp,
+                    Stopwatch.GetTimestamp());
+                _lastBufferingLogPercent = -1;
+                LogPlaybackDiagnostic(
+                    "Buffering.Begin",
+                    $"generation={generation},route={_reportedPlayMethod}");
+            }
+
+            bool shouldLogProgress =
+                (percent == 100 && _lastBufferingLogPercent != 100) ||
+                _lastBufferingLogPercent < 0 ||
+                percent >= _lastBufferingLogPercent + 25;
+            if (shouldLogProgress)
+            {
+                _lastBufferingLogPercent = percent;
+                LogPlaybackDiagnostic(
+                    "Buffering.Progress",
+                    $"generation={generation},percent={percent}");
+            }
+
+            if (percent >= 100)
+            {
+                bool hadBufferingStart =
+                    Interlocked.Exchange(ref _bufferingActive, 0) != 0;
+                long startedAt = Interlocked.Exchange(
+                    ref _bufferingStartedTimestamp,
+                    0);
+                if (hadBufferingStart || shouldLogProgress)
+                {
+                    LogPlaybackDiagnostic(
+                        "Buffering.Complete",
+                        $"generation={generation},elapsedMs={GetElapsedMilliseconds(startedAt)}");
+                }
+            }
         }
 
         public void HandleKey(AppKey key)
@@ -6870,6 +7671,30 @@ namespace JellyfinTizen.Screens
             {
                 CaptureStreamDebugEvent("KeyPressed", $"key={key}");
             }
+            if (IsPlaybackTransitionRunning)
+            {
+                if (key == AppKey.Back)
+                {
+                    FireAndForget(
+                        ReportStopThenNavigateBackAsync(
+                            PlaybackStopReason.Back),
+                        nameof(ReportStopThenNavigateBackAsync));
+                }
+                else if (key == AppKey.MediaStop)
+                {
+                    FireAndForget(
+                        ReportStopThenNavigateBackAsync(
+                            PlaybackStopReason.MediaStop),
+                        nameof(ReportStopThenNavigateBackAsync));
+                }
+                else
+                {
+                    LogPlaybackDiagnostic(
+                        "Key.IgnoredDuringTransition",
+                        $"key={key}");
+                }
+                return;
+            }
             switch (key)
             {
                 case AppKey.MediaPlayPause:
@@ -6893,7 +7718,10 @@ namespace JellyfinTizen.Screens
                     }
                     break;
                 case AppKey.MediaStop:
-                    _ = ReportStopThenNavigateBackAsync(PlaybackStopReason.MediaStop);
+                    FireAndForget(
+                        ReportStopThenNavigateBackAsync(
+                            PlaybackStopReason.MediaStop),
+                        nameof(ReportStopThenNavigateBackAsync));
                     break;
                 case AppKey.MediaNext: PlayNextEpisode(); break;
                 case AppKey.MediaRewind:
@@ -7048,7 +7876,13 @@ namespace JellyfinTizen.Screens
                         HideOSD();
                     }
                     else if (_osdVisible) HideOSD();
-                    else _ = ReportStopThenNavigateBackAsync(PlaybackStopReason.Back);
+                    else
+                    {
+                        FireAndForget(
+                            ReportStopThenNavigateBackAsync(
+                                PlaybackStopReason.Back),
+                            nameof(ReportStopThenNavigateBackAsync));
+                    }
                     break;
                 case AppKey.Red:
                     TogglePlaybackInfoOverlay();
@@ -7132,8 +7966,6 @@ namespace JellyfinTizen.Screens
             {
                 _isEpisodeSwitchInProgress = true;
 
-                EndPlaybackWithoutStop(PlaybackStopReason.EpisodeSwitch);
-                StopPlaybackLocal();
                 var orderedEpisodes = (await AppState.Jellyfin.GetEpisodesAsync(_movie.SeriesId, lightweight: true) ?? new List<JellyfinMovie>())
                     .Where(e => e != null && e.ItemType == "Episode")
                     .OrderBy(e => e.ParentIndexNumber)
@@ -7192,19 +8024,26 @@ namespace JellyfinTizen.Screens
                     return;
                 }
 
-                LoadNewMedia(target);
+                await RestartPlaybackAsync(
+                    "Episode.Switch",
+                    PlaybackStopReason.EpisodeSwitch,
+                    applySelection: null,
+                    restoreCurrentPosition: false,
+                    configureNewSession: () => LoadNewMediaState(target),
+                    shouldBePlayingOverride: true);
+                if (!IsScreenHidden)
+                    ShowOSD();
             }
             catch (Exception) { NavigationService.NavigateBack(); }
             finally { _isEpisodeSwitchInProgress = false; }
         }
 
-        private void LoadNewMedia(JellyfinMovie newMovie)
+        private void LoadNewMediaState(JellyfinMovie newMovie)
         {
             _movie = newMovie;
             RefreshTopOsdTitleView();
             _isFinished = false;
             _completedForCurrentItem = false;
-            _isEpisodeSwitchInProgress = false;
             _isSeeking = false;
             _seekPreviewMs = 0;
             _startPositionMs = newMovie.PlaybackPositionTicks > 0 ? (int)(newMovie.PlaybackPositionTicks / 10000) : 0;
@@ -7218,8 +8057,10 @@ namespace JellyfinTizen.Screens
             if (_clockLabel != null) _clockLabel.Text = FormatClockTime(DateTime.Now);
             if (_endsAtLabel != null) _endsAtLabel.Text = string.Empty;
             _overrideAudioIndex = null;
+            _latestRequestedAudioIndex = NoPendingAudioSelection;
             _audioSelectionUserOverride = false;
             _preferredMediaSourceId = null;
+            _sourceVideoCodecHint = null;
             _currentMediaSource = null;
             ClearRequestedSubtitleSelectionState();
             _useParsedSubtitleRenderer = false;
@@ -7227,16 +8068,22 @@ namespace JellyfinTizen.Screens
             StopSubtitleRenderTimer();
             ResetTrickplayState();
             ResetSmartActionState();
-            StartPlayback();
-            ShowOSD();
         }
 
         private bool TogglePause()
         {
-            if (_player == null || IsStopRequested()) return false;
+            if (_player == null ||
+                IsStopRequested() ||
+                IsPlaybackTransitionRunning)
+            {
+                return false;
+            }
+
             if (_player.State == PlayerState.Playing)
             {
                 _player.Pause();
+                _playbackShouldBePlaying = false;
+                CancelSeekSafetyCheck();
                 ShowPlayPauseFeedback(isPaused: true);
                 ReportProgressToServer(force: true);
                 return true;
@@ -7244,6 +8091,7 @@ namespace JellyfinTizen.Screens
             else if (_player.State == PlayerState.Paused)
             {
                 _player.Start();
+                _playbackShouldBePlaying = true;
                 ShowPlayPauseFeedback(isPaused: false);
                 ReportProgressToServer(force: true);
                 return false;

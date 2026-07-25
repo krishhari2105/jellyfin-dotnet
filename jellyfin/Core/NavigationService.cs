@@ -346,9 +346,10 @@ namespace JellyfinTizen.Core
             {
                 if (_currentScreen is IPlaybackLifecycleHandler playbackLifecycle)
                 {
-                    // Request first so VideoPlayerScreen closes the report gate with the
-                    // lifecycle-specific reason. OnHide joins that same task and performs
-                    // its bounded wait before disposing the native player.
+                    // Request first so VideoPlayerScreen captures an immutable stop
+                    // snapshot with the lifecycle-specific reason. OnHide invalidates
+                    // pending work and joins the player's async transition gate without
+                    // blocking the NUI thread; reporting drains independently.
                     _ = playbackLifecycle.RequestPlaybackStop(reason);
                 }
             }

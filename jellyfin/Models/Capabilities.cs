@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json.Serialization;
 
 namespace JellyfinTizen.Models
 {
@@ -82,6 +83,7 @@ namespace JellyfinTizen.Models
     {
         public string Name { get; set; }
         public List<DirectPlayProfile> DirectPlayProfiles { get; set; }
+        public List<DirectPlayProfile> DirectStreamProfiles { get; set; }
         public List<TranscodingProfile> TranscodingProfiles { get; set; }
         public List<SubtitleProfile> SubtitleProfiles { get; set; }
         public List<CodecProfile> CodecProfiles { get; set; }
@@ -96,6 +98,11 @@ namespace JellyfinTizen.Models
             if (DirectPlayProfiles != null)
             {
                 foreach (var p in DirectPlayProfiles)
+                    p.Validate();
+            }
+            if (DirectStreamProfiles != null)
+            {
+                foreach (var p in DirectStreamProfiles)
                     p.Validate();
             }
             if (TranscodingProfiles != null)
@@ -140,6 +147,16 @@ namespace JellyfinTizen.Models
         public string AudioCodec { get; set; }
         public string Protocol { get; set; }  // "hls"
         public string Context { get; set; }   // "Streaming"
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? MaxAudioChannels { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? MinSegments { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public int? SegmentLength { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? BreakOnNonKeyFrames { get; set; }
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public bool? EnableAudioVbrEncoding { get; set; }
 
         public void Validate()
         {
@@ -149,6 +166,12 @@ namespace JellyfinTizen.Models
                 throw new InvalidOperationException("TranscodingProfile.Type is required");
             if (string.IsNullOrWhiteSpace(Protocol))
                 throw new InvalidOperationException("TranscodingProfile.Protocol is required");
+            if (MaxAudioChannels.HasValue && MaxAudioChannels.Value <= 0)
+                throw new InvalidOperationException("TranscodingProfile.MaxAudioChannels must be positive if set");
+            if (MinSegments.HasValue && MinSegments.Value <= 0)
+                throw new InvalidOperationException("TranscodingProfile.MinSegments must be positive if set");
+            if (SegmentLength.HasValue && SegmentLength.Value <= 0)
+                throw new InvalidOperationException("TranscodingProfile.SegmentLength must be positive if set");
         }
     }
 

@@ -207,7 +207,9 @@ namespace JellyfinTizen.Screens
                 // and therefore has no balancing HideLoadingOverlay, so showing it there would
                 // leave the overlay stuck.)
                 NavigationService.ShowLoadingOverlay("Loading details...");
-                _ = LoadMediaSourcesAndSubtitlesAsync(forceRefresh: true);
+                FireAndForget(
+                    ReloadMediaSourcesAndSubtitlesAsync(forceRefresh: true),
+                    nameof(ReloadMediaSourcesAndSubtitlesAsync));
                 // Litefin-style: always re-fetch server-truth resume state on every OnShow.
                 _ = RefreshResumeStateFromServerAsync();
                 if (_buttons.Count > 0)
@@ -385,64 +387,7 @@ namespace JellyfinTizen.Screens
             FocusEpisode(0);
         }
 
-        private async Task LoadMediaSourcesAndSubtitlesAsync(bool forceRefresh = false)
-        {
-            if (!forceRefresh && _mediaSourcesLoaded && _subtitleStreamsLoaded)
-                return;
-
-            try
-            {
-                var playbackInfo = await AppState.Jellyfin.GetPlaybackInfoAsync(_mediaItem.Id);
-                _mediaSources = playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
-
-                if (_mediaSources.Count == 0)
-                {
-                    _mediaSources.Add(new MediaSourceInfo
-                    {
-                        Id = _mediaItem.Id,
-                        Name = "Default"
-                    });
-                }
-
-                _mediaSourcesLoaded = true;
-                _selectedMediaSourceIndex = Math.Clamp(_selectedMediaSourceIndex, 0, _mediaSources.Count - 1);
-
-                // Extract subtitle streams from selected media source to avoid redundant API call
-                var currentSource = _mediaSources[_selectedMediaSourceIndex];
-                _subtitleStreams = currentSource?.MediaStreams?
-                    .Where(s => s.Type == "Subtitle")
-                    .ToList() ?? new List<MediaStream>();
-                _subtitleStreamsLoaded = true;
-
-                if (forceRefresh)
-                {
-                    _audioSelectionUserOverride = false;
-                    _subtitleSelectionUserOverride = false;
-                }
-                NormalizeSelectionStateForCurrentMediaSource();
-                // Re-derive Resume button state from the authoritative
-                // GetMediaItem().PlaybackPositionTicks BEFORE repainting, so this
-                // network-fetch-completion path cannot stomp an optimistic local update with
-                // stale field state. RebuildActionButtons is only the dumb repaint step.
-                ReconcileResumeButtonFromMediaItem();
-                RebuildActionButtons(includeVersionButton: _mediaSources.Count > 1);
-                UpdateVersionButtonText();
-                UpdateMetadataView();
-                ScheduleActionButtonReflow();
-
-                if (_buttons.Count > 0)
-                    FocusButton(_buttonIndex);
-            }
-            catch (Exception ex)
-            {
-                TailscaleDebugLog.Add($"MovieDetailsScreen: Failed to load media sources on load/retry: {ex.Message}");
-                _mediaSourcesLoaded = false;
-                _subtitleStreamsLoaded = false;
-                throw;
-            }
-        }
-
-        private void ScheduleActionButtonReflow()
+        protected override void ScheduleActionButtonReflow()
         {
             if (_actionButtonReflowScheduled || _buttonGroup == null)
                 return;
@@ -479,7 +424,9 @@ namespace JellyfinTizen.Screens
                     MoveEpisodeFocus(1);
                     break;
                 case AppKey.Enter:
-                    PlayMedia(_episodes[_episodeIndex], 0);
+                    FireAndForget(
+                        PlayMediaAsync(_episodes[_episodeIndex], 0),
+                        nameof(PlayMediaAsync));
                     break;
                 case AppKey.Back:
                     NavigationService.NavigateBack();
@@ -512,31 +459,12 @@ namespace JellyfinTizen.Screens
         protected override JellyfinMovie GetMediaItem() => _mediaItem;
         protected override int ThumbnailWidthForLayout => PosterWidth;
         protected override bool UseFallbackForResolution => true;
-        protected override async void PlayMedia(JellyfinMovie media, int startPositionMs)
+        protected override Task PlayMediaAsync(
+            JellyfinMovie media,
+            int startPositionMs)
         {
-            if (!_mediaSourcesLoaded)
-            {
-                try
-                {
-                    NavigationService.ShowReconnectOverlay("Retrieving media details...");
-                    await LoadMediaSourcesAndSubtitlesAsync();
-                }
-                catch (Exception ex)
-                {
-                    TailscaleDebugLog.Add($"PlayMedia: Retry failed: {ex.Message}");
-                }
-                finally
-                {
-                    NavigationService.HideReconnectOverlay();
-                }
-            }
-
-            if (!_mediaSourcesLoaded || _mediaSources == null || _mediaSources.Count == 0)
-            {
-                ShowErrorMessage("Server unreachable. Check connection and try again.");
-                return;
-            }
-
+            // VideoPlayerScreen performs the authoritative PlaybackInfo request.
+            // Details metadata is optional and must never block Play/Resume.
             NavigationService.Navigate(
                 new VideoPlayerScreen(
                     media,
@@ -545,9 +473,9 @@ namespace JellyfinTizen.Screens
                     AppState.BurnInSubtitles,
                     GetSelectedMediaSourceId(),
                     GetEffectiveSelectedAudioIndex(),
-                    GetSelectedSubtitleCodec()
-                )
-            );
+                    GetSelectedSubtitleCodec(),
+                    GetSelectedVideoCodec()));
+            return Task.CompletedTask;
         }
     }
 }

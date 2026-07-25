@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
@@ -34,6 +35,7 @@ namespace JellyfinTizen.Screens
         protected abstract JellyfinMovie GetMediaItem();
         protected abstract int ThumbnailWidthForLayout { get; }
         protected virtual bool UseFallbackForResolution => false;
+        protected virtual void ScheduleActionButtonReflow() { }
 
         // =====================================================================
         // CONSTANTS (identical in both original screens)
@@ -91,6 +93,7 @@ namespace JellyfinTizen.Screens
         protected bool _actionButtonReflowScheduled;
         protected TextLabel _errorLabel;
         protected ThreadingTimer _errorTimer;
+        private int _mediaMetadataRequestGeneration;
 
         // =====================================================================
         // METADATA UI FIELDS (moved from both derived screens)
@@ -341,25 +344,26 @@ namespace JellyfinTizen.Screens
             if (_buttonGroup == null || _buttonRowTop == null || _buttonRowBottom == null)
                 return;
 
+            var nextButtons = BuildActionButtonRegistry(includeVersionButton);
             DetailsScreenHelpers.ClearRowChildren(_buttonRowTop);
             DetailsScreenHelpers.ClearRowChildren(_buttonRowBottom);
-            _buttons.Clear();
             int topRowAvailableWidth = ResolveTopActionRowAvailableWidth();
             int topRowUsedWidth = 0;
             bool wrappedToSecondRow = false;
 
-            AddActionButton(_playButton);
-            if (_resumeButton != null) AddActionButton(_resumeButton);
-            AddActionButton(_audioButton);
-            AddActionButton(_subtitleButton);
-            if (includeVersionButton) AddActionButton(_versionButton);
+            foreach (var button in nextButtons)
+                AddActionButton(button);
 
+            // Publish the new logical registry only after every NUI row operation
+            // succeeds. If a native UI operation throws, the previous registry remains
+            // usable instead of leaving visible but inert buttons.
+            _buttons.Clear();
+            _buttons.AddRange(nextButtons);
             _buttonIndex = Math.Clamp(_buttonIndex, 0, Math.Max(0, _buttons.Count - 1));
 
             void AddActionButton(View button)
             {
                 if (button == null) return;
-                _buttons.Add(button);
                 if (wrappedToSecondRow)
                 {
                     _buttonRowBottom.Add(button);
@@ -380,8 +384,44 @@ namespace JellyfinTizen.Screens
             }
         }
 
+        private List<View> BuildActionButtonRegistry(bool includeVersionButton)
+        {
+            var buttons = new List<View>(5);
+            if (_playButton != null) buttons.Add(_playButton);
+            if (_resumeButton != null) buttons.Add(_resumeButton);
+            if (_audioButton != null) buttons.Add(_audioButton);
+            if (_subtitleButton != null) buttons.Add(_subtitleButton);
+            if (includeVersionButton && _versionButton != null)
+                buttons.Add(_versionButton);
+            return buttons;
+        }
+
+        private void EnsureActionButtonRegistry()
+        {
+            if (_buttons.Count > 0)
+                return;
+
+            bool includeVersionButton =
+                _versionButton != null &&
+                (_mediaSources?.Count ?? 0) > 1;
+            var recoveredButtons =
+                BuildActionButtonRegistry(includeVersionButton);
+            if (recoveredButtons.Count == 0)
+                return;
+
+            _buttons.AddRange(recoveredButtons);
+            _buttonIndex = Math.Clamp(
+                _buttonIndex,
+                0,
+                _buttons.Count - 1);
+            TailscaleDebugLog.Add(
+                $"{GetType().Name}: Recovered action-button registry " +
+                $"({_buttons.Count} buttons).");
+        }
+
         protected void MoveFocus(int delta)
         {
+            EnsureActionButtonRegistry();
             if (_buttons.Count == 0) return;
             var newIndex = Math.Clamp(_buttonIndex + delta, 0, _buttons.Count - 1);
             FocusButton(newIndex);
@@ -461,58 +501,159 @@ namespace JellyfinTizen.Screens
 
         protected void ActivateFocusedButton()
         {
+            EnsureActionButtonRegistry();
             if (_buttonIndex < 0 || _buttonIndex >= _buttons.Count) return;
             var focusedButton = _buttons[_buttonIndex];
             if (focusedButton == _playButton)
             {
-                PlayMedia(GetMediaItem(), 0);
+                FireAndForget(
+                    PlayMediaAsync(GetMediaItem(), 0),
+                    nameof(PlayMediaAsync));
                 return;
             }
             if (_resumeButton != null && focusedButton == _resumeButton)
             {
-                PlayMedia(GetMediaItem(), TicksToMs(GetMediaItem().PlaybackPositionTicks));
+                FireAndForget(
+                    PlayMediaAsync(
+                        GetMediaItem(),
+                        TicksToMs(GetMediaItem().PlaybackPositionTicks)),
+                    nameof(PlayMediaAsync));
                 return;
             }
-            if (focusedButton == _audioButton) { ShowAudioPanel(); return; }
-            if (focusedButton == _subtitleButton) { ShowSubtitlePanel(); return; }
+            if (focusedButton == _audioButton)
+            {
+                if (_mediaSourcesLoaded &&
+                    GetAvailableAudioStreams().Count > 0)
+                {
+                    ShowAudioPanel();
+                }
+                else
+                {
+                    FireAndForget(
+                        ReloadAndShowTrackPanelAsync(DetailsPanelMode.Audio),
+                        nameof(ReloadAndShowTrackPanelAsync));
+                }
+                return;
+            }
+            if (focusedButton == _subtitleButton)
+            {
+                if (_mediaSourcesLoaded && _subtitleStreamsLoaded)
+                {
+                    ShowSubtitlePanel();
+                }
+                else
+                {
+                    FireAndForget(
+                        ReloadAndShowTrackPanelAsync(DetailsPanelMode.Subtitle),
+                        nameof(ReloadAndShowTrackPanelAsync));
+                }
+                return;
+            }
             if (focusedButton == _versionButton) { CycleMediaSource(); return; }
         }
 
         // =====================================================================
         // SELECTION PANELS (identical)
         // =====================================================================
-        protected void ShowSubtitlePanel()
+        private void ShowSubtitlePanel()
         {
             if (_selectionPanel == null) return;
             var subtitleStreams = GetAvailableSubtitleStreams();
-            var options = new List<DetailsSelectionOption> { new DetailsSelectionOption("OFF_INDEX", "OFF") };
+            var options = new List<DetailsSelectionOption>
+            {
+                new DetailsSelectionOption("OFF_INDEX", "OFF")
+            };
             int selectedIndex = 0;
             foreach (var stream in subtitleStreams)
             {
-                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), DetailsScreenHelpers.FormatSubtitleStreamOption(stream)));
-                if (_selectedSubtitleIndex.HasValue && stream.Index == _selectedSubtitleIndex.Value)
+                options.Add(new DetailsSelectionOption(
+                    stream.Index.ToString(CultureInfo.InvariantCulture),
+                    DetailsScreenHelpers.FormatSubtitleStreamOption(stream)));
+                if (_selectedSubtitleIndex.HasValue &&
+                    stream.Index == _selectedSubtitleIndex.Value)
+                {
                     selectedIndex = options.Count - 1;
+                }
             }
+
             _selectionPanelMode = DetailsPanelMode.Subtitle;
-            _selectionPanel.Show("Subtitles", options, selectedIndex, UiTheme.PlayerOverlayItem);
+            _selectionPanel.Show(
+                "Subtitles",
+                options,
+                selectedIndex,
+                UiTheme.PlayerOverlayItem);
         }
 
-        protected void ShowAudioPanel()
+        private void ShowAudioPanel()
         {
             if (_selectionPanel == null) return;
             var audioStreams = GetAvailableAudioStreams();
-            if (audioStreams.Count == 0) return;
-            int? selectedAudioIndex = GetEffectiveSelectedAudioIndex(audioStreams);
+            if (audioStreams.Count == 0)
+            {
+                ShowErrorMessage(
+                    "No audio tracks were reported for this source.");
+                return;
+            }
+
+            int? selectedAudioIndex =
+                GetEffectiveSelectedAudioIndex(audioStreams);
             int selectedIndex = 0;
-            var options = new List<DetailsSelectionOption>(audioStreams.Count);
+            var options =
+                new List<DetailsSelectionOption>(audioStreams.Count);
             foreach (var stream in audioStreams)
             {
-                options.Add(new DetailsSelectionOption(stream.Index.ToString(CultureInfo.InvariantCulture), DetailsScreenHelpers.FormatAudioStreamOption(stream)));
-                if (selectedAudioIndex.HasValue && stream.Index == selectedAudioIndex.Value)
+                options.Add(new DetailsSelectionOption(
+                    stream.Index.ToString(CultureInfo.InvariantCulture),
+                    DetailsScreenHelpers.FormatAudioStreamOption(stream)));
+                if (selectedAudioIndex.HasValue &&
+                    stream.Index == selectedAudioIndex.Value)
+                {
                     selectedIndex = options.Count - 1;
+                }
             }
+
             _selectionPanelMode = DetailsPanelMode.Audio;
-            _selectionPanel.Show("Audio Tracks", options, selectedIndex, UiTheme.PlayerAudioItem);
+            _selectionPanel.Show(
+                "Audio Tracks",
+                options,
+                selectedIndex,
+                UiTheme.PlayerAudioItem);
+        }
+
+        private async Task ReloadAndShowTrackPanelAsync(
+            DetailsPanelMode panelMode)
+        {
+            try
+            {
+                // Do not wait behind the speculative OnShow request. A button press
+                // starts its own bounded server request so user input cannot be trapped
+                // behind a stale background task.
+                bool metadataApplied =
+                    await ReloadMediaSourcesAndSubtitlesAsync(
+                        forceRefresh: true);
+                if (!metadataApplied)
+                    return;
+
+                RunOnUiThread(() =>
+                {
+                    if (panelMode == DetailsPanelMode.Audio)
+                        ShowAudioPanel();
+                    else
+                        ShowSubtitlePanel();
+                });
+            }
+            catch (Exception ex)
+            {
+                string trackDescription =
+                    panelMode == DetailsPanelMode.Audio
+                        ? "audio tracks"
+                        : "subtitle tracks";
+                TailscaleDebugLog.Add(
+                    $"{GetType().Name}: Failed to load {trackDescription}: {ex.Message}");
+                RunOnUiThread(() =>
+                    ShowErrorMessage(
+                        $"Unable to load {trackDescription}. Please try again."));
+            }
         }
 
         protected void ApplyPanelSelection()
@@ -553,6 +694,113 @@ namespace JellyfinTizen.Screens
         // =====================================================================
         // MEDIA SOURCE / STREAM MANAGEMENT (identical)
         // =====================================================================
+        protected async Task<bool> ReloadMediaSourcesAndSubtitlesAsync(
+            bool forceRefresh = false)
+        {
+            if (!forceRefresh &&
+                _mediaSourcesLoaded &&
+                _subtitleStreamsLoaded)
+            {
+                return true;
+            }
+
+            int requestGeneration =
+                Interlocked.Increment(
+                    ref _mediaMetadataRequestGeneration);
+            try
+            {
+                var mediaItem = GetMediaItem();
+                var playbackInfo =
+                    await AppState.Jellyfin.GetPlaybackInfoAsync(mediaItem.Id);
+                if (requestGeneration !=
+                    Volatile.Read(
+                        ref _mediaMetadataRequestGeneration))
+                {
+                    return false;
+                }
+
+                var loadedMediaSources =
+                    playbackInfo?.MediaSources ?? new List<MediaSourceInfo>();
+
+                if (loadedMediaSources.Count == 0)
+                {
+                    loadedMediaSources.Add(new MediaSourceInfo
+                    {
+                        Id = mediaItem.Id,
+                        Name = "Default"
+                    });
+                }
+
+                int selectedMediaSourceIndex = Math.Clamp(
+                    _selectedMediaSourceIndex,
+                    0,
+                    loadedMediaSources.Count - 1);
+                var currentSource =
+                    loadedMediaSources[selectedMediaSourceIndex];
+                var loadedSubtitleStreams = currentSource?.MediaStreams?
+                    .Where(stream => string.Equals(
+                        stream.Type,
+                        "Subtitle",
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToList() ?? new List<MediaStream>();
+
+                // Publish data before posting the repaint. Any action awaiting this
+                // request can safely use the media streams without waiting on NUI.
+                _mediaSources = loadedMediaSources;
+                _selectedMediaSourceIndex = selectedMediaSourceIndex;
+                _subtitleStreams = loadedSubtitleStreams;
+                _mediaSourcesLoaded = true;
+                _subtitleStreamsLoaded = true;
+
+                if (forceRefresh)
+                {
+                    _audioSelectionUserOverride = false;
+                    _subtitleSelectionUserOverride = false;
+                }
+
+                int audioTrackCount =
+                    currentSource?.MediaStreams?.Count(stream =>
+                        string.Equals(
+                            stream.Type,
+                            "Audio",
+                            StringComparison.OrdinalIgnoreCase)) ?? 0;
+
+                RunOnUiThread(() =>
+                {
+                    NormalizeSelectionStateForCurrentMediaSource();
+                    ReconcileResumeButtonFromMediaItem();
+                    RebuildActionButtons(
+                        includeVersionButton: _mediaSources.Count > 1);
+                    UpdateVersionButtonText();
+                    UpdateMetadataView();
+                    ScheduleActionButtonReflow();
+
+                    if (_buttons.Count > 0)
+                        FocusButton(_buttonIndex);
+                });
+
+                TailscaleDebugLog.Add(
+                    $"{GetType().Name}: Loaded playback tracks " +
+                    $"(sources={loadedMediaSources.Count}, " +
+                    $"audio={audioTrackCount}, " +
+                    $"subtitles={loadedSubtitleStreams.Count}).");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                TailscaleDebugLog.Add(
+                    $"{GetType().Name}: Failed to load media sources: {ex.Message}");
+                if (requestGeneration ==
+                    Volatile.Read(
+                        ref _mediaMetadataRequestGeneration))
+                {
+                    _mediaSourcesLoaded = false;
+                    _subtitleStreamsLoaded = false;
+                }
+                throw;
+            }
+        }
+
         protected void CycleMediaSource()
         {
             if (_mediaSources == null || _mediaSources.Count <= 1)
@@ -621,6 +869,17 @@ namespace JellyfinTizen.Screens
             if (_selectedMediaSourceIndex >= 0 && _selectedMediaSourceIndex < _mediaSources.Count)
                 return _mediaSources[_selectedMediaSourceIndex];
             return _mediaSources[0];
+        }
+
+        protected string GetSelectedVideoCodec()
+        {
+            return GetSelectedMediaSource()?.MediaStreams?
+                .FirstOrDefault(stream =>
+                    string.Equals(
+                        stream.Type,
+                        "Video",
+                        StringComparison.OrdinalIgnoreCase))
+                ?.Codec;
         }
 
         protected List<MediaStream> GetAvailableSubtitleStreams()
@@ -1030,7 +1289,9 @@ namespace JellyfinTizen.Screens
         // =====================================================================
         // PLAYBACK (abstract — subclass provides media item)
         // =====================================================================
-        protected abstract void PlayMedia(JellyfinMovie media, int startPositionMs);
+        protected abstract Task PlayMediaAsync(
+            JellyfinMovie media,
+            int startPositionMs);
 
         // Single source of truth for "should the Resume button exist right now" — derives
         // _resumeAvailable/_resumeButton purely from the CURRENT authoritative value of
@@ -1218,6 +1479,8 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
+            Interlocked.Increment(
+                ref _mediaMetadataRequestGeneration);
             DisposeTimer(ref _errorTimer);
             base.OnHide();
         }

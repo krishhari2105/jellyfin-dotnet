@@ -222,7 +222,9 @@ namespace JellyfinTizen.Screens
 
             string timestamp = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
             string safeStage = string.IsNullOrWhiteSpace(stage) ? "Event" : stage.Trim();
-            string safeDetails = string.IsNullOrWhiteSpace(details) ? "(no details)" : details.Trim();
+            string safeDetails = string.IsNullOrWhiteSpace(details)
+                ? "(no details)"
+                : SensitiveDataRedactor.Redact(details.Trim());
             if (safeDetails.Length > 1200)
                 safeDetails = safeDetails.Substring(0, 1200) + "...";
 
