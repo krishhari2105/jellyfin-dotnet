@@ -812,6 +812,7 @@ namespace JellyfinTizen.Screens
                 _requestedSubtitleWasExternal = null;
             }
             _subtitleOffsetBurnInWarningShown = false;
+            _subtitleOffsetMs = 0;
             _useParsedSubtitleRenderer = false;
             ClearParsedSubtitleCues();
             _activeSubtitleWasExternal = false;
@@ -4871,6 +4872,7 @@ namespace JellyfinTizen.Screens
             _subtitleOffsetTrackContainer.Add(_subtitleOffsetCenterMarker);
             _subtitleOffsetTrackContainer.Add(_subtitleOffsetThumb);
             _subtitleOffsetTrackContainer.Hide();
+            UpdateSubtitleOffsetTrackThumb();
         }
 
         private void SetOsdButtonText(View button, string text)
@@ -5647,6 +5649,7 @@ namespace JellyfinTizen.Screens
                 _subtitleOffsetTrackContainer.PositionX = UiTheme.PlayerSubtitleOffsetButtonX;
                 _subtitleOffsetTrackContainer.PositionY = UiTheme.PlayerSubtitleOffsetTrackContainerY;
                 offsetContainer.Add(_subtitleOffsetTrackContainer);
+                UpdateSubtitleOffsetUI();
 
                 _subtitleOverlay.Add(offsetContainer);
 
