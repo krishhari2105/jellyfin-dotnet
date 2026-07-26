@@ -414,7 +414,7 @@ namespace JellyfinTizen.Screens
                 _buttonIndex,
                 0,
                 _buttons.Count - 1);
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 $"{GetType().Name}: Recovered action-button registry " +
                 $"({_buttons.Count} buttons).");
         }
@@ -648,7 +648,7 @@ namespace JellyfinTizen.Screens
                     panelMode == DetailsPanelMode.Audio
                         ? "audio tracks"
                         : "subtitle tracks";
-                TailscaleDebugLog.Add(
+                AppDebugLog.Add(
                     $"{GetType().Name}: Failed to load {trackDescription}: {ex.Message}");
                 RunOnUiThread(() =>
                     ShowErrorMessage(
@@ -779,7 +779,7 @@ namespace JellyfinTizen.Screens
                         FocusButton(_buttonIndex);
                 });
 
-                TailscaleDebugLog.Add(
+                AppDebugLog.Add(
                     $"{GetType().Name}: Loaded playback tracks " +
                     $"(sources={loadedMediaSources.Count}, " +
                     $"audio={audioTrackCount}, " +
@@ -788,7 +788,7 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add(
+                AppDebugLog.Add(
                     $"{GetType().Name}: Failed to load media sources: {ex.Message}");
                 if (requestGeneration ==
                     Volatile.Read(
@@ -1347,7 +1347,7 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: fetch failed (screen={GetType().Name}): {ex.Message}");
+                AppDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: fetch failed (screen={GetType().Name}): {ex.Message}");
                 NavigationService.HideLoadingOverlay();
                 return;
             }
@@ -1374,7 +1374,7 @@ namespace JellyfinTizen.Screens
                     // driven purely by the server's answer.
                     item.PlaybackPositionTicks = serverTicks;
                     item.Played = serverPlayed;
-                    TailscaleDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks}, Played={serverPlayed} (screen={GetType().Name}), reconciling");
+                    AppDebugLog.Add($"[ResumeState] RefreshResumeStateFromServerAsync: server truth PlaybackPositionTicks={serverTicks}, Played={serverPlayed} (screen={GetType().Name}), reconciling");
 
                     ReconcileResumeButtonFromMediaItem();
                     UpdateMetadataView();

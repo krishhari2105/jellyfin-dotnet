@@ -64,7 +64,7 @@ namespace JellyfinTizen.Screens
                 Padding = new Extents(10, 10, 10, 10)
             };
             _debugOverlay.Add(_debugOverlayLabel);
-            TailscaleDebugLog.LogAdded += OnLogAdded;
+            AppDebugLog.LogAdded += OnLogAdded;
         }
 
         protected void RefreshDebugOverlay(bool autoScrollToBottom = false)
@@ -75,7 +75,7 @@ namespace JellyfinTizen.Screens
             if (_debugOverlay == null)
                 CreateDebugOverlay();
 
-            _debugOverlayLabel.Text = TailscaleDebugLog.GetRecentLines();
+            _debugOverlayLabel.Text = AppDebugLog.GetRecentLines();
 
             if (_debugOverlayVisible && _debugOverlay.Opacity < 0.9f)
                 _debugOverlay.Opacity = 1.0f;
@@ -111,7 +111,7 @@ namespace JellyfinTizen.Screens
 
             _debugOverlayVisible = false;
             _debugOverlay.Opacity = 0.0f;
-            TailscaleDebugLog.LogAdded -= OnLogAdded;
+            AppDebugLog.LogAdded -= OnLogAdded;
         }
 
         private void OnLogAdded()
@@ -130,7 +130,7 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add($"[UiDispatch] Unable to post UI work: {ex.Message}");
+                AppDebugLog.Add($"[UiDispatch] Unable to post UI work: {ex.Message}");
             }
         }
 
@@ -146,10 +146,10 @@ namespace JellyfinTizen.Screens
                     if (ex != null)
                     {
                         var name = operationName ?? task.GetType().Name;
-                        TailscaleDebugLog.Add($"[FireAndForget:{name}] Unhandled exception: {ex.Message}");
+                        AppDebugLog.Add($"[FireAndForget:{name}] Unhandled exception: {ex.Message}");
                         foreach (var inner in ex.InnerExceptions)
                         {
-                            TailscaleDebugLog.Add($"[FireAndForget:{name}]   -> {inner.GetType().Name}: {inner.Message}");
+                            AppDebugLog.Add($"[FireAndForget:{name}]   -> {inner.GetType().Name}: {inner.Message}");
                             Tizen.Log.Warn("FireAndForget", $"{name}: {inner}");
                         }
                     }

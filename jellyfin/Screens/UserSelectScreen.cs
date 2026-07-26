@@ -359,7 +359,7 @@ namespace JellyfinTizen.Screens
             if (!string.IsNullOrWhiteSpace(token))
                 url += $"&api_key={Uri.EscapeDataString(token)}";
 
-            return AppState.RewriteImageUrlForTailscale(url);
+            return url;
         }
 
         private static string GetUserInitials(string name)

@@ -695,7 +695,6 @@ namespace JellyfinTizen.Screens
                 plan.MediaSource,
                 reportedPlayMethod,
                 playbackToken);
-            streamUrl = RewriteStreamUrlForTailscale(streamUrl);
             await WaitForHlsManifestReadyAsync(
                 streamUrl,
                 isHls,
@@ -1016,41 +1015,6 @@ namespace JellyfinTizen.Screens
             FireAndForget(
                 LoadTrickplayInfoAsync(playbackToken, _movie?.Id),
                 nameof(LoadTrickplayInfoAsync));
-        }
-
-        private string RewriteStreamUrlForTailscale(string url)
-        {
-#if TAILSCALE
-            if (string.IsNullOrWhiteSpace(url))
-                return url;
-
-            try
-            {
-                if (!Core.AppState.Tailscale.IsRunning)
-                    return url;
-
-                if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
-                    return url;
-
-                // If the host is a Tailscale IP (100.x.y.z or 127.0.y.z or fd..), route through local proxy
-                if (AppState.IsTailscaleUrl(url))
-                {
-                    string proxyUrl = Core.TailscaleProxyService.LocalProxyUrl;
-                    string encodedUrl = Uri.EscapeDataString(url);
-                    string rewritten = $"{proxyUrl}/proxy?url={encodedUrl}";
-                    return rewritten;
-                }
-
-                return url;
-            }
-            catch
-            {
-                return url;
-            }
-#else
-            // Standalone build: stream directly over http/https.
-            return url;
-#endif
         }
 
         private string BuildStreamUrl(
@@ -7146,7 +7110,7 @@ namespace JellyfinTizen.Screens
         private static void LogPlaybackReport(string message)
         {
             Tizen.Log.Info("PlaybackLifecycle", message);
-            TailscaleDebugLog.Add($"[PlaybackLifecycle] {message}");
+            AppDebugLog.Add($"[PlaybackLifecycle] {message}");
         }
 
         private static string ShortPlaybackId(string value)

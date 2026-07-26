@@ -52,7 +52,7 @@ namespace JellyfinTizen.Core
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add(
+                AppDebugLog.Add(
                     $"PlaybackProfile.RuntimeCapability: platform-version lookup failed ({ex.GetType().Name})");
             }
 

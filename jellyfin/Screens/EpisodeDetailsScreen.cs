@@ -76,7 +76,6 @@ namespace JellyfinTizen.Screens
                         : _episode.HasBackdrop
                             ? $"{serverUrl}/Items/{_episode.Id}/Images/Backdrop/0?maxWidth={EpisodeThumbWidth}&quality=50&api_key={apiKey}"
                             : $"{serverUrl}/Items/{_episode.Id}/Images/Primary/0?maxWidth={EpisodeThumbWidth}&quality=50&api_key={apiKey}";
-            thumbUrl = AppState.RewriteImageUrlForTailscale(thumbUrl);
 
             var thumbFrame = new View
             {

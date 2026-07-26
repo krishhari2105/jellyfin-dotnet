@@ -20,12 +20,12 @@ public class SensitiveDataRedactorTests
         DebugSwitches.EnableVerboseDebugLogging = true;
         try
         {
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 $"Authentication failed; Authorization: {authorization}; " +
                 $"url=https://example.test/Users/Me?api_key={token}; " +
                 $"X-Emby-Token={token}");
 
-            var latest = TailscaleDebugLog.GetAllLines().Last();
+            var latest = AppDebugLog.GetAllLines().Last();
             Assert.DoesNotContain(token, latest);
             Assert.DoesNotContain(authorization, latest);
             Assert.Contains("<redacted>", latest);
@@ -37,12 +37,12 @@ public class SensitiveDataRedactorTests
     }
 
     [Fact]
-    public void EncodedProxyUrlDoesNotExposeQueryToken()
+    public void EncodedUrlDoesNotExposeQueryToken()
     {
         const string token = "encoded-secret-token";
         var message =
-            "http://127.0.0.1:8123/proxy?url=" +
-            $"https%3A%2F%2Fexample.test%2Fimage%3Fapi_key%3D{token}%26quality%3D50";
+            "https%3A%2F%2Fexample.test%2Fimage%3F" +
+            $"api_key%3D{token}%26quality%3D50";
 
         var redacted = SensitiveDataRedactor.Redact(message);
 

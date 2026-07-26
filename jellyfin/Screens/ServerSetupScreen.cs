@@ -20,11 +20,6 @@ namespace JellyfinTizen.Screens
 
         private TextField _serverInput;
         private View _continueButton;
-#if TAILSCALE
-        private View _tailscaleButton;
-#else
-        private readonly View _tailscaleButton = null; // no Tailscale UI in standalone build
-#endif
         private TextLabel _errorLabel;
         private bool _continueInProgress;
         private System.Threading.Timer _errorTimer;
@@ -40,20 +35,10 @@ namespace JellyfinTizen.Screens
 
             _serverInputShell = MonochromeAuthFactory.CreateInputFieldShell("http://192.168.1.10:8096", out _serverInput);
             _continueButton = MonochromeAuthFactory.CreateButton("Continue", out _);
-#if TAILSCALE
-            if (AppState.Tailscale != null)
-            {
-                _tailscaleButton = MonochromeAuthFactory.CreateButton("Tailscale Settings", out _);
-            }
-#endif
             _errorLabel = MonochromeAuthFactory.CreateErrorLabel();
 
             panel.Add(_serverInputShell);
             panel.Add(_continueButton);
-            if (_tailscaleButton != null)
-            {
-                panel.Add(_tailscaleButton);
-            }
             panel.Add(_errorLabel);
             root.Add(panel);
             Add(root);
@@ -72,9 +57,8 @@ namespace JellyfinTizen.Screens
             }
             FocusManager.Instance.SetCurrentFocusView(_serverInput);
             HighlightButton(_continueButton, false);
-            HighlightButton(_tailscaleButton, false);
             ShowDebugOverlay();
-            Core.TailscaleDebugLog.Add("=== ServerSetupScreen shown ===");
+            Core.AppDebugLog.Add("=== ServerSetupScreen shown ===");
         }
 
         public override void OnHide()
@@ -108,13 +92,6 @@ namespace JellyfinTizen.Screens
                         FocusManager.Instance.SetCurrentFocusView(_serverInput);
                         return;
                     }
-                    else if (focused == _tailscaleButton)
-                    {
-                        HighlightButton(_tailscaleButton, false);
-                        FocusManager.Instance.SetCurrentFocusView(_continueButton);
-                        HighlightButton(_continueButton, true);
-                        return;
-                    }
                     break;
 
                 case AppKey.Down:
@@ -123,14 +100,6 @@ namespace JellyfinTizen.Screens
                     {
                         FocusManager.Instance.SetCurrentFocusView(_continueButton);
                         HighlightButton(_continueButton, true);
-                        HighlightButton(_tailscaleButton, false);
-                        return;
-                    }
-                    else if (focused == _continueButton && _tailscaleButton != null)
-                    {
-                        FocusManager.Instance.SetCurrentFocusView(_tailscaleButton);
-                        HighlightButton(_continueButton, false);
-                        HighlightButton(_tailscaleButton, true);
                         return;
                     }
                     break;
@@ -139,13 +108,6 @@ namespace JellyfinTizen.Screens
                     if (focused == _continueButton)
                     {
                         FireAndForget(OnContinueAsync(), nameof(OnContinueAsync));
-                        return;
-                    }
-                    else if (focused == _tailscaleButton)
-                    {
-#if TAILSCALE
-                        NavigationService.Navigate(new TailscaleScreen());
-#endif
                         return;
                     }
                     break;
@@ -175,10 +137,7 @@ namespace JellyfinTizen.Screens
             _continueInProgress = true;
             DisposeTimer(ref _errorTimer);
             _errorLabel.Text = string.Empty;
-            Core.TailscaleDebugLog.Add($"Attempting to connect to: {url}");
-#if TAILSCALE
-            Core.TailscaleDebugLog.Add($"Tailscale IsRunning={AppState.Tailscale?.IsRunning}, IsSocketReachable={AppState.Tailscale?.IsSocketReachable}");
-#endif
+            Core.AppDebugLog.Add($"Attempting to connect to: {url}");
 
             try
             {
@@ -186,12 +145,12 @@ namespace JellyfinTizen.Screens
                 var probeResult = await ValidateAndPrependProtocol(url);
                 if (probeResult == null || string.IsNullOrWhiteSpace(probeResult.Url))
                 {
-                    Core.TailscaleDebugLog.Add("Server probe returned null - server not found");
+                    Core.AppDebugLog.Add("Server probe returned null - server not found");
                     ShowErrorMessage("Server not found. Please try again.");
                     return;
                 }
 
-                Core.TailscaleDebugLog.Add($"Server found: {probeResult.Url} ({probeResult.Name})");
+                Core.AppDebugLog.Add($"Server found: {probeResult.Url} ({probeResult.Name})");
 
                 if (!AppState.CanStoreServer(probeResult.Url))
                 {
@@ -221,7 +180,7 @@ namespace JellyfinTizen.Screens
             }
             catch (Exception ex)
             {
-                Core.TailscaleDebugLog.Add($"OnContinueAsync error: {ex.GetType().Name}: {ex.Message}");
+                Core.AppDebugLog.Add($"OnContinueAsync error: {ex.GetType().Name}: {ex.Message}");
                 RunOnUiThread(() =>
                 {
                     NavigationService.NavigateBack();
@@ -240,20 +199,20 @@ namespace JellyfinTizen.Screens
             if (url.StartsWith("http://", System.StringComparison.OrdinalIgnoreCase) ||
                 url.StartsWith("https://", System.StringComparison.OrdinalIgnoreCase))
             {
-                Core.TailscaleDebugLog.Add($"URL already has scheme, probing: {url}");
+                Core.AppDebugLog.Add($"URL already has scheme, probing: {url}");
                 return await ResolveServerBaseUrl(url);
             }
 
             // Prefer https first so we do not persist an http endpoint that only works via redirect.
             string httpsUrl = "https://" + url;
-            Core.TailscaleDebugLog.Add($"Probing HTTPS: {httpsUrl}");
+            Core.AppDebugLog.Add($"Probing HTTPS: {httpsUrl}");
             var resolvedHttps = await ResolveServerBaseUrl(httpsUrl);
             if (resolvedHttps != null && !string.IsNullOrWhiteSpace(resolvedHttps.Url))
                 return resolvedHttps;
 
             // Fallback to http only when https is unavailable.
             string httpUrl = "http://" + url;
-            Core.TailscaleDebugLog.Add($"Probing HTTP: {httpUrl}");
+            Core.AppDebugLog.Add($"Probing HTTP: {httpUrl}");
             var resolvedHttp = await ResolveServerBaseUrl(httpUrl);
             if (resolvedHttp != null && !string.IsNullOrWhiteSpace(resolvedHttp.Url))
                 return resolvedHttp;
@@ -265,13 +224,9 @@ namespace JellyfinTizen.Screens
         {
             try
             {
-                Core.TailscaleDebugLog.Add($"ResolveServerBaseUrl: {url}");
+                Core.AppDebugLog.Add($"ResolveServerBaseUrl: {url}");
                 _probeHttpClient ??= new HttpClient(new HttpClientHandler
                 {
-#if TAILSCALE
-                    Proxy = new TailscaleWebProxy(),
-                    UseProxy = true,
-#endif
                     AllowAutoRedirect = true,
                 })
                 {
@@ -280,9 +235,9 @@ namespace JellyfinTizen.Screens
                 var httpClient = _probeHttpClient;
                 var normalizedInput = url.TrimEnd('/');
                 var targetUrl = normalizedInput + "/System/Info/Public";
-                Core.TailscaleDebugLog.Add($"GET {targetUrl}");
+                Core.AppDebugLog.Add($"GET {targetUrl}");
                 using var response = await httpClient.GetAsync(targetUrl);
-                Core.TailscaleDebugLog.Add($"Response: {(int)response.StatusCode} {response.StatusCode}");
+                Core.AppDebugLog.Add($"Response: {(int)response.StatusCode} {response.StatusCode}");
                 if (!response.IsSuccessStatusCode)
                     return null;
 
@@ -308,11 +263,11 @@ namespace JellyfinTizen.Screens
                         {
                             isEmby = true;
                         }
-                        Core.TailscaleDebugLog.Add($"Server name: {serverName}, IsEmby: {isEmby}");
+                        Core.AppDebugLog.Add($"Server name: {serverName}, IsEmby: {isEmby}");
                     }
                     catch (Exception ex)
                     {
-                        Core.TailscaleDebugLog.Add($"JSON parse error: {ex.Message}");
+                        Core.AppDebugLog.Add($"JSON parse error: {ex.Message}");
                     }
                 }
 
@@ -327,12 +282,12 @@ namespace JellyfinTizen.Screens
                 if (absolute.EndsWith(infoPublicSuffix, System.StringComparison.OrdinalIgnoreCase))
                     absolute = absolute.Substring(0, absolute.Length - infoPublicSuffix.Length);
 
-                Core.TailscaleDebugLog.Add($"Resolved server URL: {absolute.TrimEnd('/')}");
+                Core.AppDebugLog.Add($"Resolved server URL: {absolute.TrimEnd('/')}");
                 return new ServerProbeResult { Url = absolute.TrimEnd('/'), Name = serverName, IsEmby = isEmby };
             }
             catch (Exception ex)
             {
-                Core.TailscaleDebugLog.Add($"ResolveServerBaseUrl error: {ex.GetType().Name}: {ex.Message}");
+                Core.AppDebugLog.Add($"ResolveServerBaseUrl error: {ex.GetType().Name}: {ex.Message}");
                 return null;
             }
         }

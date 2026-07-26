@@ -312,13 +312,13 @@ namespace JellyfinTizen.Screens
                     }
                     catch (Exception ex)
                     {
-                        TailscaleDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync UI update error: {ex.Message}");
+                        AppDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync UI update error: {ex.Message}");
                     }
                 });
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync fetch error: {ex.Message}");
+                AppDebugLog.Add($"[PlayedState] LibraryMoviesGridScreen.RefreshPlayedStatesFromServerAsync fetch error: {ex.Message}");
             }
         }
 
@@ -450,7 +450,7 @@ namespace JellyfinTizen.Screens
             // maxWidth/quality triggers a separate on-demand resize, so the old low->high
             // scheme doubled the server's image work. quality=50 at the exact card width
             // favours performance over fidelity per project preference.
-            url = AppState.RewriteImageUrlForTailscale($"{basePath}?maxWidth={_cardWidth}&quality=50&api_key={apiKey}");
+            url = $"{basePath}?maxWidth={_cardWidth}&quality=50&api_key={apiKey}";
         }
 
         private void StartBuildTimer()

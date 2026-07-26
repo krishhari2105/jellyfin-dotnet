@@ -1294,7 +1294,7 @@ namespace JellyfinTizen.Screens
             {
             }
 
-            TailscaleDebugLog.Add($"[PlaybackLifecycle] {message}");
+            AppDebugLog.Add($"[PlaybackLifecycle] {message}");
             if (DebugSwitches.EnablePlaybackDebugOverlay && !IsScreenHidden)
             {
                 RunOnUiThread(() =>

@@ -84,7 +84,6 @@ namespace JellyfinTizen.Screens
             var posterUrl =
                 $"{serverUrl}/Items/{_series.Id}/Images/Primary/0" +
                 $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
-            posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
             {
@@ -361,14 +360,12 @@ namespace JellyfinTizen.Screens
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Thumb/0" +
                     $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
-                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (season.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{season.Id}/Images/Primary/0" +
                     $"?maxWidth={SeasonCardWidth}&quality=50&api_key={apiKey}";
-                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 
             return MediaCardFactory.CreateImageCard(

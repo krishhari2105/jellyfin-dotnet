@@ -95,7 +95,6 @@ namespace JellyfinTizen.Screens
             var posterUrl =
                 $"{serverUrl}/Items/{_season.Id}/Images/Primary/0" +
                 $"?maxWidth={PosterWidth}&quality=50&api_key={apiKey}";
-            posterUrl = AppState.RewriteImageUrlForTailscale(posterUrl);
 
             var posterFrame = new View
             {
@@ -352,13 +351,13 @@ namespace JellyfinTizen.Screens
                     }
                     catch (Exception ex)
                     {
-                        TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync UI update error: {ex.Message}");
+                        AppDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync UI update error: {ex.Message}");
                     }
                 });
             }
             catch (Exception ex)
             {
-                TailscaleDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync fetch error: {ex.Message}");
+                AppDebugLog.Add($"[PlayedState] SeasonDetailsScreen.RefreshEpisodesPlayedStateFromServerAsync fetch error: {ex.Message}");
             }
         }
 
@@ -592,21 +591,18 @@ namespace JellyfinTizen.Screens
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Thumb/0" +
                     $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
-                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasPrimary)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Primary/0" +
                     $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
-                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
             else if (episode.HasBackdrop)
             {
                 imageUrl =
                     $"{serverUrl}/Items/{episode.Id}/Images/Backdrop/0" +
                     $"?maxWidth={EpisodeCardWidth}&quality=50&api_key={apiKey}";
-                imageUrl = AppState.RewriteImageUrlForTailscale(imageUrl);
             }
 
             var episodeNumber = episode.IndexNumber > 0 ? $"E{episode.IndexNumber} - " : string.Empty;

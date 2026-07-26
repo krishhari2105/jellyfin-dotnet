@@ -408,7 +408,7 @@ namespace JellyfinTizen.Screens
 
             return HomeLoadingScreen.BuildCachedImageUrl(
                 $"continue:{media.Id}:280:70:{apiKey}",
-                () => AppState.RewriteImageUrlForTailscale(imageUrl.Replace("quality=82", "quality=50")));
+                () => imageUrl.Replace("quality=82", "quality=50"));
         }
 
         private int ComputeNextRowY()
@@ -441,7 +441,7 @@ namespace JellyfinTizen.Screens
             }
             catch (System.Exception ex)
             {
-                TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: fetch failed: {ex.Message}");
+                AppDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: fetch failed: {ex.Message}");
                 if (!cancellationToken.IsCancellationRequested)
                     NavigationService.HideLoadingOverlay();
                 return;
@@ -455,7 +455,7 @@ namespace JellyfinTizen.Screens
                 try
                 {
                     long topTicks = (serverItems != null && serverItems.Count > 0) ? serverItems[0].PlaybackPositionTicks : 0;
-                    TailscaleDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: server truth ContinueWatching count={serverItems?.Count ?? 0}, topItemTicks={topTicks}");
+                    AppDebugLog.Add($"[ResumeState] HomeScreen.RefreshContinueWatchingFromServerAsync: server truth ContinueWatching count={serverItems?.Count ?? 0}, topItemTicks={topTicks}");
                     ApplyServerContinueWatching(serverItems);
                 }
                 catch
@@ -535,13 +535,13 @@ namespace JellyfinTizen.Screens
                     }
                     catch (System.Exception ex)
                     {
-                        TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync UI update error: {ex.Message}");
+                        AppDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync UI update error: {ex.Message}");
                     }
                 });
             }
             catch (System.Exception ex)
             {
-                TailscaleDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync fetch error: {ex.Message}");
+                AppDebugLog.Add($"[PlayedState] HomeScreen.RefreshRecentlyAddedPlayedStateAsync fetch error: {ex.Message}");
             }
         }
 

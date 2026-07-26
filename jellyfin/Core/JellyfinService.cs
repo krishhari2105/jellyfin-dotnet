@@ -69,11 +69,8 @@ namespace JellyfinTizen.Core
 
         public void Connect(string serverUrl)
         {
-            TailscaleDebugLog.Add($"JellyfinService.Connect: Original serverUrl={serverUrl}");
-            // Rewrite Tailscale IPs to use local proxy before connecting
-            var rewrittenUrl = AppState.RewriteServerUrlForTailscale(serverUrl?.TrimEnd("/".ToCharArray()));
-            var normalizedUrl = rewrittenUrl?.TrimEnd("/".ToCharArray());
-            TailscaleDebugLog.Add($"JellyfinService.Connect: Rewritten/normalizedUrl={normalizedUrl}");
+            var normalizedUrl = serverUrl?.TrimEnd("/".ToCharArray());
+            AppDebugLog.Add($"JellyfinService.Connect: normalizedUrl={normalizedUrl}");
 
             if (string.IsNullOrWhiteSpace(normalizedUrl))
                 throw new ArgumentException("Server URL is required.", nameof(serverUrl));
@@ -122,7 +119,7 @@ namespace JellyfinTizen.Core
                 token.ThrowIfCancellationRequested();
                 if (!response.IsSuccessStatusCode)
                 {
-                    TailscaleDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
+                    AppDebugLog.Add($"JellyfinService.GetAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(responseContent, 220)}");
                     var httpEx = new HttpRequestException(
                         $"HTTP {(int)response.StatusCode} {response.StatusCode}: {responseContent}",
                         null,
@@ -992,7 +989,7 @@ namespace JellyfinTizen.Core
             if (!string.IsNullOrWhiteSpace(mediaSourceId))
                 body["MediaSourceId"] = mediaSourceId;
 
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 "PlaybackInfo.Request: " +
                 $"item={ShortDebugId(itemId)},user={ShortDebugId(UserId)},mediaSource={ShortDebugId(mediaSourceId)}," +
                 $"audio={audioStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "server"}," +
@@ -1091,7 +1088,7 @@ namespace JellyfinTizen.Core
                 ? "-"
                 : string.Join(";", response.MediaSources.Select(s =>
                     $"{ShortDebugId(s.Id)}:a={s.DefaultAudioStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"},s={s.DefaultSubtitleStreamIndex?.ToString(CultureInfo.InvariantCulture) ?? "null"}"));
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 "PlaybackInfo.Response: " +
                 $"playSession={ShortDebugId(response.PlaySessionId)},sources={sourceSummary}");
 
@@ -1110,7 +1107,7 @@ namespace JellyfinTizen.Core
                 string reasons = source.TranscodingReasons == null || source.TranscodingReasons.Count == 0
                     ? "-"
                     : string.Join(",", source.TranscodingReasons);
-                TailscaleDebugLog.Add(
+                AppDebugLog.Add(
                     "PlaybackInfo.Source: " +
                     $"source={ShortDebugId(source.Id)},audioIndex={selectedAudioIndex?.ToString(CultureInfo.InvariantCulture) ?? "-"}," +
                     $"video={video?.Codec ?? "-"},audio={audio?.Codec ?? "-"}," +
@@ -1330,7 +1327,7 @@ namespace JellyfinTizen.Core
                 : null;
             videoCodec ??= TryGetVideoCodec(root);
 
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 "PlaybackProfile.SourceCodec: " +
                 $"item={ShortDebugId(itemId)},mediaSource={ShortDebugId(mediaSourceId)}," +
                 $"codec={videoCodec ?? "-"}");
@@ -1554,7 +1551,7 @@ namespace JellyfinTizen.Core
                 if (_consecutiveFailures >= AppState.JellyfinCircuitBreakerFailureThreshold)
                 {
                     _circuitBreakerOpenUntil = DateTime.UtcNow.AddSeconds(AppState.JellyfinCircuitBreakerOpenSeconds);
-                    TailscaleDebugLog.Add($"Jellyfin server circuit breaker OPEN until {_circuitBreakerOpenUntil}");
+                    AppDebugLog.Add($"Jellyfin server circuit breaker OPEN until {_circuitBreakerOpenUntil}");
                 }
             }
         }
@@ -1578,7 +1575,7 @@ namespace JellyfinTizen.Core
                 }
                 catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
                 {
-                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
+                    AppDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
                     await Task.Delay(attempt * AppState.JellyfinRetryBaseDelayMs);
                 }
                 catch (Exception)
@@ -1617,7 +1614,7 @@ namespace JellyfinTizen.Core
                 }
                 catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
                 {
-                    TailscaleDebugLog.Add(
+                    AppDebugLog.Add(
                         $"Jellyfin request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}) " +
                         $"for path={path}; error={ex.GetType().Name}");
                     await Task
@@ -1651,7 +1648,7 @@ namespace JellyfinTizen.Core
                 }
                 catch (Exception ex) when (IsTransient(ex) && attempt < AppState.JellyfinRetryMaxAttempts)
                 {
-                    TailscaleDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
+                    AppDebugLog.Add($"Jellyfin Request failed (transient, attempt {attempt}/{AppState.JellyfinRetryMaxAttempts}): {ex.Message} for path={path}");
                     await Task.Delay(attempt * AppState.JellyfinRetryBaseDelayMs);
                 }
                 catch (Exception)

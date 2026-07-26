@@ -371,7 +371,7 @@ namespace JellyfinTizen.Core
                 }
             }
 
-            TailscaleDebugLog.Add(
+            AppDebugLog.Add(
                 "PlaybackProfile.Runtime: " +
                 $"tizen={runtime.PlatformVersion:0.0},fallback={runtime.UsedFallback}," +
                 $"fmp4Hls={runtime.SupportsFmp4Hls},hevcTsHls={runtime.SupportsHevcInMpegTsHls}," +

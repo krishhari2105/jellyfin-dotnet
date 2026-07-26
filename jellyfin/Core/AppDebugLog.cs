@@ -6,7 +6,7 @@ using System.Text;
 
 namespace JellyfinTizen.Core
 {
-    public static class TailscaleDebugLog
+    public static class AppDebugLog
     {
         private static readonly ConcurrentQueue<string> _entries = new();
         private const int MaxEntries = 60;
@@ -29,7 +29,7 @@ namespace JellyfinTizen.Core
                     _entries.TryDequeue(out _);
                 }
 
-                try { System.Console.WriteLine($"[TailscaleDebug] {entry}"); } catch { }
+                try { System.Console.WriteLine($"[AppDebug] {entry}"); } catch { }
 
                 LogAdded?.Invoke();
             }

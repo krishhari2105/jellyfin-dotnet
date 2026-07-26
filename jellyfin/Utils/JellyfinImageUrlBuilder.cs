@@ -59,7 +59,7 @@ namespace JellyfinTizen.Utils
             }
 
             var url = $"{serverUrl}/Items/{itemId}/Images/{imageType}/0?maxWidth={maxWidth}&quality={quality}&api_key={apiKey}";
-            return JellyfinTizen.Core.AppState.RewriteImageUrlForTailscale(url);
+            return url;
         }
     }
 }
