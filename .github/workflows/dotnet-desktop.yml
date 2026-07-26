@@ -1,71 +1,37 @@
-# .github/workflows/build-tizen.yml
 name: Build Jellyfin Tizen Client
 
 on:
   workflow_dispatch:
     inputs:
       configuration:
-        description: 'Build configuration'
+        description: Build configuration
         required: true
-        default: 'Release'
+        default: Release
         type: choice
         options:
           - Release
           - Debug
-      flavor:
-        description: 'Build flavor'
-        required: true
-        default: 'both'
-        type: choice
-        options:
-          - both
-          - tailscale
-          - standalone
 
 permissions:
   contents: read
 
 jobs:
-  setup:
-    name: Setup Matrix
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - id: set-matrix
-        run: |
-          if [ "${{ github.event.inputs.flavor }}" = "both" ]; then
-            echo 'matrix=["tailscale", "standalone"]' >> $GITHUB_OUTPUT
-          elif [ "${{ github.event.inputs.flavor }}" = "tailscale" ]; then
-            echo 'matrix=["tailscale"]' >> $GITHUB_OUTPUT
-          else
-            echo 'matrix=["standalone"]' >> $GITHUB_OUTPUT
-          fi
-
   build:
-    name: Build TPK (${{ matrix.flavor }})
-    needs: setup
+    name: Build TPK
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        flavor: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── 2. Install .NET 8 SDK ─────────────────────────────────────────────
       - name: Setup .NET 8
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
 
-      # ── 3. Pin CLI to .NET 8 via global.json ──────────────────────────────
-      - name: Pin dotnet to 8.x via global.json
+      - name: Pin dotnet to 8.x
         run: |
           DOTNET8_VER=$(dotnet --list-sdks | grep '^8\.' | tail -1 | awk '{print $1}')
-          echo "Pinning to .NET SDK: $DOTNET8_VER"
           cat > global.json << EOF
           {
             "sdk": {
@@ -74,67 +40,39 @@ jobs:
             }
           }
           EOF
-          cat global.json
           dotnet --version
 
-      # ── 4. Install Tizen Workload ─────────────────────────────────────────
-      - name: Install Tizen Workload
+      - name: Install Tizen workload
         run: |
           curl -sSL https://raw.githubusercontent.com/Samsung/Tizen.NET/main/workload/scripts/workload-install.sh \
             | sudo bash
 
-      # ── 5. Verify Workload ────────────────────────────────────────────────
-      - name: Verify Tizen Workload installed
+      - name: Verify Tizen workload
         run: dotnet workload list
 
-      # ── 6. Restore ────────────────────────────────────────────────────────
-      - name: Restore Dependencies
+      - name: Restore dependencies
         run: |
-          TAILSCALE_FLAG="true"
-          if [ "${{ matrix.flavor }}" = "standalone" ]; then
-            TAILSCALE_FLAG="false"
-          fi
           dotnet restore jellyfin.sln \
-            -p:TailscaleEnabled=$TAILSCALE_FLAG \
             --source https://api.nuget.org/v3/index.json \
             --ignore-failed-sources
 
-      # ── 7. Build ──────────────────────────────────────────────────────────
-      - name: Build Project
+      - name: Build project
         run: |
-          TAILSCALE_FLAG="true"
-          if [ "${{ matrix.flavor }}" = "standalone" ]; then
-            TAILSCALE_FLAG="false"
-          fi
           dotnet build jellyfin/jellyfin.csproj \
             -c ${{ github.event.inputs.configuration }} \
-            -p:TailscaleEnabled=$TAILSCALE_FLAG \
             --no-restore \
             -v minimal
 
-      # ── 8. Locate TPK (debug helper) ──────────────────────────────────────
-      - name: Find TPK files
-        if: always()
-        run: |
-          find jellyfin/bin -name "*.tpk" 2>/dev/null || true
-          find jellyfin/bin-standalone -name "*.tpk" 2>/dev/null || true
-
-      # ── 9. Rename and Stage TPK ───────────────────────────────────────────
       - name: Stage TPK
         run: |
-          if [ "${{ matrix.flavor }}" = "tailscale" ]; then
-            SRC_DIR="jellyfin/bin/${{ github.event.inputs.configuration }}/net6.0-tizen9.0"
-          else
-            SRC_DIR="jellyfin/bin-standalone/${{ github.event.inputs.configuration }}/net6.0-tizen9.0"
-          fi
+          SRC_DIR="jellyfin/bin/${{ github.event.inputs.configuration }}/net6.0-tizen9.0"
           mkdir -p staging
-          cp $SRC_DIR/*.tpk staging/jellyfin-tizen-${{ matrix.flavor }}-${{ github.event.inputs.configuration }}.tpk
+          cp "$SRC_DIR"/*.tpk "staging/jellyfin-tizen-${{ github.event.inputs.configuration }}.tpk"
 
-      # ── 10. Upload Artifact ───────────────────────────────────────────────
       - name: Upload TPK
         uses: actions/upload-artifact@v4
         with:
-          name: jellyfin-tizen-${{ matrix.flavor }}-${{ github.event.inputs.configuration }}
+          name: jellyfin-tizen-${{ github.event.inputs.configuration }}
           path: staging/*.tpk
           if-no-files-found: error
           retention-days: 30
@@ -145,8 +83,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
-      - name: Download Artifacts
+      - name: Download artifact
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -155,28 +94,21 @@ jobs:
 
       - name: Get current date
         id: date
-        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+        run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.date.outputs.date }}-${{ github.run_number }}
-          name: "Jellyfin Tizen Client Release v${{ steps.date.outputs.date }} (Build #${{ github.run_number }})"
+          name: Jellyfin Tizen Client Release v${{ steps.date.outputs.date }} (Build #${{ github.run_number }})
           body: |
             ## Jellyfin Tizen Client Build
-            
+
             **Configuration:** ${{ github.event.inputs.configuration }}
             **Date:** ${{ steps.date.outputs.date }}
             **Commit:** ${{ github.sha }}
-            
-            ### Downloads
-            Download the appropriate `.tpk` file for your installation:
-            - **Tailscale-enabled**: Includes Tailscale VPN client support for secure remote access.
-            - **Standalone**: Lightweight build with Tailscale and QR code generation libraries excluded.
-            
-            ### Installation
-            1. Download the `.tpk` file below.
-            2. Install via Tizen Studio or using `sdb install <file>.tpk`.
+
+            Install the `.tpk` using Tizen Studio or `sdb install <file>.tpk`.
           files: artifacts/*.tpk
           draft: false
           prerelease: ${{ github.event.inputs.configuration == 'Debug' }}
