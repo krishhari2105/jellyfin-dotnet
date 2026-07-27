@@ -155,6 +155,11 @@ namespace JellyfinTizen.UI
                 // otherwise be decoded at full resolution into texture memory.
                 DesiredWidth = width,
                 DesiredHeight = imageHeight,
+                // Fill the card and crop the overflow rather than fitting the image inside
+                // it. With a desired size set, the default fitting preserves aspect ratio
+                // by shrinking to fit, which pillarboxes any artwork whose aspect does not
+                // match the card (server-generated library collages in particular).
+                FittingMode = FittingModeType.ScaleToFill,
                 // The NUI default is ReleasePolicyType.Detached, which frees the decoded
                 // texture as soon as the visual leaves the scene. Navigating away detaches
                 // the whole screen, so every card would have to be re-fetched from the
