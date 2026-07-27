@@ -56,6 +56,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Keep the decoded texture when the screen detaches from the scene, so
+                // returning to this screen does not re-fetch the artwork.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(backdrop, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
@@ -97,6 +100,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Keep the decoded texture when the screen detaches from the scene, so
+                // returning to this screen does not re-fetch the artwork.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
@@ -188,6 +194,8 @@ namespace JellyfinTizen.Screens
                 WidthSpecification = TitleLogoDisplayWidth,
                 HeightSpecification = TitleLogoDisplayHeight,
                 PreMultipliedAlpha = false,
+                // Survive scene detach so the logo does not re-fetch on back-navigation.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.Linear
             };

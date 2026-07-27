@@ -7,6 +7,7 @@ using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Models;
 using JellyfinTizen.UI;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen.Screens
 {
@@ -30,6 +31,20 @@ namespace JellyfinTizen.Screens
         private readonly List<int> _rowSpacings = new();
         private readonly List<int> _rowTops = new();
         private readonly List<int> _rowHeights = new();
+
+        // Per-row card images plus the currently loaded row window, so offscreen poster
+        // textures can be released instead of staying resident for the app's lifetime.
+        private readonly List<List<HomePosterEntry>> _rowPosterEntries = new();
+        private readonly HashSet<int> _loadedImageRows = new();
+        private readonly List<int> _imageRowsToUnload = new();
+        private int _imageWindowMin = -1;
+        private int _imageWindowMax = -1;
+        private int _imageWindowRowCount = -1;
+        private bool _imageWindowValid;
+
+        // Rows within this many viewport-heights of the visible area keep their images
+        // loaded so scrolling back is instant.
+        private const int RowKeepLoadedBuffer = 1;
 
         private View _contentViewport;
         private View _verticalContainer;
@@ -176,6 +191,7 @@ namespace JellyfinTizen.Screens
                 _rowSpacings.Add(built.Spacing);
                 _rowTops.Add(y);
                 _rowHeights.Add(built.TotalHeight);
+                _rowPosterEntries.Add(built.PosterEntries);
 
                 y += built.TotalHeight + built.RowSpacingAfter;
             }
@@ -191,6 +207,7 @@ namespace JellyfinTizen.Screens
             public int Spacing { get; init; }
             public int TotalHeight { get; init; }
             public int RowSpacingAfter { get; init; }
+            public List<HomePosterEntry> PosterEntries { get; init; }
         }
 
         // Builds the full visual block (title + viewport + card row) for a single HomeRowData,
@@ -239,15 +256,36 @@ namespace JellyfinTizen.Screens
             };
 
             var cards = new List<View>();
+            var posterEntries = new List<HomePosterEntry>();
 
             if (row.Kind == HomeRowKind.RecentlyAdded)
             {
                 _recentlyAddedBadges.Clear();
             }
 
+            // Only rows starting within the initial viewport (plus one row of lookahead)
+            // decode their images during construction. The rest load on demand.
+            bool loadImagesNow = y <= GetContentViewportHeight();
+
             foreach (var item in row.Items)
             {
-                var card = CreateCard(row.Kind, item, rowInfo.CardWidth, rowInfo.CardHeight, textHeight, out var playedBadge);
+                var card = CreateCard(
+                    row.Kind,
+                    item,
+                    rowInfo.CardWidth,
+                    rowInfo.CardHeight,
+                    textHeight,
+                    out var playedBadge,
+                    out var cardImage,
+                    loadImagesNow);
+
+                posterEntries.Add(new HomePosterEntry
+                {
+                    Image = cardImage,
+                    Url = item.ImageUrl,
+                    Loaded = loadImagesNow && !string.IsNullOrWhiteSpace(item.ImageUrl)
+                });
+
                 cards.Add(card);
                 rowContainer.Add(card);
                 if (row.Kind == HomeRowKind.RecentlyAdded)
@@ -269,8 +307,198 @@ namespace JellyfinTizen.Screens
                 CardWidth = rowInfo.CardWidth,
                 Spacing = rowInfo.Spacing,
                 TotalHeight = rowHeight + (FocusPad * 2),
-                RowSpacingAfter = rowInfo.RowSpacing
+                RowSpacingAfter = rowInfo.RowSpacing,
+                PosterEntries = posterEntries
             };
+        }
+
+        private sealed class HomePosterEntry
+        {
+            public ImageView Image;
+            public string Url;
+            public bool Loaded;
+        }
+
+        private int GetContentViewportHeight()
+        {
+            if (_contentViewport != null && _contentViewport.SizeHeight > 0)
+                return (int)_contentViewport.SizeHeight;
+
+            return Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
+        }
+
+        /// <summary>
+        /// Loads images for rows inside the visible window and releases the decoded
+        /// textures of rows that have scrolled beyond the keep-loaded buffer. Without
+        /// this, every card image built for the screen stayed resident for the lifetime
+        /// of the app.
+        /// </summary>
+        private void EnsureVisibleRowImagesLoaded()
+        {
+            if (_rowPosterEntries.Count == 0)
+                return;
+
+            int viewportHeight = GetContentViewportHeight();
+            if (viewportHeight <= 0)
+                return;
+
+            int visibleTop = (int)(-_verticalContainer.PositionY);
+            int visibleBottom = visibleTop + viewportHeight;
+
+            int keepMin = int.MaxValue;
+            int keepMax = -1;
+
+            for (int row = 0; row < _rowPosterEntries.Count && row < _rowTops.Count; row++)
+            {
+                int rowTop = _rowTops[row];
+                int rowBottom = rowTop + _rowHeights[row];
+
+                bool withinWindow =
+                    rowBottom >= visibleTop - (viewportHeight * RowKeepLoadedBuffer) &&
+                    rowTop <= visibleBottom + (viewportHeight * RowKeepLoadedBuffer);
+
+                if (!withinWindow)
+                    continue;
+
+                if (row < keepMin) keepMin = row;
+                if (row > keepMax) keepMax = row;
+            }
+
+            if (keepMax < 0)
+                return;
+
+            if (_imageWindowValid &&
+                _imageWindowMin == keepMin &&
+                _imageWindowMax == keepMax &&
+                _imageWindowRowCount == _rowPosterEntries.Count)
+            {
+                return;
+            }
+
+            for (int row = keepMin; row <= keepMax; row++)
+                LoadRowImages(row);
+
+            if (_loadedImageRows.Count > 0)
+            {
+                _imageRowsToUnload.Clear();
+                foreach (var loadedRow in _loadedImageRows)
+                {
+                    if (loadedRow < keepMin || loadedRow > keepMax)
+                        _imageRowsToUnload.Add(loadedRow);
+                }
+
+                for (int i = 0; i < _imageRowsToUnload.Count; i++)
+                    UnloadRowImages(_imageRowsToUnload[i]);
+
+                _imageRowsToUnload.Clear();
+            }
+
+            _imageWindowMin = keepMin;
+            _imageWindowMax = keepMax;
+            _imageWindowRowCount = _rowPosterEntries.Count;
+            _imageWindowValid = true;
+        }
+
+        private void LoadRowImages(int row)
+        {
+            if (row < 0 || row >= _rowPosterEntries.Count)
+                return;
+
+            var entries = _rowPosterEntries[row];
+            if (entries == null || entries.Count == 0)
+                return;
+
+            bool anyLoaded = false;
+            foreach (var entry in entries)
+            {
+                if (entry.Image == null)
+                    continue;
+
+                if (!entry.Loaded && !string.IsNullOrWhiteSpace(entry.Url))
+                {
+                    UiAnimator.FadeInOnImageReady(entry.Image, entry.Url);
+                    entry.Loaded = true;
+                }
+
+                if (entry.Loaded)
+                    anyLoaded = true;
+            }
+
+            if (anyLoaded)
+                _loadedImageRows.Add(row);
+        }
+
+        private void UnloadRowImages(int row)
+        {
+            _loadedImageRows.Remove(row);
+
+            if (row < 0 || row >= _rowPosterEntries.Count)
+                return;
+
+            var entries = _rowPosterEntries[row];
+            if (entries == null)
+                return;
+
+            foreach (var entry in entries)
+            {
+                if (entry.Image == null || !entry.Loaded)
+                    continue;
+
+                UiAnimator.CancelFadeIn(entry.Image);
+                entry.Image.ResourceUrl = null;
+                entry.Loaded = false;
+            }
+        }
+
+        public override void ReleaseOffscreenResources()
+        {
+            if (_loadedImageRows.Count > 0)
+            {
+                _imageRowsToUnload.Clear();
+                foreach (var row in _loadedImageRows)
+                    _imageRowsToUnload.Add(row);
+
+                for (int i = 0; i < _imageRowsToUnload.Count; i++)
+                    UnloadRowImages(_imageRowsToUnload[i]);
+
+                _imageRowsToUnload.Clear();
+            }
+
+            _imageWindowValid = false;
+        }
+
+        public override void RestoreOffscreenResources()
+        {
+            _imageWindowValid = false;
+            EnsureVisibleRowImagesLoaded();
+        }
+
+        /// <summary>
+        /// Rebuilds <see cref="_loadedImageRows"/> from the entries themselves. Row indices
+        /// shift when a row is inserted or removed, so the tracked set must be recomputed
+        /// or already-loaded rows would never be unloaded again.
+        /// </summary>
+        private void ResyncLoadedImageRows()
+        {
+            _loadedImageRows.Clear();
+
+            for (int row = 0; row < _rowPosterEntries.Count; row++)
+            {
+                var entries = _rowPosterEntries[row];
+                if (entries == null)
+                    continue;
+
+                foreach (var entry in entries)
+                {
+                    if (entry.Loaded)
+                    {
+                        _loadedImageRows.Add(row);
+                        break;
+                    }
+                }
+            }
+
+            _imageWindowValid = false;
         }
 
         private int GetCardTextHeight(HomeRowData row, int cardWidth)
@@ -337,47 +565,46 @@ namespace JellyfinTizen.Screens
 
         private View CreateCard(HomeRowKind kind, HomeItemData item, int width, int imageHeight, int textHeight, out View playedBadge)
         {
+            return CreateCard(kind, item, width, imageHeight, textHeight, out playedBadge, out _, loadImage: true);
+        }
+
+        private View CreateCard(
+            HomeRowKind kind,
+            HomeItemData item,
+            int width,
+            int imageHeight,
+            int textHeight,
+            out View playedBadge,
+            out ImageView imageView,
+            bool loadImage)
+        {
             var hasSubtitle = !string.IsNullOrWhiteSpace(item.Subtitle) && kind != HomeRowKind.Libraries;
             var progressRatio = kind == HomeRowKind.ContinueWatching
                 ? GetPlaybackProgressRatio(item?.Media)
                 : null;
 
-            if (kind == HomeRowKind.RecentlyAdded)
-            {
-                return MediaCardFactory.CreateImageCard(
-                    width,
-                    imageHeight,
-                    textHeight,
-                    item.Title,
-                    hasSubtitle ? item.Subtitle : null,
-                    item.ImageUrl,
-                    out _,
-                    out playedBadge,
-                    focusBorder: FocusBorder,
-                    titlePoint: (int)UiTheme.MediaCardTitle,
-                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
-                    progressRatio: progressRatio,
-                    played: item?.Media?.Played ?? false
-                );
-            }
-            else
-            {
-                return MediaCardFactory.CreateImageCard(
-                    width,
-                    imageHeight,
-                    textHeight,
-                    item.Title,
-                    hasSubtitle ? item.Subtitle : null,
-                    item.ImageUrl,
-                    out _,
-                    out playedBadge,
-                    focusBorder: FocusBorder,
-                    titlePoint: (int)UiTheme.MediaCardTitle,
-                    subtitlePoint: (int)UiTheme.MediaCardSubtitle,
-                    progressRatio: progressRatio,
-                    played: item?.Media?.Played ?? false
-                );
-            }
+            // Rows outside the initial viewport are built without an image URL so their
+            // textures are only decoded once the row is actually scrolled into view.
+            var initialImageUrl = loadImage ? item.ImageUrl : null;
+
+            return MediaCardFactory.CreateImageCard(
+                width,
+                imageHeight,
+                textHeight,
+                item.Title,
+                hasSubtitle ? item.Subtitle : null,
+                initialImageUrl,
+                out imageView,
+                out playedBadge,
+                focusBorder: FocusBorder,
+                titlePoint: (int)UiTheme.MediaCardTitle,
+                subtitlePoint: (int)UiTheme.MediaCardSubtitle,
+                progressRatio: progressRatio,
+                played: item?.Media?.Played ?? false,
+                // Library artwork is a server-generated collage with a transparent margin
+                // baked in; trim it so the artwork reaches the card edges.
+                trimTransparentBorder: kind == HomeRowKind.Libraries
+            );
         }
 
         private static float? GetPlaybackProgressRatio(JellyfinMovie media)
@@ -650,6 +877,10 @@ namespace JellyfinTizen.Screens
             _rowSpacings.Insert(insertRowIdx, built.Spacing);
             _rowTops.Insert(insertRowIdx, y);
             _rowHeights.Insert(insertRowIdx, built.TotalHeight);
+            _rowPosterEntries.Insert(insertRowIdx, built.PosterEntries);
+
+            // Row indices shifted, so the tracked loaded-image window is stale.
+            ResyncLoadedImageRows();
 
             int shiftAmount = built.TotalHeight + built.RowSpacingAfter;
             for (int i = insertRowIdx + 1; i < _rowTops.Count; i++)
@@ -688,6 +919,11 @@ namespace JellyfinTizen.Screens
             if (rowIdx < _rowSpacings.Count) _rowSpacings.RemoveAt(rowIdx);
             if (rowIdx < _rowTops.Count) _rowTops.RemoveAt(rowIdx);
             if (rowIdx < _rowHeights.Count) _rowHeights.RemoveAt(rowIdx);
+            if (rowIdx < _rowPosterEntries.Count) _rowPosterEntries.RemoveAt(rowIdx);
+
+            // The removed row's images went away with its disposed block and the remaining
+            // row indices shifted, so the loaded-image window must be recomputed.
+            ResyncLoadedImageRows();
 
             // Shift every subsequent row up by the removed row's height, both in the
             // tracked _rowTops bookkeeping and the actual View PositionY.
@@ -803,7 +1039,7 @@ namespace JellyfinTizen.Screens
             var card = _rowCards[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+            scaleTarget.Scale = focused ? MediaCardFocus.FocusedScale : MediaCardFocus.UnfocusedScale;
 
             if (focused)
             {
@@ -895,12 +1131,14 @@ namespace JellyfinTizen.Screens
             if (targetY > 0)
                 targetY = 0;
 
-            if (Math.Abs(targetY - _verticalContainer.PositionY) < 0.5f)
+            if (Math.Abs(targetY - _verticalContainer.PositionY) >= 0.5f)
             {
-                return;
+                _verticalContainer.PositionY = targetY;
             }
 
-            _verticalContainer.PositionY = targetY;
+            // Cheap when the visible row window has not changed; keeps the loaded image
+            // set in sync with wherever the user has scrolled to.
+            EnsureVisibleRowImagesLoaded();
         }
 
         private void ActivateFocusedCard()
@@ -956,7 +1194,11 @@ namespace JellyfinTizen.Screens
                     );
                 });
 
-                var items = await AppState.Jellyfin.GetLibraryItemsAsync(lib.Id, lib.LibraryItemTypes);
+                var (items, totalRecordCount) = await AppState.Jellyfin.GetLibraryItemsPageAsync(
+                    lib.Id,
+                    lib.LibraryItemTypes,
+                    startIndex: 0,
+                    limit: JellyfinService.LibraryItemsPageSize);
                 var elapsedMs = (DateTime.UtcNow - loadingShownAt).TotalMilliseconds;
                 if (elapsedMs < 280)
                 {
@@ -966,7 +1208,7 @@ namespace JellyfinTizen.Screens
                 RunOnUiThread(() =>
                 {
                     NavigationService.Navigate(
-                        new LibraryMoviesGridScreen(lib, items),
+                        new LibraryMoviesGridScreen(lib, items, totalRecordCount),
                         addToStack: false
                     );
                 });

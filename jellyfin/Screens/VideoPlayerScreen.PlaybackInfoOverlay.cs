@@ -208,6 +208,11 @@ namespace JellyfinTizen.Screens
                     break;
 
                 _playbackInfoListContainer.Remove(child);
+
+                // This overlay is rebuilt every time it is opened during playback, so
+                // undisposed rows accumulate native actors for the whole session.
+                try { child.Dispose(); }
+                catch { }
             }
 
             var videoStream = GetCurrentVideoStream();

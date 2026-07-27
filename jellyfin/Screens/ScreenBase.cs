@@ -27,6 +27,21 @@ namespace JellyfinTizen.Screens
             HideDebugOverlay();
         }
 
+        /// <summary>
+        /// Releases resources that can be rebuilt on demand — primarily decoded image
+        /// textures — while keeping the screen's structure and state intact.
+        /// Called when the screen is pushed onto the navigation back stack and when the
+        /// platform reports memory pressure. Overrides must be safe to call repeatedly
+        /// and must run on the UI thread.
+        /// </summary>
+        public virtual void ReleaseOffscreenResources() { }
+
+        /// <summary>
+        /// Reloads anything dropped by <see cref="ReleaseOffscreenResources"/>. Called
+        /// when the screen becomes current again after being on the back stack.
+        /// </summary>
+        public virtual void RestoreOffscreenResources() { }
+
         protected View _debugOverlay;
         protected TextLabel _debugOverlayLabel;
         protected int _debugScrollOffset;

@@ -83,7 +83,10 @@ namespace JellyfinTizen.UI
                 Focusable = true
             };
 
-            var avatarUrl = AppState.GetUserAvatarUrl(512);
+            // Requested at roughly the rendered size rather than 512px: the button is only
+            // `size` pixels wide, and a large source costs the server a resize, the network
+            // a bigger payload, and the alpha mask more work on load.
+            var avatarUrl = AppState.GetUserAvatarUrl(Math.Max(96, size * 2));
             var hasAvatar = !string.IsNullOrWhiteSpace(avatarUrl);
             var settingsIconPath = sharedResPath + "settings.svg";
             var fallbackIconPath = sharedResPath + "jellyfin.png";
@@ -97,6 +100,10 @@ namespace JellyfinTizen.UI
                 ResourceUrl = iconUrl,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.BoxThenLanczos,
+                // Without this the avatar is released whenever the screen detaches from the
+                // scene, so it visibly re-loaded (and re-masked) on every back-navigation
+                // while the surrounding posters were already warm.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 Padding = hasAvatar ? new Extents(0, 0, 0, 0) : new Extents(10, 10, 10, 10),
                 AlphaMaskURL = sharedResPath + "avatar-mask.png",
                 CropToMask = true,

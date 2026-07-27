@@ -65,6 +65,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Keep the decoded texture when the screen detaches from the scene, so
+                // returning to this screen does not re-fetch the artwork.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(_backdropView, backdropUrl, UiAnimator.BackdropFadeInDurationMs);
@@ -108,6 +111,9 @@ namespace JellyfinTizen.Screens
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Keep the decoded texture when the screen detaches from the scene, so
+                // returning to this screen does not re-fetch the artwork.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(poster, posterUrl, UiAnimator.HeroFadeInDurationMs);
@@ -372,6 +378,11 @@ namespace JellyfinTizen.Screens
                         break;
 
                     _episodeRowContainer.Remove(child);
+
+                    // Episode cards own a decoded thumbnail texture; removing without
+                    // disposing leaks the native actor and its image.
+                    try { child.Dispose(); }
+                    catch { }
                 }
 
                 _episodeRowContainer.PositionX = GetEpisodeViewportLeftInset();

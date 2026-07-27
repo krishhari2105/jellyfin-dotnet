@@ -38,6 +38,10 @@ namespace JellyfinTizen.Screens
         private const int PosterRefreshBurstTicks = 6;
         private const int BuildTickMs = 15;
 
+        // Upper bound on synchronous view construction per build tick. Kept below a
+        // 60fps frame so D-pad input stays responsive while the grid populates.
+        private const int BuildBudgetMs = 8;
+
         private readonly Color _focusColor = UiTheme.MediaCardFocusBorder;
 
         private readonly List<JellyfinMovie> _movies;
@@ -52,6 +56,16 @@ namespace JellyfinTizen.Screens
         private readonly List<View> _rowContainers = new();
         private readonly List<View> _viewports = new();
         private readonly Dictionary<int, List<PosterEntry>> _posterEntriesByRow = new();
+
+        // Rows that currently hold decoded poster textures, plus the last evaluated
+        // keep-loaded window. Both exist so EnsureVisiblePostersLoaded can no-op when
+        // nothing moved and can unload without scanning the whole grid.
+        private readonly HashSet<int> _loadedRows = new();
+        private readonly List<int> _rowsToUnload = new();
+        private int _loadedWindowMin = -1;
+        private int _loadedWindowMax = -1;
+        private int _loadedWindowRowCount = -1;
+        private bool _loadedWindowValid;
 
         private View _contentViewport;
         private View _verticalContainer;
@@ -72,9 +86,15 @@ namespace JellyfinTizen.Screens
         private Timer _buildTimer;
         private Timer _posterRefreshTimer;
         private int _posterRefreshTicksRemaining;
-        private int _nextMovieIndexToBuild;
-        private int _nextRowY;
+        private int _nextMovieIndexToBuild;        private int _nextRowY;
         private bool _isGridBuildCompleted;
+
+        // Library paging state. _totalItemCount is the server's reported item count, so the
+        // grid knows when it has fetched everything.
+        private readonly JellyfinLibrary _library;
+        private int _totalItemCount;
+        private bool _isFetchingPage;
+        private bool _isHidden;
 
         private sealed class PosterLoadState
         {
@@ -91,8 +111,19 @@ namespace JellyfinTizen.Screens
         }
 
         public LibraryMoviesGridScreen(JellyfinLibrary library, List<JellyfinMovie> movies)
+            : this(library, movies, totalItemCount: movies?.Count ?? 0)
         {
-            _movies = movies;
+        }
+
+        public LibraryMoviesGridScreen(
+            JellyfinLibrary library,
+            List<JellyfinMovie> movies,
+            int totalItemCount)
+        {
+            // Copied into a mutable list because later pages are appended as the user scrolls.
+            _movies = movies as List<JellyfinMovie> ?? new List<JellyfinMovie>();
+            _library = library;
+            _totalItemCount = Math.Max(totalItemCount, _movies.Count);
             _useLandscapeCards = library?.UsesLandscapeGridCards == true;
             _sidePadding = _useLandscapeCards ? UiTheme.HomeSidePadding : SidePadding;
             _cardWidth = _useLandscapeCards ? LandscapeCardWidth : PortraitCardWidth;
@@ -151,8 +182,17 @@ namespace JellyfinTizen.Screens
             var rowHeight = cardHeight + (FocusPad * 2) + RowSpacing;
             int builtRows = 0;
 
+            // Each row materialises a full card tree per item, which comfortably exceeds a
+            // 60fps frame budget when several rows are built back to back. The batch is
+            // therefore capped by elapsed time as well as row count so remote input keeps
+            // being serviced while the grid fills in.
+            var budget = System.Diagnostics.Stopwatch.StartNew();
+
             while (_nextMovieIndexToBuild < _movies.Count && builtRows < rowsToBuild)
             {
+                if (builtRows > 0 && budget.ElapsedMilliseconds >= BuildBudgetMs)
+                    break;
+
                 var viewportTopPadding = (ushort)Math.Min(FocusPad + TopGlowPadBoost, (int)ushort.MaxValue);
                 var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - TopGlowPadBoost);
                 var viewport = new View
@@ -199,15 +239,87 @@ namespace JellyfinTizen.Screens
 
             if (_nextMovieIndexToBuild >= _movies.Count)
             {
-                _isGridBuildCompleted = true;
-                _buildTimer?.Stop();
+                if (HasMorePages)
+                {
+                    // Everything fetched so far is on screen. Pause building and pull the
+                    // next page; the timer resumes when it arrives.
+                    _buildTimer?.Stop();
+                    FireAndForget(FetchNextLibraryPageAsync(), nameof(FetchNextLibraryPageAsync));
+                }
+                else
+                {
+                    _isGridBuildCompleted = true;
+                    _buildTimer?.Stop();
+                }
             }
 
             PerfTrace.End("LibraryMoviesGridScreen.BuildGridBatch", timer);
         }
 
+        /// <summary>
+        /// True while the server holds items that have not been fetched yet.
+        /// </summary>
+        private bool HasMorePages =>
+            _library != null &&
+            _movies != null &&
+            _movies.Count < _totalItemCount;
+
+        /// <summary>
+        /// Appends the next page of library items and resumes the incremental row build.
+        /// Paging keeps the in-flight JSON payload and the number of live card view trees
+        /// bounded without ever hiding items from the user.
+        /// </summary>
+        private async Task FetchNextLibraryPageAsync()
+        {
+            if (_isFetchingPage || !HasMorePages)
+                return;
+
+            _isFetchingPage = true;
+            try
+            {
+                var (items, totalRecordCount) = await AppState.Jellyfin
+                    .GetLibraryItemsPageAsync(
+                        _library.Id,
+                        _library.LibraryItemTypes,
+                        startIndex: _movies.Count,
+                        limit: JellyfinService.LibraryItemsPageSize)
+                    .ConfigureAwait(false);
+
+                RunOnUiThread(() =>
+                {
+                    _isFetchingPage = false;
+
+                    // The screen may have been hidden or disposed while this page was in
+                    // flight; mutating its view tree now would touch disposed NUI actors.
+                    if (_isHidden)
+                        return;
+
+                    _totalItemCount = Math.Max(_totalItemCount, totalRecordCount);
+
+                    if (items == null || items.Count == 0)
+                    {
+                        // Nothing further is coming; treat the grid as complete rather than
+                        // retrying the same empty page forever.
+                        _totalItemCount = _movies.Count;
+                        _isGridBuildCompleted = true;
+                        return;
+                    }
+
+                    _movies.AddRange(items);
+                    StartBuildTimer();
+                });
+            }
+            catch (Exception ex)
+            {
+                AppDebugLog.Add($"[LibraryPaging] Failed to fetch next page: {ex.Message}");
+                RunOnUiThread(() => _isFetchingPage = false);
+            }
+        }
+
         public override void OnShow()
         {
+            _isHidden = false;
+
             if (_movies == null || _movies.Count == 0)
                 return;
 
@@ -324,6 +436,10 @@ namespace JellyfinTizen.Screens
 
         public override void OnHide()
         {
+            // Marks in-flight page results as stale. The screen may be disposed immediately
+            // after this (navigate-back), so a late continuation must not touch its views.
+            _isHidden = true;
+
             _buildTimer?.Stop();
             _posterRefreshTimer?.Stop();
             _posterRefreshTicksRemaining = 0;
@@ -354,6 +470,12 @@ namespace JellyfinTizen.Screens
                 return _preferredCardTextHeight;
 
             int maxTextHeight = _preferredCardTextHeight;
+
+            // Measured from the items loaded at construction time (the first page). Every
+            // card in the grid must share one text height or row positions would drift, so
+            // this is not recomputed when later pages arrive. An unusually long title on a
+            // later page therefore ellipsizes rather than growing the row; card titles set
+            // Ellipsis = true precisely for that case.
             foreach (var movie in _movies)
             {
                 if (movie == null)
@@ -503,6 +625,33 @@ namespace JellyfinTizen.Screens
             return true;
         }
 
+        public override void ReleaseOffscreenResources()
+        {
+            if (_loadedRows.Count == 0)
+            {
+                _loadedWindowValid = false;
+                return;
+            }
+
+            _rowsToUnload.Clear();
+            foreach (var row in _loadedRows)
+                _rowsToUnload.Add(row);
+
+            for (int i = 0; i < _rowsToUnload.Count; i++)
+                UnloadRow(_rowsToUnload[i]);
+
+            _rowsToUnload.Clear();
+
+            // Force the next visibility pass to reload the window from scratch.
+            _loadedWindowValid = false;
+        }
+
+        public override void RestoreOffscreenResources()
+        {
+            _loadedWindowValid = false;
+            EnsureVisiblePostersLoaded();
+        }
+
         private void EnsureVisiblePostersLoaded()
         {
             if (_posterEntriesByRow.Count == 0 || _grid.Count == 0)
@@ -526,18 +675,44 @@ namespace JellyfinTizen.Screens
             int keepLoadedMin = Math.Max(0, firstVisibleRow - PosterKeepLowRowBuffer);
             int keepLoadedMax = Math.Min(_grid.Count - 1, lastVisibleRow + PosterKeepLowRowBuffer);
 
+            // This runs on every build tick (15ms) and during scroll bursts. Re-walking
+            // every poster entry each time is pure overhead when the window has not moved,
+            // so the pass is skipped unless the window or the row count changed.
+            if (_loadedWindowValid &&
+                _loadedWindowMin == keepLoadedMin &&
+                _loadedWindowMax == keepLoadedMax &&
+                _loadedWindowRowCount == _grid.Count)
+            {
+                PerfTrace.End("LibraryMoviesGridScreen.EnsureVisiblePostersLoaded", timer);
+                return;
+            }
+
             for (int row = keepLoadedMin; row <= keepLoadedMax; row++)
             {
                 EnsureRowLoaded(row);
             }
 
-            foreach (var rowEntry in _posterEntriesByRow)
+            // Only rows recorded as loaded need unloading, which avoids touching the
+            // entries of every already-unloaded row in a large library.
+            if (_loadedRows.Count > 0)
             {
-                if (rowEntry.Key >= keepLoadedMin && rowEntry.Key <= keepLoadedMax)
-                    continue;
+                _rowsToUnload.Clear();
+                foreach (var loadedRow in _loadedRows)
+                {
+                    if (loadedRow < keepLoadedMin || loadedRow > keepLoadedMax)
+                        _rowsToUnload.Add(loadedRow);
+                }
 
-                UnloadRow(rowEntry.Key);
+                for (int i = 0; i < _rowsToUnload.Count; i++)
+                {
+                    UnloadRow(_rowsToUnload[i]);
+                }
             }
+
+            _loadedWindowMin = keepLoadedMin;
+            _loadedWindowMax = keepLoadedMax;
+            _loadedWindowRowCount = _grid.Count;
+            _loadedWindowValid = true;
 
             PerfTrace.End("LibraryMoviesGridScreen.EnsureVisiblePostersLoaded", timer);
         }
@@ -547,6 +722,7 @@ namespace JellyfinTizen.Screens
             if (!_posterEntriesByRow.TryGetValue(row, out var entries))
                 return;
 
+            bool anyLoaded = false;
             foreach (var entry in entries)
             {
                 var state = entry.State;
@@ -556,11 +732,19 @@ namespace JellyfinTizen.Screens
                     UiAnimator.FadeInOnImageReady(entry.Image, state.Url);
                     state.Loaded = true;
                 }
+
+                if (state.Loaded)
+                    anyLoaded = true;
             }
+
+            if (anyLoaded)
+                _loadedRows.Add(row);
         }
 
         private void UnloadRow(int row)
         {
+            _loadedRows.Remove(row);
+
             if (!_posterEntriesByRow.TryGetValue(row, out var entries))
                 return;
 
@@ -656,7 +840,7 @@ namespace JellyfinTizen.Screens
             var card = _grid[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? new Vector3(FocusScale, FocusScale, 1f) : Vector3.One;
+            scaleTarget.Scale = focused ? MediaCardFocus.FocusedScale : MediaCardFocus.UnfocusedScale;
             if (frame != null)
             {
                 frame.PositionZ = focused ? 20 : 0;

@@ -18,6 +18,13 @@ namespace JellyfinTizen.Screens
     {
         private const int ImageUrlCacheMaxEntries = 2500;
 
+        // Matches the Libraries row card size in HomeScreen.GetRowStyle. Both dimensions are
+        // sent so the server returns artwork at exactly this size: per Emby's image API,
+        // "specify both width and height to force an exact size", whereas maxWidth alone
+        // preserves the source aspect ratio.
+        private const int LibraryCardImageWidth = 420;
+        private const int LibraryCardImageHeight = 236;
+
         // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
         // LinkedList tracks access order (oldest at First, newest at Last)
         // Single lock covers entire GetOrAdd operation to prevent race conditions
@@ -211,11 +218,11 @@ namespace JellyfinTizen.Screens
 
                 foreach (var lib in libs)
                 {
-                    var imageUrl = lib.HasPrimaryImage
-                        ? BuildCachedImageUrl(
-                            $"library-primary:{lib.Id}:760:50:{apiKey}",
-                            () => $"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth=760&quality=50&api_key={apiKey}")
-                        : null;
+                    // Prefer Thumb, then Backdrop, then Primary. Continue Watching cards fill
+                    // this same landscape card correctly because Thumb/Backdrop are natively
+                    // 16:9, while a library's Primary image is a poster collage that is
+                    // taller than the card and therefore letterboxed inside it.
+                    var imageUrl = BuildLibraryCardImageUrl(lib, serverUrl, apiKey);
 
                     librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {
@@ -340,8 +347,34 @@ namespace JellyfinTizen.Screens
             return rows;
         }
 
-        internal static string GetThumbOrBackdropUrl(
-            JellyfinTizen.Models.JellyfinMovie item,
+        /// <summary>
+        /// Builds the artwork URL for a Libraries row card, preferring the 16:9 image types
+        /// so the artwork fills the landscape card instead of being letterboxed inside it.
+        /// </summary>
+        private static string BuildLibraryCardImageUrl(
+            JellyfinTizen.Models.JellyfinLibrary lib,
+            string serverUrl,
+            string apiKey)
+        {
+            if (lib == null || string.IsNullOrWhiteSpace(serverUrl))
+                return null;
+
+            string imageType;
+            if (lib.HasThumbImage)
+                imageType = "Thumb";
+            else if (lib.HasBackdropImage)
+                imageType = "Backdrop";
+            else if (lib.HasPrimaryImage)
+                imageType = "Primary";
+            else
+                return null;
+
+            return BuildCachedImageUrl(
+                $"library-card:{lib.Id}:{imageType}:{LibraryCardImageWidth}x{LibraryCardImageHeight}:50:{apiKey}",
+                () => $"{serverUrl}/Items/{lib.Id}/Images/{imageType}/0?width={LibraryCardImageWidth}&height={LibraryCardImageHeight}&quality=50&api_key={apiKey}");
+        }
+
+        internal static string GetThumbOrBackdropUrl(            JellyfinTizen.Models.JellyfinMovie item,
             string serverUrl,
             string apiKey,
             int maxWidth)

@@ -49,6 +49,17 @@ namespace JellyfinTizen.UI
         // ImageContainer background
         private static readonly Color ImageContainerBackground = new Color(0.12f, 0.12f, 0.12f, 1f);
 
+        // Emby generates library collage artwork with a transparent margin baked into the
+        // image: a sample 640x360 collage had opaque content only at x=8..631, y=4..351
+        // (8px left/right, 4px top, 8px bottom). The card background shows through that
+        // transparency and reads as black bars, and no fitting or sizing change can remove
+        // it because the padding is part of the image. These normalised bounds select just
+        // the opaque region, so they hold whatever pixel size the server returns.
+        private const float CollageTrimLeft = 8f / 640f;
+        private const float CollageTrimTop = 4f / 360f;
+        private const float CollageTrimWidth = 624f / 640f;
+        private const float CollageTrimHeight = 348f / 360f;
+
         public static int GetRecommendedTextHeight(
             int width,
             int preferredTextHeight,
@@ -92,7 +103,8 @@ namespace JellyfinTizen.UI
             int titlePoint = DefaultTitlePointSize,
             int subtitlePoint = DefaultSubtitlePointSize,
             float? progressRatio = null,
-            bool played = false)
+            bool played = false,
+            bool trimTransparentBorder = false)
         {
             _ = focusBorder;
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
@@ -134,11 +146,18 @@ namespace JellyfinTizen.UI
                 }
             };
 
+            // Content box inside the frame's padding, used as an absolute size for the image
+            // container and the image itself. Mixing ResizePolicy with the layout system's
+            // Width/HeightSpecification produced a view narrower than its parent, so the
+            // container's background showed as bands beside the artwork.
+            int contentWidth = Math.Max(0, width - (FramePadding * 2));
+            int contentHeight = Math.Max(0, imageHeight - (FramePadding * 2));
+
             var imageContainer = new View
             {
                 Name = "CardContent",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                WidthSpecification = contentWidth,
+                HeightSpecification = contentHeight,
                 ClippingMode = ClippingModeType.ClipChildren,
                 CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
@@ -148,10 +167,33 @@ namespace JellyfinTizen.UI
             imageView = new ImageView
             {
                 Name = "CardImage",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                WidthSpecification = contentWidth,
+                HeightSpecification = contentHeight,
+                // ImageView.FittingMode already defaults to Fill, so the artwork stretches to
+                // whatever size this view is given. The bands were never a fitting problem:
+                // the view itself was being measured smaller than the card.
+                //
+                // The NUI default is ReleasePolicyType.Detached, which frees the decoded
+                // texture as soon as the visual leaves the scene. Navigating away detaches
+                // the whole screen, so every card would have to be re-fetched from the
+                // server on return. Destroyed keeps the texture until this ImageView is
+                // disposed, which leaves the app in control of the memory: the screens'
+                // unload paths clear ResourceUrl explicitly when a row scrolls out of the
+                // keep-loaded window or when memory pressure is reported.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
+
+            if (trimTransparentBorder)
+            {
+                // Show only the opaque region, hiding the transparent margin the server bakes
+                // into generated collage artwork.
+                imageView.PixelArea = new RelativeVector4(
+                    CollageTrimLeft,
+                    CollageTrimTop,
+                    CollageTrimWidth,
+                    CollageTrimHeight);
+            }
             UiAnimator.FadeInOnImageReady(imageView, imageUrl);
             imageContainer.Add(imageView);
 

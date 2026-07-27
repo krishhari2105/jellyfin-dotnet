@@ -1,7 +1,10 @@
+using System;
+using Tizen.Applications;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
 using JellyfinTizen.Screens;
+using JellyfinTizen.Utils;
 
 namespace JellyfinTizen
 {
@@ -30,6 +33,43 @@ namespace JellyfinTizen
             catch (System.Exception ex)
             {
                 Tizen.Log.Error("Jellyfin", $"Failed to handle App resume: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Tizen raises low-memory notifications (SoftWarning, then HardWarning) before
+        /// the kernel OOM killer terminates the process. Shedding caches and decoded
+        /// image textures here is the only chance to stay alive on a memory-capped TV.
+        /// </summary>
+        protected override void OnLowMemory(LowMemoryEventArgs e)
+        {
+            base.OnLowMemory(e);
+
+            try
+            {
+                CacheHelper.Clear();
+                int trimmed = NavigationService.ReleaseStackedScreenResources();
+
+                bool aggressive = e?.LowMemoryStatus == LowMemoryStatus.HardWarning;
+
+                Tizen.Log.Warn(
+                    "Jellyfin",
+                    $"Low memory ({e?.LowMemoryStatus}): cleared cache, trimmed {trimmed} stacked screen(s).");
+
+                // A plain collect leaves the freed segments uncompacted, which does not
+                // reduce the RSS the kernel accounts against the app's cgroup.
+                System.Runtime.GCSettings.LargeObjectHeapCompactionMode =
+                    System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect(
+                    GC.MaxGeneration,
+                    aggressive ? GCCollectionMode.Forced : GCCollectionMode.Optimized,
+                    blocking: true,
+                    compacting: true);
+                GC.WaitForPendingFinalizers();
+            }
+            catch (Exception ex)
+            {
+                Tizen.Log.Error("Jellyfin", $"Failed to handle low memory: {ex.Message}");
             }
         }
 

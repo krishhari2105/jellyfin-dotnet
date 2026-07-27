@@ -224,6 +224,37 @@ namespace JellyfinTizen.Screens
         private const int TrickplayMaxConcurrentDownloads = 2; // max concurrent tile downloads
         private const int TrickplayMaxTileSizeBytes = 2 * 1024 * 1024; // 2MB max tile size (OOM protection)
         private const int SubtitleMaxSizeBytes = 5 * 1024 * 1024; // 5MB max subtitle file size (OOM protection)
+        private const int TrickplayTileCopyBufferBytes = 32 * 1024; // stream-to-disk chunk size
+
+        // Native position reads are shared between overlapping timers within this window.
+        // Well under one frame, so on-screen time never appears stale.
+        private const int PlayPositionCacheStalenessMs = 80;
+        private int _playPositionCacheMs;
+        private long _playPositionCacheTicks;
+        private bool _playPositionCacheValid;
+
+        // Scratch buffer for the 100ms parsed-subtitle render tick.
+        private readonly List<string> _activeSubtitleLineBuffer = new(4);
+
+        // Last values rendered into the OSD time labels, so the 500ms progress tick only
+        // rewrites text when the displayed value actually changes.
+        private int _lastRenderedPositionSeconds = -1;
+        private int _lastRenderedRemainingSeconds = -1;
+        private int _lastRenderedClockMinute = -1;
+
+        // Set while a final stop report is in flight so screen disposal does not tear down
+        // the report coordinator underneath it.
+        private int _stopObservationPending;
+
+        // NUI Vector3 wraps a native handle, so the scale values used by the OSD focus and
+        // seek-feedback animations are allocated once. Seek feedback in particular repeats
+        // every ~130ms while a D-pad key is held.
+        private static readonly Vector3 ScaleUnit = new Vector3(1f, 1f, 1f);
+        private static readonly Vector3 ScalePressed = new Vector3(0.98f, 0.98f, 1f);
+        private static readonly Vector3 ScaleSeekPulse = new Vector3(1.06f, 1.06f, 1f);
+        private static readonly Vector3 ScaleSmartPopupFocused = new Vector3(1.04f, 1.04f, 1f);
+        private static readonly Vector3 ScaleRowSelected = new Vector3(1.05f, 1.05f, 1f);
+        private static readonly Vector3 ScaleButtonFocused = new Vector3(1.08f, 1.08f, 1f);
 
         // --- NEW: Store MediaSource and Override Audio ---
         private MediaSourceInfo _currentMediaSource;
@@ -326,11 +357,39 @@ namespace JellyfinTizen.Screens
                 CreatePlayPauseFeedback();
         }
 
+        /// <summary>
+        /// Releases the report coordinator's cancellation source, but only when no final
+        /// stop report is still in flight. The navigation stack disposes a screen right
+        /// after <see cref="OnHide"/>, and OnHide dispatches the stop report
+        /// asynchronously — disposing here unconditionally would cancel it before the
+        /// server ever heard that playback ended. When a report is pending, ownership of
+        /// disposal passes to <c>ObservePlaybackStopAsync</c>.
+        /// </summary>
+        protected override void Dispose(DisposeTypes type)
+        {
+            if (Volatile.Read(ref _stopObservationPending) == 0)
+            {
+                DisposePlaybackReportCoordinator();
+            }
+
+            base.Dispose(type);
+        }
+
+        private void DisposePlaybackReportCoordinator()
+        {
+            try { _playbackReportCoordinator?.Dispose(); }
+            catch { }
+        }
+
         public override void OnHide()
         {
             Volatile.Write(ref _screenHidden, 1);
             var stopTask = RequestPlaybackStop(PlaybackStopReason.ScreenHidden);
             InvalidatePlaybackGeneration();
+
+            // The stop report outlives this screen's disposal, so it takes ownership of
+            // disposing the report coordinator once it finishes.
+            Volatile.Write(ref _stopObservationPending, 1);
             FireAndForget(
                 ObservePlaybackStopAsync(stopTask, PlaybackStopReason.ScreenHidden),
                 nameof(ObservePlaybackStopAsync));
@@ -1325,6 +1384,7 @@ namespace JellyfinTizen.Screens
 
             player.Start();
             _playbackShouldBePlaying = true;
+            InvalidatePlayPositionCache();
             StartFirstPlaybackPositionObserver(
                 player,
                 playbackToken,
@@ -1357,6 +1417,7 @@ namespace JellyfinTizen.Screens
             {
                 player.Pause();
                 _playbackShouldBePlaying = false;
+                InvalidatePlayPositionCache();
             }
         }
 
@@ -1535,45 +1596,39 @@ namespace JellyfinTizen.Screens
                     return false;
                 }
 
-                using var responseStream =
-                    await response.Content.ReadAsStreamAsync(cancellationToken);
-                using var subtitleBuffer = new MemoryStream();
-                var readBuffer = new byte[81920];
-                while (true)
+                // Streamed straight to disk. Buffering into a MemoryStream and then
+                // calling ToArray() held two copies of a file up to SubtitleMaxSizeBytes
+                // at once, both large enough to land on the large object heap.
+                long written;
+                using (var responseStream =
+                    await response.Content.ReadAsStreamAsync(cancellationToken))
+                using (var destination = new FileStream(
+                    localPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    TrickplayTileCopyBufferBytes,
+                    useAsync: true))
                 {
-                    int read = await responseStream.ReadAsync(
-                        readBuffer,
-                        0,
-                        readBuffer.Length,
-                        cancellationToken);
-                    if (read <= 0)
-                        break;
-
-                    if (subtitleBuffer.Length + read > SubtitleMaxSizeBytes)
-                    {
-                        if (DebugSwitches.EnablePlaybackDebugOverlay)
-                            CaptureSubtitleDebugEvent(
-                                "Subtitle.DownloadTooLarge",
-                                subtitleStream,
-                                $"size>{SubtitleMaxSizeBytes}");
-                        return false;
-                    }
-
-                    subtitleBuffer.Write(readBuffer, 0, read);
+                    written = await CopyWithLimitAsync(
+                        responseStream,
+                        destination,
+                        SubtitleMaxSizeBytes,
+                        cancellationToken).ConfigureAwait(false);
                 }
 
-                var data = subtitleBuffer.ToArray();
-                if (data.Length > SubtitleMaxSizeBytes)
+                if (written < 0)
                 {
                     if (DebugSwitches.EnablePlaybackDebugOverlay)
-                        CaptureSubtitleDebugEvent("Subtitle.DownloadTooLarge", subtitleStream, $"size={data.Length}");
+                        CaptureSubtitleDebugEvent(
+                            "Subtitle.DownloadTooLarge",
+                            subtitleStream,
+                            $"size>{SubtitleMaxSizeBytes}");
+
+                    try { File.Delete(localPath); } catch { }
                     return false;
                 }
 
-                await File.WriteAllBytesAsync(
-                    localPath,
-                    data,
-                    cancellationToken);
                 if (!IsCurrentPlaybackGeneration(playbackToken))
                     throw new OperationCanceledException(cancellationToken);
                 _externalSubtitlePath = localPath;
@@ -2875,7 +2930,9 @@ namespace JellyfinTizen.Screens
             }
 
             int firstActiveIndex = -1;
-            var activeLines = new List<string>();
+            // Reused across ticks: this runs 10x/second for the whole film.
+            var activeLines = _activeSubtitleLineBuffer;
+            activeLines.Clear();
             for (int i = firstCandidate; i < _subtitleCues.Count; i++)
             {
                 var cue = _subtitleCues[i];
@@ -2919,16 +2976,26 @@ namespace JellyfinTizen.Screens
             _subtitleText.Show();
         }
 
+        // Compiled once. NormalizeParsedCueText runs for every parsed cue and on every
+        // native subtitle event, and the static Regex cache is small enough that
+        // interpreted patterns can be evicted and recompiled repeatedly.
+        private static readonly Regex LineBreakTagRegex =
+            new Regex("<br\\s*/?>", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex AssOverrideTagRegex =
+            new Regex("\\{\\\\[^\\}]*\\}", RegexOptions.Compiled);
+        private static readonly Regex HtmlLikeTagRegex =
+            new Regex("<[^>]+>", RegexOptions.Compiled);
+
         private string NormalizeParsedCueText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return string.Empty;
 
             string normalized = text.Replace("\r", "").Replace("\\N", "\n").Replace("\\h", " ");
-            normalized = Regex.Replace(normalized, "(?i)<br\\s*/?>", "\n");
+            normalized = LineBreakTagRegex.Replace(normalized, "\n");
             // Remove common ASS/SSA inline override tags.
-            normalized = Regex.Replace(normalized, "\\{\\\\[^\\}]*\\}", string.Empty);
+            normalized = AssOverrideTagRegex.Replace(normalized, string.Empty);
             // Strip HTML-like formatting tags from SRT payloads.
-            normalized = Regex.Replace(normalized, "<[^>]+>", string.Empty);
+            normalized = HtmlLikeTagRegex.Replace(normalized, string.Empty);
             normalized = WebUtility.HtmlDecode(normalized);
             return normalized.Trim();
         }
@@ -4017,7 +4084,7 @@ namespace JellyfinTizen.Screens
 
             _seekFeedbackContainer.Show();
             _seekFeedbackContainer.Opacity = 0.86f;
-            _seekFeedbackContainer.Scale = new Vector3(0.98f, 0.98f, 1f);
+            _seekFeedbackContainer.Scale = ScalePressed;
 
             UiAnimator.Replace(
                 ref _seekFeedbackAnimation,
@@ -4026,7 +4093,7 @@ namespace JellyfinTizen.Screens
                     animation =>
                     {
                         animation.AnimateTo(_seekFeedbackContainer, "Opacity", 1.0f);
-                        animation.AnimateTo(_seekFeedbackContainer, "Scale", new Vector3(1.06f, 1.06f, 1f));
+                        animation.AnimateTo(_seekFeedbackContainer, "Scale", ScaleSeekPulse);
                     }
                 )
             );
@@ -4044,7 +4111,7 @@ namespace JellyfinTizen.Screens
                     animation =>
                     {
                         animation.AnimateTo(_seekFeedbackContainer, "Opacity", 0.0f);
-                        animation.AnimateTo(_seekFeedbackContainer, "Scale", new Vector3(0.98f, 0.98f, 1f));
+                        animation.AnimateTo(_seekFeedbackContainer, "Scale", ScalePressed);
                     },
                     () => _seekFeedbackContainer.Hide()
                 )
@@ -4300,7 +4367,7 @@ namespace JellyfinTizen.Screens
 
             UiFactory.SetButtonFocusState(_smartActionPopup, focused: _smartPopupFocused);
             ApplySmartPopupIconState(_smartPopupFocused);
-            AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? new Vector3(1.04f, 1.04f, 1f) : Vector3.One);
+            AnimateFocusScale(_smartActionPopup, _smartPopupFocused ? ScaleSmartPopupFocused : ScaleUnit);
         }
 
         private void ApplySmartPopupIconState(bool focused)
@@ -4336,7 +4403,7 @@ namespace JellyfinTizen.Screens
             _smartPopupVisible = true;
             _smartActionPopup.Show();
             _smartActionPopup.Opacity = 0.0f;
-            _smartActionPopup.Scale = new Vector3(0.98f, 0.98f, 1f);
+            _smartActionPopup.Scale = ScalePressed;
 
             UiAnimator.Replace(
                 ref _smartActionPopupAnimation,
@@ -4374,7 +4441,7 @@ namespace JellyfinTizen.Screens
                     animation =>
                     {
                         animation.AnimateTo(_smartActionPopup, "Opacity", 0.0f);
-                        animation.AnimateTo(_smartActionPopup, "Scale", new Vector3(0.98f, 0.98f, 1f));
+                        animation.AnimateTo(_smartActionPopup, "Scale", ScalePressed);
                     },
                     () => _smartActionPopup.Hide()
                 )
@@ -4702,7 +4769,7 @@ namespace JellyfinTizen.Screens
 
             UiFactory.SetButtonFocusState(button, focused: focused);
             ApplyOsdButtonIconState(button, focused);
-            AnimateFocusScale(button, focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One);
+            AnimateFocusScale(button, focused ? ScaleButtonFocused : ScaleUnit);
         }
 
         private void ApplyOsdButtonIconState(View view, bool focused)
@@ -4951,7 +5018,7 @@ namespace JellyfinTizen.Screens
             if (_subtitleOffsetButton != null)
             {
                 UiFactory.SetButtonFocusState(_subtitleOffsetButton, focused: _subtitleOffsetAdjustMode);
-                AnimateFocusScale(_subtitleOffsetButton, _subtitleOffsetAdjustMode ? new Vector3(1.05f, 1.05f, 1f) : Vector3.One);
+                AnimateFocusScale(_subtitleOffsetButton, _subtitleOffsetAdjustMode ? ScaleRowSelected : ScaleUnit);
             }
             _osdTimer.Stop();
             _osdTimer.Start();
@@ -5014,14 +5081,40 @@ namespace JellyfinTizen.Screens
                 HideTrickplayPreview();
             }
 
-            _currentTimeLabel.Text = FormatTime(position);
+            // The progress timer ticks twice a second but these labels only change once a
+            // second, so the formatted strings (and the NUI text property writes they
+            // trigger) are skipped when the whole-second values are unchanged.
+            int positionSeconds = position / 1000;
             int remainingMs = Math.Max(duration - position, 0);
-            _durationLabel.Text = $"-{FormatTime(remainingMs)}";
-            if (_clockLabel != null) _clockLabel.Text = FormatClockTime(DateTime.Now);
-            if (_endsAtLabel != null)
+            int remainingSeconds = remainingMs / 1000;
+
+            if (positionSeconds != _lastRenderedPositionSeconds)
             {
-                DateTime endAt = DateTime.Now.AddMilliseconds(remainingMs);
-                _endsAtLabel.Text = $"Ends at {FormatClockTime(endAt)}";
+                _currentTimeLabel.Text = FormatTime(position);
+                _lastRenderedPositionSeconds = positionSeconds;
+            }
+
+            if (remainingSeconds != _lastRenderedRemainingSeconds)
+            {
+                _durationLabel.Text = $"-{FormatTime(remainingMs)}";
+                _lastRenderedRemainingSeconds = remainingSeconds;
+
+                if (_endsAtLabel != null)
+                {
+                    DateTime endAt = DateTime.Now.AddMilliseconds(remainingMs);
+                    _endsAtLabel.Text = $"Ends at {FormatClockTime(endAt)}";
+                }
+            }
+
+            if (_clockLabel != null)
+            {
+                var now = DateTime.Now;
+                int clockMinuteStamp = (now.Hour * 60) + now.Minute;
+                if (clockMinuteStamp != _lastRenderedClockMinute)
+                {
+                    _clockLabel.Text = FormatClockTime(now);
+                    _lastRenderedClockMinute = clockMinuteStamp;
+                }
             }
         }
 
@@ -5215,8 +5308,40 @@ namespace JellyfinTizen.Screens
 
         private int GetPlayPositionMs()
         {
-            if (_player == null) return 0;
-            try { return _player.GetPlayPosition(); } catch { return 0; }
+            if (_player == null)
+            {
+                _playPositionCacheValid = false;
+                return 0;
+            }
+
+            // Four timers (subtitle render 100ms, smart actions 250ms, progress 500ms and
+            // the report ticker) each used to cross into the native player for the
+            // position. Every call briefly takes the player's internal lock, so overlapping
+            // polls are collapsed onto one native read per staleness window.
+            long now = Environment.TickCount64;
+            if (_playPositionCacheValid &&
+                now - _playPositionCacheTicks <= PlayPositionCacheStalenessMs)
+            {
+                return _playPositionCacheMs;
+            }
+
+            int position;
+            try { position = _player.GetPlayPosition(); }
+            catch { return 0; }
+
+            _playPositionCacheMs = position;
+            _playPositionCacheTicks = now;
+            _playPositionCacheValid = true;
+            return position;
+        }
+
+        /// <summary>
+        /// Drops the cached native position. Called after any operation that moves the
+        /// playhead so the next read reflects reality immediately.
+        /// </summary>
+        private void InvalidatePlayPositionCache()
+        {
+            _playPositionCacheValid = false;
         }
 
         private void UpdatePreviewBar()
@@ -5340,6 +5465,12 @@ namespace JellyfinTizen.Screens
             {
                 if (!_trickplayTileDownloads.TryGetValue(tileIndex, out downloadTask))
                 {
+                    // Scrubbing can request tiles far faster than they download. Without a
+                    // ceiling every request queues another concurrent transfer, each with
+                    // its own in-flight buffer.
+                    if (_trickplayTileDownloads.Count >= TrickplayMaxConcurrentDownloads)
+                        return null;
+
                     downloadTask = DownloadTrickplayTileAsync(tileIndex);
                     _trickplayTileDownloads[tileIndex] = downloadTask;
                 }
@@ -5352,14 +5483,92 @@ namespace JellyfinTizen.Screens
             {
                 _trickplayTileDownloads.Remove(tileIndex);
                 if (!string.IsNullOrWhiteSpace(path))
+                {
                     _trickplayTileCache[tileIndex] = path;
+                    TrimTrickplayTileCacheLocked(tileIndex);
+                }
             }
 
             return path;
         }
 
-        private async Task<string> DownloadTrickplayTileAsync(int tileIndex)
+        /// <summary>
+        /// Caps the resolved tile cache at <see cref="TrickplayMaxCacheTiles"/> entries,
+        /// evicting the tiles furthest from the one just requested and deleting their
+        /// backing files. Must be called while holding <c>_trickplayTileLock</c>.
+        /// </summary>
+        private void TrimTrickplayTileCacheLocked(int currentTileIndex)
         {
+            while (_trickplayTileCache.Count > TrickplayMaxCacheTiles)
+            {
+                int furthestTile = 0;
+                int furthestDistance = -1;
+
+                foreach (var tile in _trickplayTileCache.Keys)
+                {
+                    if (tile == currentTileIndex)
+                        continue;
+
+                    int distance = Math.Abs(tile - currentTileIndex);
+                    if (distance > furthestDistance)
+                    {
+                        furthestDistance = distance;
+                        furthestTile = tile;
+                    }
+                }
+
+                if (furthestDistance < 0)
+                    break;
+
+                if (_trickplayTileCache.Remove(furthestTile, out var evictedPath) &&
+                    !string.IsNullOrWhiteSpace(evictedPath))
+                {
+                    try { File.Delete(evictedPath); }
+                    catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Copies <paramref name="source"/> into <paramref name="destination"/> while
+        /// enforcing a hard byte ceiling, so a server that omits or understates
+        /// Content-Length cannot make the app write (or buffer) an unbounded payload.
+        /// </summary>
+        /// <returns>
+        /// Bytes written, or <c>-1</c> when the limit was exceeded.
+        /// </returns>
+        private static async Task<long> CopyWithLimitAsync(
+            Stream source,
+            Stream destination,
+            long maxBytes,
+            CancellationToken cancellationToken = default)
+        {
+            var buffer = new byte[TrickplayTileCopyBufferBytes];
+            long total = 0;
+
+            while (true)
+            {
+                int read = await source
+                    .ReadAsync(buffer, 0, buffer.Length, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (read <= 0)
+                    break;
+
+                total += read;
+                if (total > maxBytes)
+                    return -1;
+
+                await destination
+                    .WriteAsync(buffer, 0, read, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            await destination.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return total;
+        }
+
+        private async Task<string> DownloadTrickplayTileAsync(int tileIndex)        {
             if (_trickplayInfo == null || string.IsNullOrWhiteSpace(_movie?.Id) || string.IsNullOrWhiteSpace(AppState.ServerUrl))
                 return null;
 
@@ -5393,11 +5602,31 @@ namespace JellyfinTizen.Screens
                     return null; // Skip tiles that are too large
                 }
 
-                var bytes = await response.Content.ReadAsByteArrayAsync();
-                if (bytes == null || bytes.Length < 64 || bytes.Length > TrickplayMaxTileSizeBytes)
-                    return null;
+                // Streamed straight to disk. Buffering a multi-megabyte JPEG sprite sheet
+                // into a byte[] first puts it on the large object heap, and several tiles
+                // can be in flight while the user scrubs.
+                long written;
+                using (var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                using (var destination = new FileStream(
+                    localPath,
+                    FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.None,
+                    TrickplayTileCopyBufferBytes,
+                    useAsync: true))
+                {
+                    written = await CopyWithLimitAsync(
+                        source,
+                        destination,
+                        TrickplayMaxTileSizeBytes).ConfigureAwait(false);
+                }
 
-                await File.WriteAllBytesAsync(localPath, bytes);
+                if (written < 64 || written > TrickplayMaxTileSizeBytes)
+                {
+                    try { File.Delete(localPath); } catch { }
+                    return null;
+                }
+
                 return localPath;
             }
             catch
@@ -5831,7 +6060,7 @@ namespace JellyfinTizen.Screens
                 var row = _subtitleListContainer.GetChildAt((uint)i);
                 bool selected = (i == _subtitleIndex);
                 UiFactory.SetButtonFocusState(row, focused: selected);
-                AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
+                AnimateFocusScale(row, selected ? ScaleRowSelected : ScaleUnit);
             }
             // Keep subtitle selection fully manual; FocusManager + ScrollableBase can crash on some TVs.
         }
@@ -5889,6 +6118,11 @@ namespace JellyfinTizen.Screens
                     break;
 
                 _subtitleListContainer.Remove(child);
+
+                // Rebuilt on every subtitle/audio menu open; undisposed rows would
+                // accumulate native actors for the whole playback session.
+                try { child.Dispose(); }
+                catch { }
             }
 
             if (!_burnIn)
@@ -6510,7 +6744,7 @@ namespace JellyfinTizen.Screens
                 var row = _audioListContainer.GetChildAt((uint)i);
                 bool selected = (i == _audioIndex);
                 UiFactory.SetButtonFocusState(row, focused: selected);
-                AnimateFocusScale(row, selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One);
+                AnimateFocusScale(row, selected ? ScaleRowSelected : ScaleUnit);
             }
             // Keep audio selection fully manual; device FocusManager + ScrollableBase can crash on some TVs.
         }
@@ -8050,6 +8284,7 @@ namespace JellyfinTizen.Screens
             {
                 _player.Pause();
                 _playbackShouldBePlaying = false;
+                InvalidatePlayPositionCache();
                 CancelSeekSafetyCheck();
                 ShowPlayPauseFeedback(isPaused: true);
                 ReportProgressToServer(force: true);
@@ -8059,6 +8294,7 @@ namespace JellyfinTizen.Screens
             {
                 _player.Start();
                 _playbackShouldBePlaying = true;
+                InvalidatePlayPositionCache();
                 ShowPlayPauseFeedback(isPaused: false);
                 ReportProgressToServer(force: true);
                 return false;
