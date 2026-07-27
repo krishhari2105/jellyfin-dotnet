@@ -18,9 +18,10 @@ namespace JellyfinTizen.Screens
     {
         private const int ImageUrlCacheMaxEntries = 2500;
 
-        // Matches the Libraries row card width in HomeScreen.GetRowStyle, so the server is
-        // asked for the size actually rendered.
+        // Matches the Libraries row card size in HomeScreen.GetRowStyle, so the server is
+        // asked for artwork already cropped to the card's shape.
         private const int LibraryCardImageWidth = 420;
+        private const int LibraryCardImageHeight = 236;
 
         // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
         // LinkedList tracks access order (oldest at First, newest at Last)
@@ -215,14 +216,16 @@ namespace JellyfinTizen.Screens
 
                 foreach (var lib in libs)
                 {
-                    // Requested at the card's rendered width (HomeRowKind.Libraries in
-                    // HomeScreen.GetRowStyle is 420x236). This previously asked for 760px,
-                    // making the server resize and send roughly three times the pixel data
-                    // for the first row shown on the home screen.
+                    // fillWidth/fillHeight makes the server crop to the card's exact aspect
+                    // ratio, so the returned image is already 420x236. maxWidth alone
+                    // preserves the source aspect ratio, which for Emby's poster-collage
+                    // library artwork is taller than the card and left the card background
+                    // visible down each side. Asking the server for the final shape removes
+                    // any dependence on client-side fitting behaviour.
                     var imageUrl = lib.HasPrimaryImage
                         ? BuildCachedImageUrl(
-                            $"library-primary:{lib.Id}:{LibraryCardImageWidth}:50:{apiKey}",
-                            () => $"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth={LibraryCardImageWidth}&quality=50&api_key={apiKey}")
+                            $"library-primary:{lib.Id}:{LibraryCardImageWidth}x{LibraryCardImageHeight}:50:{apiKey}",
+                            () => $"{serverUrl}/Items/{lib.Id}/Images/Primary/0?fillWidth={LibraryCardImageWidth}&fillHeight={LibraryCardImageHeight}&quality=50&api_key={apiKey}")
                         : null;
 
                     librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
