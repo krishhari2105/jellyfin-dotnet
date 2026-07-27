@@ -134,16 +134,18 @@ namespace JellyfinTizen.UI
                 }
             };
 
+            // Content box inside the frame's padding, used as an absolute size for the image
+            // container and the image itself. Mixing ResizePolicy with the layout system's
+            // Width/HeightSpecification produced a view narrower than its parent, so the
+            // container's background showed as bands beside the artwork.
+            int contentWidth = Math.Max(0, width - (FramePadding * 2));
+            int contentHeight = Math.Max(0, imageHeight - (FramePadding * 2));
+
             var imageContainer = new View
             {
                 Name = "CardContent",
-                // The parent frame has a LinearLayout, and the layout system ignores
-                // ResizePolicy on its children: size comes from Width/HeightSpecification.
-                // With only FillToParent set this container fell back to wrap-content and was
-                // sized to the image's natural width, leaving the card background visible as
-                // bars beside artwork that was narrower than the card.
-                WidthSpecification = LayoutParamPolicies.MatchParent,
-                HeightSpecification = LayoutParamPolicies.MatchParent,
+                WidthSpecification = contentWidth,
+                HeightSpecification = contentHeight,
                 ClippingMode = ClippingModeType.ClipChildren,
                 CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
@@ -153,21 +155,11 @@ namespace JellyfinTizen.UI
             imageView = new ImageView
             {
                 Name = "CardImage",
-                // ImageView supplies its own layout, so under a layout-managed ancestor its
-                // default measurement is wrap-content (the image's natural size). Match the
-                // parent explicitly, or the artwork sits at its own size inside the card.
-                WidthSpecification = LayoutParamPolicies.MatchParent,
-                HeightSpecification = LayoutParamPolicies.MatchParent,
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                // Note: DesiredWidth/DesiredHeight are deliberately NOT set here. Giving the
-                // image visual a desired size interferes with the fitting mode below.
-                // Decode size is already bounded by the maxWidth requested in the image URLs.
-                //
-                // No fitting-mode override: the image URLs request the card's exact size, so
-                // the artwork already matches and the default aspect-preserving behaviour has
-                // nothing to letterbox. Do not set FittingModeType.Fill here -- it stretches
-                // and visibly distorts the artwork.
+                WidthSpecification = contentWidth,
+                HeightSpecification = contentHeight,
+                // ImageView.FittingMode already defaults to Fill, so the artwork stretches to
+                // whatever size this view is given. The bands were never a fitting problem:
+                // the view itself was being measured smaller than the card.
                 //
                 // The NUI default is ReleasePolicyType.Detached, which frees the decoded
                 // texture as soon as the visual leaves the scene. Navigating away detaches
