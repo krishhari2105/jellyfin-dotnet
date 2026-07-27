@@ -300,6 +300,8 @@ namespace JellyfinTizen.Screens
                 WidthSpecification = TitleLogoDisplayWidth,
                 HeightSpecification = TitleLogoDisplayHeight,
                 PreMultipliedAlpha = false,
+                // Survive scene detach so the logo does not re-fetch on back-navigation.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 FittingMode = FittingModeType.ShrinkToFit,
                 SamplingMode = SamplingModeType.Linear
             };

@@ -51,11 +51,11 @@ namespace JellyfinTizen.Core
 
         private const int ExitPopupWidth = 660;
 
-        // How many of the most recently stacked screens keep their decoded images. One is
-        // enough to make the immediate back-navigation instant regardless of server speed;
-        // anything deeper is unlikely to be revisited before the images would be re-fetched
-        // anyway. OnLowMemory overrides this and releases every stacked screen.
-        private const int StackedScreenImageRetainDepth = 1;        private const int ExitPopupButtonHeight = 64;
+        // How many of the most recently stacked screens keep their decoded images. Two
+        // covers the common browse-and-retreat pattern (library -> series -> season) while
+        // still bounding a deep stack. OnLowMemory overrides this and releases every
+        // stacked screen.
+        private const int StackedScreenImageRetainDepth = 2;        private const int ExitPopupButtonHeight = 64;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
