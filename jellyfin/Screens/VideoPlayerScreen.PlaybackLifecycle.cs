@@ -496,6 +496,7 @@ namespace JellyfinTizen.Screens
             {
                 _player = player;
                 _playerEventBindings = bindings;
+                InvalidatePlayPositionCache();
                 Volatile.Write(ref _activeNativePlayerGeneration, generation);
 
                 player.BufferingTime =
@@ -594,6 +595,12 @@ namespace JellyfinTizen.Screens
             Exception lastError = null;
             int? lastStatusCode = null;
             int lastManifestBytes = 0;
+
+            // Allocated once outside the retry loop. This probe can iterate many times over
+            // its timeout window, and a fresh 64KB array per attempt is pure GC pressure at
+            // the exact moment playback is starting.
+            var buffer = new byte[HlsManifestProbeMaxBytes];
+
             while (stopwatch.ElapsedMilliseconds < AppState.HlsManifestProbeTimeoutMs)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -618,7 +625,6 @@ namespace JellyfinTizen.Screens
                     {
                         using var responseStream =
                             await response.Content.ReadAsStreamAsync(readinessToken);
-                        var buffer = new byte[HlsManifestProbeMaxBytes];
                         int totalBytesRead = 0;
                         while (totalBytesRead < buffer.Length)
                         {
@@ -956,6 +962,9 @@ namespace JellyfinTizen.Screens
                 if (!IsCurrentPlayer(player, generation))
                     return false;
 
+                // The playhead moved, so any cached native position is stale.
+                InvalidatePlayPositionCache();
+
                 _lastKnownPositionTicks = Math.Max(0, (long)targetMs) * 10000;
                 LogPlaybackDiagnostic(
                     $"{stage}.Complete",
@@ -1106,6 +1115,7 @@ namespace JellyfinTizen.Screens
                     return;
 
                 player.Start();
+                InvalidatePlayPositionCache();
                 LogPlaybackDiagnostic(
                     "Seek.SafetyResume",
                     $"generation={generation},state={state}");
@@ -1319,7 +1329,14 @@ namespace JellyfinTizen.Screens
             PlaybackStopReason reason)
         {
             if (stopTask == null)
+            {
+                if (Interlocked.Exchange(ref _stopObservationPending, 0) == 1)
+                {
+                    DisposePlaybackReportCoordinator();
+                }
+
                 return;
+            }
 
             try
             {
@@ -1333,6 +1350,16 @@ namespace JellyfinTizen.Screens
                 LogPlaybackDiagnostic(
                     "StopReport.Failed",
                     $"reason={reason},error={ex.GetType().Name}");
+            }
+            finally
+            {
+                // The screen may already have been disposed by the navigation stack while
+                // this report was in flight, so releasing the coordinator is deferred to
+                // here to avoid cancelling the report that was still being sent.
+                if (Interlocked.Exchange(ref _stopObservationPending, 0) == 1)
+                {
+                    DisposePlaybackReportCoordinator();
+                }
             }
         }
     }

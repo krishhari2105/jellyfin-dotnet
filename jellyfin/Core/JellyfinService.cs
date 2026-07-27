@@ -67,6 +67,11 @@ namespace JellyfinTizen.Core
         private const string EpisodeListFields =
             "UserData,SeriesName,ImageTags,BackdropImageTags,IndexNumber,ParentIndexNumber,SeriesId";
 
+        // Items fetched per library page request. Bounds the in-flight JSON payload and the
+        // number of card view trees built at once, without hiding any items: callers page in
+        // the remainder as the user scrolls.
+        public const int LibraryItemsPageSize = 200;
+
         public void Connect(string serverUrl)
         {
             var normalizedUrl = serverUrl?.TrimEnd("/".ToCharArray());
@@ -133,8 +138,54 @@ namespace JellyfinTizen.Core
             }, path, cancellationToken);
         }
 
-        public async Task<string> PostAsync(string path, object body)
+        /// <summary>
+        /// Issues a GET and parses the response directly from the network stream.
+        /// Item-list endpoints can return several megabytes of JSON; buffering that into
+        /// a single string first puts a large-object-heap allocation in front of every
+        /// parse, which fragments the heap on a memory-constrained TV.
+        /// </summary>
+        /// <remarks>
+        /// The returned <see cref="JsonDocument"/> is owned by the caller and must be
+        /// disposed.
+        /// </remarks>
+        public async Task<JsonDocument> GetJsonDocumentAsync(
+            string path,
+            CancellationToken cancellationToken = default)
         {
+            return await ExecuteWithRetryAsync(async token =>
+            {
+                EnsureConnected();
+                using var response = await _http.GetAsync(
+                    ServerUrl + path,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    token).ConfigureAwait(false);
+
+                if (response.StatusCode == HttpStatusCode.Unauthorized || response.StatusCode == HttpStatusCode.Forbidden)
+                {
+                    HandleUnauthorizedResponse();
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Only failures pay the cost of materialising the body, and only so
+                    // the existing diagnostics keep working.
+                    var errorContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    AppDebugLog.Add($"JellyfinService.GetJsonDocumentAsync failed: path={path}, status={(int)response.StatusCode} {response.StatusCode}, body={TrimForDebug(errorContent, 220)}");
+                    var httpEx = new HttpRequestException(
+                        $"HTTP {(int)response.StatusCode} {response.StatusCode}: {errorContent}",
+                        null,
+                        response.StatusCode);
+                    httpEx.Data["ResponseContent"] = errorContent;
+                    httpEx.Data["RequestPath"] = path;
+                    throw httpEx;
+                }
+
+                using var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false);
+                return await JsonDocument.ParseAsync(stream, cancellationToken: token).ConfigureAwait(false);
+            }, path, cancellationToken);
+        }
+
+        public async Task<string> PostAsync(string path, object body)        {
             return await PostAsync(path, body, useCamelCase: true);
         }
 
@@ -179,7 +230,39 @@ namespace JellyfinTizen.Core
                     var json = await GetAsync("/Users/Public");
                     return JsonSerializer.Deserialize<List<JellyfinUser>>(json) ?? new List<JellyfinUser>();
                 },
-                TimeSpan.FromMinutes(5));
+                TimeSpan.FromMinutes(5),
+                EstimateUserListBytes);
+        }
+
+        /// <summary>
+        /// Conservative retained-size estimate for a cached public-user list, so the
+        /// shared cache's byte ceiling accounts for this entry instead of treating it as
+        /// free.
+        /// </summary>
+        private static long EstimateUserListBytes(List<JellyfinUser> users)
+        {
+            if (users == null || users.Count == 0)
+                return 0;
+
+            long total = 0;
+            foreach (var user in users)
+            {
+                if (user == null)
+                    continue;
+
+                total += ApproximateStringBytes(user.Id);
+                total += ApproximateStringBytes(user.Name);
+                total += PerObjectOverheadBytes;
+            }
+
+            return total;
+        }
+
+        private const int PerObjectOverheadBytes = 64;
+
+        private static long ApproximateStringBytes(string value)
+        {
+            return string.IsNullOrEmpty(value) ? 0 : (value.Length * sizeof(char)) + PerObjectOverheadBytes;
         }
 
         public async Task<(string userId, string username)> GetCurrentUserAsync()
@@ -198,7 +281,8 @@ namespace JellyfinTizen.Core
                     var username = root.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                     return (userId, username);
                 },
-                TimeSpan.FromMinutes(5));
+                TimeSpan.FromMinutes(5),
+                value => ApproximateStringBytes(value.userId) + ApproximateStringBytes(value.username));
         }
 
         public async Task<(string accessToken, string userId)> AuthenticateAsync(
@@ -406,27 +490,47 @@ namespace JellyfinTizen.Core
             return libraries;
         }
 
-        public async Task<List<JellyfinMovie>> GetMoviesAsync(string libraryId)
+        /// <summary>
+        /// Fetches one page of a library's items.
+        /// </summary>
+        /// <returns>
+        /// The parsed page and the library's total item count, so callers can page in the
+        /// remainder on demand instead of materialising an entire large library at once.
+        /// </returns>
+        public async Task<(List<JellyfinMovie> Items, int TotalRecordCount)> GetLibraryItemsPageAsync(
+            string libraryId,
+            string includeItemTypes,
+            int startIndex,
+            int limit)
         {
-            return await GetLibraryItemsAsync(libraryId, "Movie");
-        }
+            int clampedStart = Math.Max(0, startIndex);
+            int clampedLimit = Math.Max(1, limit);
 
-        public async Task<List<JellyfinMovie>> GetLibraryItemsAsync(string libraryId, string includeItemTypes)
-        {
             var url =
                 $"/Users/{UserId}/Items?ParentId={libraryId}" +
                 $"&IncludeItemTypes={includeItemTypes}" +
                 "&Recursive=true" +
                 $"&Fields={FullMediaFields}" +
                 "&SortBy=SortName" +
+                $"&StartIndex={clampedStart}" +
+                $"&Limit={clampedLimit}" +
                 $"&UserId={UserId}";
 
-            var json = await GetAsync(url);
+            // Streamed rather than buffered: an unpaged large library returns multi-megabyte
+            // JSON, and every item also becomes a card view tree.
+            using var doc = await GetJsonDocumentAsync(url).ConfigureAwait(false);
+            var root = doc.RootElement;
 
-            using var doc = JsonDocument.Parse(json);
-            var items = doc.RootElement.GetProperty("Items");
+            if (!root.TryGetProperty("Items", out var items) || items.ValueKind != JsonValueKind.Array)
+                return (new List<JellyfinMovie>(), 0);
 
-            return ParseMediaItems(items);
+            var parsedItems = ParseMediaItems(items);
+            int totalRecordCount = root.TryGetProperty("TotalRecordCount", out var totalProp) &&
+                                   totalProp.TryGetInt32(out var parsedTotal)
+                ? parsedTotal
+                : clampedStart + parsedItems.Count;
+
+            return (parsedItems, Math.Max(totalRecordCount, clampedStart + parsedItems.Count));
         }
 
         public async Task<List<JellyfinMovie>> GetSeasonsAsync(string seriesId)

@@ -66,6 +66,7 @@ namespace JellyfinTizen.Core
         public static void Init()
         {
             Interlocked.Exchange(ref _shutdownStarted, 0);
+            ConfigureCacheLimits();
             HttpClient = CreateHttpClient();
             Jellyfin = new JellyfinService(HttpClient);
             DeviceId = GetOrCreateDeviceId();
@@ -939,9 +940,27 @@ namespace JellyfinTizen.Core
             }
         }
 
+        // The shared cache holds API payloads whose size the callers know. Without an
+        // explicit byte ceiling the only bound is the entry count, which says nothing
+        // about actual memory use on a TV with a hard per-app limit.
+        private const long CacheMaxBytes = 4L * 1024 * 1024;
+        private const int CacheMaxEntries = 150;
+
+        private static void ConfigureCacheLimits()
+        {
+            JellyfinTizen.Utils.CacheHelper.MaxEntries = CacheMaxEntries;
+            JellyfinTizen.Utils.CacheHelper.MaxBytes = CacheMaxBytes;
+        }
+
         private static HttpClient CreateHttpClient()
         {
-            var handler = new HttpClientHandler();
+            var handler = new HttpClientHandler
+            {
+                // Jellyfin serves gzip for JSON. Item-list responses are the largest
+                // payloads the app fetches, and compressing them cuts both transfer time
+                // over the TV's Wi-Fi link and the size of the receive buffer.
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            };
             var client = new HttpClient(handler)
             {
                 Timeout = TimeSpan.FromSeconds(ApiRequestTimeoutSeconds)

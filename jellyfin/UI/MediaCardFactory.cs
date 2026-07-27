@@ -150,6 +150,11 @@ namespace JellyfinTizen.UI
                 Name = "CardImage",
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Bounds the decode size. The image URLs already request a server-side
+                // maxWidth, but a cache miss or a server that ignores the hint would
+                // otherwise be decoded at full resolution into texture memory.
+                DesiredWidth = width,
+                DesiredHeight = imageHeight,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(imageView, imageUrl);

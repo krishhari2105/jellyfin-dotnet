@@ -114,6 +114,12 @@ namespace JellyfinTizen.Screens
             return false;
         }
 
+        /// <summary>
+        /// Detaches every child of <paramref name="row"/> without disposing them.
+        /// Callers (the details action rows) reparent long-lived button views that are
+        /// owned by the screen and re-added on the next rebuild, so disposing here would
+        /// destroy views that are still in use.
+        /// </summary>
         public static void ClearRowChildren(View row)
         {
             while (row != null && row.ChildCount > 0)

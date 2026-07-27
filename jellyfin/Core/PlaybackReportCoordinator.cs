@@ -148,7 +148,7 @@ namespace JellyfinTizen.Core
     /// generation gate synchronously, waits for previously accepted reports, and then
     /// sends at most one authoritative Stopped report.
     /// </summary>
-    public sealed class PlaybackReportCoordinator
+    public sealed class PlaybackReportCoordinator : IDisposable
     {
         private readonly object _sync = new();
         private readonly Func<PlaybackReportType, PlaybackReportSnapshot, CancellationToken, Task> _sendAsync;
@@ -161,6 +161,7 @@ namespace JellyfinTizen.Core
         private PlaybackStopReason _stopReason;
         private int _activeGeneration = -1;
         private bool _stopRequested;
+        private int _disposed;
 
         public PlaybackReportCoordinator(
             Func<PlaybackReportType, PlaybackReportSnapshot, CancellationToken, Task> sendAsync,
@@ -203,6 +204,29 @@ namespace JellyfinTizen.Core
             catch (Exception ex)
             {
                 WriteLog($"report=pipeline-cancel outcome=Failed detail={ex.GetType().Name}");
+            }
+        }
+
+        /// <summary>
+        /// Cancels and releases the pipeline cancellation source. A coordinator is created
+        /// per player screen, and every queued report links a child token off this source,
+        /// so leaving it undisposed leaks a timer handle and a growing registration list
+        /// across episode transitions.
+        /// </summary>
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+
+            CancelPendingReports();
+
+            try
+            {
+                _pipelineCancellation.Dispose();
+            }
+            catch (Exception ex)
+            {
+                WriteLog($"report=pipeline-dispose outcome=Failed detail={ex.GetType().Name}");
             }
         }
 
@@ -375,21 +399,35 @@ namespace JellyfinTizen.Core
             PlaybackReportType reportType,
             PlaybackReportSnapshot snapshot)
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
-                _pipelineCancellation.Token);
-            timeout.CancelAfter(_requestTimeout);
+            CancellationTokenSource timeout;
             try
             {
-                await _sendAsync(reportType, snapshot, timeout.Token).ConfigureAwait(false);
-                return new SendResult(PlaybackReportOutcome.Succeeded, null);
+                // The coordinator can be disposed while a stop report is still in flight,
+                // which makes linking a child token throw rather than fail the send.
+                timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                    _pipelineCancellation.Token);
             }
-            catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+            catch (ObjectDisposedException)
             {
-                return new SendResult(PlaybackReportOutcome.TimedOut, "request-timeout");
+                return new SendResult(PlaybackReportOutcome.Failed, "pipeline-disposed");
             }
-            catch (Exception ex)
+
+            using (timeout)
             {
-                return new SendResult(PlaybackReportOutcome.Failed, $"request-{ex.GetType().Name}");
+                timeout.CancelAfter(_requestTimeout);
+                try
+                {
+                    await _sendAsync(reportType, snapshot, timeout.Token).ConfigureAwait(false);
+                    return new SendResult(PlaybackReportOutcome.Succeeded, null);
+                }
+                catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+                {
+                    return new SendResult(PlaybackReportOutcome.TimedOut, "request-timeout");
+                }
+                catch (Exception ex)
+                {
+                    return new SendResult(PlaybackReportOutcome.Failed, $"request-{ex.GetType().Name}");
+                }
             }
         }
 

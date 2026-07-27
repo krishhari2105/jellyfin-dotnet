@@ -1462,6 +1462,9 @@ namespace JellyfinTizen.Screens
 
         protected static void ClearRowChildren(View row)
         {
+            // Detach only. The details action rows reparent screen-owned button views
+            // that are re-added on the next rebuild, so disposal here would destroy
+            // views that are still live.
             while (row != null && row.ChildCount > 0)
             {
                 var child = row.GetChildAt(0);

@@ -372,6 +372,11 @@ namespace JellyfinTizen.Screens
                         break;
 
                     _episodeRowContainer.Remove(child);
+
+                    // Episode cards own a decoded thumbnail texture; removing without
+                    // disposing leaks the native actor and its image.
+                    try { child.Dispose(); }
+                    catch { }
                 }
 
                 _episodeRowContainer.PositionX = GetEpisodeViewportLeftInset();

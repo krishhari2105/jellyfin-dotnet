@@ -50,7 +50,12 @@ namespace JellyfinTizen.Core
         }
 
         private const int ExitPopupWidth = 660;
-        private const int ExitPopupButtonHeight = 64;
+
+        // How many of the most recently stacked screens keep their decoded images. One is
+        // enough to make the immediate back-navigation instant regardless of server speed;
+        // anything deeper is unlikely to be revisited before the images would be re-fetched
+        // anyway. OnLowMemory overrides this and releases every stacked screen.
+        private const int StackedScreenImageRetainDepth = 1;        private const int ExitPopupButtonHeight = 64;
 
         private static Window _window;
         private static ScreenBase _currentScreen;
@@ -379,6 +384,64 @@ namespace JellyfinTizen.Core
             }
         }
 
+        /// <summary>
+        /// Releases image resources for stacked screens below
+        /// <see cref="StackedScreenImageRetainDepth"/>, keeping the most recent entries
+        /// warm so back-navigation does not have to re-fetch from the server.
+        /// </summary>
+        private static void TrimStackedScreenImages()
+        {
+            if (_stack.Count <= StackedScreenImageRetainDepth)
+                return;
+
+            int depth = 0;
+            foreach (var screen in _stack)
+            {
+                depth++;
+                if (depth <= StackedScreenImageRetainDepth)
+                    continue;
+
+                if (screen == null)
+                    continue;
+
+                try { screen.ReleaseOffscreenResources(); }
+                catch (Exception ex)
+                {
+                    DebugLog($"TrimStackedScreenImages failed: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Releases reloadable resources held by every screen on the back stack in
+        /// response to platform memory pressure. Screens are deliberately not disposed:
+        /// back-navigation behaviour is preserved, and the decoded image textures being
+        /// dropped account for the overwhelming majority of the retained bytes.
+        /// </summary>
+        /// <returns>The number of stacked screens that were trimmed.</returns>
+        public static int ReleaseStackedScreenResources()
+        {
+            int trimmed = 0;
+
+            foreach (var screen in _stack)
+            {
+                if (screen == null)
+                    continue;
+
+                try
+                {
+                    screen.ReleaseOffscreenResources();
+                    trimmed++;
+                }
+                catch (Exception ex)
+                {
+                    DebugLog($"ReleaseStackedScreenResources failed: {ex.Message}");
+                }
+            }
+
+            return trimmed;
+        }
+
         private static void NavigateImmediate(ScreenBase screen, bool addToStack)
         {
             if (_currentScreen != null)
@@ -389,6 +452,13 @@ namespace JellyfinTizen.Core
                 {
                     ResetScreenTransform(_currentScreen);
                     _stack.Push(_currentScreen);
+
+                    // Decoded image textures are the app's largest memory consumer, but the
+                    // screen the user is about to return to is needed again within seconds.
+                    // Releasing it would make back-navigation wait on the server, which is
+                    // visible as a staggered fade-in on slower servers. So the top of the
+                    // stack keeps its images and only deeper screens release theirs.
+                    TrimStackedScreenImages();
                 }
                 else _currentScreen.Dispose();
             }
@@ -415,6 +485,7 @@ namespace JellyfinTizen.Core
             _currentScreen = _stack.Pop();
             if (_currentScreen == null) return;
             ResetScreenTransform(_currentScreen);
+            try { _currentScreen.RestoreOffscreenResources(); } catch { }
             _window.Add(_currentScreen);
             _currentScreen.OnShow();
 
