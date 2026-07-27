@@ -49,6 +49,17 @@ namespace JellyfinTizen.UI
         // ImageContainer background
         private static readonly Color ImageContainerBackground = new Color(0.12f, 0.12f, 0.12f, 1f);
 
+        // Emby generates library collage artwork with a transparent margin baked into the
+        // image: a sample 640x360 collage had opaque content only at x=8..631, y=4..351
+        // (8px left/right, 4px top, 8px bottom). The card background shows through that
+        // transparency and reads as black bars, and no fitting or sizing change can remove
+        // it because the padding is part of the image. These normalised bounds select just
+        // the opaque region, so they hold whatever pixel size the server returns.
+        private const float CollageTrimLeft = 8f / 640f;
+        private const float CollageTrimTop = 4f / 360f;
+        private const float CollageTrimWidth = 624f / 640f;
+        private const float CollageTrimHeight = 348f / 360f;
+
         public static int GetRecommendedTextHeight(
             int width,
             int preferredTextHeight,
@@ -92,7 +103,8 @@ namespace JellyfinTizen.UI
             int titlePoint = DefaultTitlePointSize,
             int subtitlePoint = DefaultSubtitlePointSize,
             float? progressRatio = null,
-            bool played = false)
+            bool played = false,
+            bool trimTransparentBorder = false)
         {
             _ = focusBorder;
             bool hasSubtitle = !string.IsNullOrWhiteSpace(subtitle);
@@ -171,6 +183,17 @@ namespace JellyfinTizen.UI
                 ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
+
+            if (trimTransparentBorder)
+            {
+                // Show only the opaque region, hiding the transparent margin the server bakes
+                // into generated collage artwork.
+                imageView.PixelArea = new RelativeVector4(
+                    CollageTrimLeft,
+                    CollageTrimTop,
+                    CollageTrimWidth,
+                    CollageTrimHeight);
+            }
             UiAnimator.FadeInOnImageReady(imageView, imageUrl);
             imageContainer.Add(imageView);
 

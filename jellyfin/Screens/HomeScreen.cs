@@ -600,7 +600,10 @@ namespace JellyfinTizen.Screens
                 titlePoint: (int)UiTheme.MediaCardTitle,
                 subtitlePoint: (int)UiTheme.MediaCardSubtitle,
                 progressRatio: progressRatio,
-                played: item?.Media?.Played ?? false
+                played: item?.Media?.Played ?? false,
+                // Library artwork is a server-generated collage with a transparent margin
+                // baked in; trim it so the artwork reaches the card edges.
+                trimTransparentBorder: kind == HomeRowKind.Libraries
             );
         }
 
