@@ -15,6 +15,15 @@ namespace JellyfinTizen.Models
         public string CollectionType { get; set; }
         public bool HasPrimaryImage { get; set; }
 
+        /// <summary>
+        /// True when the library has a Thumb image. Thumb is natively 16:9, unlike the
+        /// Primary image, which servers generate as a poster collage.
+        /// </summary>
+        public bool HasThumbImage { get; set; }
+
+        /// <summary>True when the library has at least one Backdrop image (also 16:9).</summary>
+        public bool HasBackdropImage { get; set; }
+
         public bool IsTvShows =>
             string.Equals(CollectionType, TvShowsCollectionType, StringComparison.OrdinalIgnoreCase);
 

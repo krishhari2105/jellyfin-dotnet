@@ -471,19 +471,32 @@ namespace JellyfinTizen.Core
                     continue;
 
                 var hasPrimary = false;
+                var hasThumb = false;
                 if (item.TryGetProperty("ImageTags", out var imageTags) &&
                     imageTags.ValueKind == JsonValueKind.Object)
                 {
                     if (imageTags.TryGetProperty("Primary", out _))
                         hasPrimary = true;
+
+                    if (imageTags.TryGetProperty("Thumb", out _))
+                        hasThumb = true;
                 }
+
+                // A library's Primary image is a poster collage whose aspect ratio does not
+                // match a 16:9 landscape card, whereas Thumb and Backdrop are natively 16:9.
+                var hasBackdrop =
+                    item.TryGetProperty("BackdropImageTags", out var backdropTags) &&
+                    backdropTags.ValueKind == JsonValueKind.Array &&
+                    backdropTags.GetArrayLength() > 0;
 
                 libraries.Add(new JellyfinLibrary
                 {
                     Id = item.GetProperty("Id").GetString(),
                     Name = item.GetProperty("Name").GetString(),
                     CollectionType = collectionType,
-                    HasPrimaryImage = hasPrimary
+                    HasPrimaryImage = hasPrimary,
+                    HasThumbImage = hasThumb,
+                    HasBackdropImage = hasBackdrop
                 });
             }
 
