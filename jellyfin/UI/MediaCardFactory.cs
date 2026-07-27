@@ -137,8 +137,13 @@ namespace JellyfinTizen.UI
             var imageContainer = new View
             {
                 Name = "CardContent",
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                // The parent frame has a LinearLayout, and the layout system ignores
+                // ResizePolicy on its children: size comes from Width/HeightSpecification.
+                // With only FillToParent set this container fell back to wrap-content and was
+                // sized to the image's natural width, leaving the card background visible as
+                // bars beside artwork that was narrower than the card.
+                WidthSpecification = LayoutParamPolicies.MatchParent,
+                HeightSpecification = LayoutParamPolicies.MatchParent,
                 ClippingMode = ClippingModeType.ClipChildren,
                 CornerRadius = UiTheme.MediaCardRadius,
                 CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
@@ -148,6 +153,11 @@ namespace JellyfinTizen.UI
             imageView = new ImageView
             {
                 Name = "CardImage",
+                // ImageView supplies its own layout, so under a layout-managed ancestor its
+                // default measurement is wrap-content (the image's natural size). Match the
+                // parent explicitly, or the artwork sits at its own size inside the card.
+                WidthSpecification = LayoutParamPolicies.MatchParent,
+                HeightSpecification = LayoutParamPolicies.MatchParent,
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 // Note: DesiredWidth/DesiredHeight are deliberately NOT set here. Giving the
