@@ -18,6 +18,10 @@ namespace JellyfinTizen.Screens
     {
         private const int ImageUrlCacheMaxEntries = 2500;
 
+        // Matches the Libraries row card width in HomeScreen.GetRowStyle, so the server is
+        // asked for the size actually rendered.
+        private const int LibraryCardImageWidth = 420;
+
         // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
         // LinkedList tracks access order (oldest at First, newest at Last)
         // Single lock covers entire GetOrAdd operation to prevent race conditions
@@ -211,10 +215,14 @@ namespace JellyfinTizen.Screens
 
                 foreach (var lib in libs)
                 {
+                    // Requested at the card's rendered width (HomeRowKind.Libraries in
+                    // HomeScreen.GetRowStyle is 420x236). This previously asked for 760px,
+                    // making the server resize and send roughly three times the pixel data
+                    // for the first row shown on the home screen.
                     var imageUrl = lib.HasPrimaryImage
                         ? BuildCachedImageUrl(
-                            $"library-primary:{lib.Id}:760:50:{apiKey}",
-                            () => $"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth=760&quality=50&api_key={apiKey}")
+                            $"library-primary:{lib.Id}:{LibraryCardImageWidth}:50:{apiKey}",
+                            () => $"{serverUrl}/Items/{lib.Id}/Images/Primary/0?maxWidth={LibraryCardImageWidth}&quality=50&api_key={apiKey}")
                         : null;
 
                     librariesRow.Items.Add(new JellyfinTizen.Models.HomeItemData
