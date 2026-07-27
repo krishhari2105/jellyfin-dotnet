@@ -18,8 +18,12 @@ namespace JellyfinTizen.Screens
     {
         private const int ImageUrlCacheMaxEntries = 2500;
 
-        // Matches the Libraries row card width in HomeScreen.GetRowStyle.
+        // Matches the Libraries row card size in HomeScreen.GetRowStyle. Both dimensions are
+        // sent so the server returns artwork at exactly this size: per Emby's image API,
+        // "specify both width and height to force an exact size", whereas maxWidth alone
+        // preserves the source aspect ratio.
         private const int LibraryCardImageWidth = 420;
+        private const int LibraryCardImageHeight = 236;
 
         // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
         // LinkedList tracks access order (oldest at First, newest at Last)
@@ -366,8 +370,8 @@ namespace JellyfinTizen.Screens
                 return null;
 
             return BuildCachedImageUrl(
-                $"library-card:{lib.Id}:{imageType}:{LibraryCardImageWidth}:50:{apiKey}",
-                () => $"{serverUrl}/Items/{lib.Id}/Images/{imageType}/0?maxWidth={LibraryCardImageWidth}&quality=50&api_key={apiKey}");
+                $"library-card:{lib.Id}:{imageType}:{LibraryCardImageWidth}x{LibraryCardImageHeight}:50:{apiKey}",
+                () => $"{serverUrl}/Items/{lib.Id}/Images/{imageType}/0?width={LibraryCardImageWidth}&height={LibraryCardImageHeight}&quality=50&api_key={apiKey}");
         }
 
         internal static string GetThumbOrBackdropUrl(            JellyfinTizen.Models.JellyfinMovie item,

@@ -164,13 +164,10 @@ namespace JellyfinTizen.UI
                 // image visual a desired size interferes with the fitting mode below.
                 // Decode size is already bounded by the maxWidth requested in the image URLs.
                 //
-                // Stretch the artwork to the card's shape. Library Primary images are poster
-                // collages that are taller than the 16:9 card, and any aspect-preserving mode
-                // scales them to fit and leaves the card background visible down each side.
-                // Fill maps to VisualFittingModeType.Fill ("stretched to fill, not preserving
-                // aspect ratio"). ScaleToFill was tried first, but it maps to
-                // OverFitKeepAspectRatio, which is non-browsable in TizenFX and had no effect.
-                FittingMode = FittingModeType.Fill,
+                // No fitting-mode override: the image URLs request the card's exact size, so
+                // the artwork already matches and the default aspect-preserving behaviour has
+                // nothing to letterbox. Do not set FittingModeType.Fill here -- it stretches
+                // and visibly distorts the artwork.
                 //
                 // The NUI default is ReleasePolicyType.Detached, which frees the decoded
                 // texture as soon as the visual leaves the scene. Navigating away detaches
