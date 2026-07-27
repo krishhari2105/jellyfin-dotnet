@@ -151,10 +151,14 @@ namespace JellyfinTizen.UI
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightResizePolicy = ResizePolicyType.FillToParent,
                 // Note: DesiredWidth/DesiredHeight are deliberately NOT set here. Giving the
-                // image visual a desired size makes it preserve the source aspect ratio
-                // within the card, which pillarboxes artwork whose aspect does not match
-                // (server-generated library collages). Decode size is already bounded by the
-                // maxWidth requested in the image URLs.
+                // image visual a desired size interferes with the fitting mode below.
+                // Decode size is already bounded by the maxWidth requested in the image URLs.
+                //
+                // Fill the card, cropping any overflow, instead of fitting the artwork
+                // inside it. Server-generated library collages are taller than the 16:9
+                // card, so an aspect-preserving fit letterboxed them and left the card
+                // background visible as bars down each side.
+                FittingMode = FittingModeType.ScaleToFill,
                 //
                 // The NUI default is ReleasePolicyType.Detached, which frees the decoded
                 // texture as soon as the visual leaves the scene. Navigating away detaches
