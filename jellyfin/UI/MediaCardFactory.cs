@@ -155,6 +155,14 @@ namespace JellyfinTizen.UI
                 // otherwise be decoded at full resolution into texture memory.
                 DesiredWidth = width,
                 DesiredHeight = imageHeight,
+                // The NUI default is ReleasePolicyType.Detached, which frees the decoded
+                // texture as soon as the visual leaves the scene. Navigating away detaches
+                // the whole screen, so every card would have to be re-fetched from the
+                // server on return. Destroyed keeps the texture until this ImageView is
+                // disposed, which leaves the app in control of the memory: the screens'
+                // unload paths clear ResourceUrl explicitly when a row scrolls out of the
+                // keep-loaded window or when memory pressure is reported.
+                ReleasePolicy = ReleasePolicyType.Destroyed,
                 PreMultipliedAlpha = false
             };
             UiAnimator.FadeInOnImageReady(imageView, imageUrl);
