@@ -13,16 +13,16 @@ namespace JellyfinTizen.Screens
         private View _burnInToggle;
         private TextLabel _burnInLabel;
         private bool _burnInEnabled;
-        private View _forceTsToggle;
-        private TextLabel _forceTsLabel;
-        private bool _forceTsEnabled;
+        private View _forceFmp4Toggle;
+        private TextLabel _forceFmp4Label;
+        private bool _forceFmp4Enabled;
         private readonly List<View> _toggleOptions = new();
         private int _toggleIndex;
 
         public SettingsScreen()
         {
             _burnInEnabled = AppState.BurnInSubtitles;
-            _forceTsEnabled = AppState.ForceTsTranscoding;
+            _forceFmp4Enabled = AppState.ForceFmp4Transcoding;
             Initialize();
         }
 
@@ -70,7 +70,7 @@ namespace JellyfinTizen.Screens
             _burnInToggle.Add(_burnInLabel);
             panel.Add(_burnInToggle);
 
-            _forceTsToggle = new View
+            _forceFmp4Toggle = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
                 HeightSpecification = 96,
@@ -79,9 +79,9 @@ namespace JellyfinTizen.Screens
                 BorderlineWidth = 1.5f,
                 Focusable = true
             };
-            UiFactory.SetButtonFocusState(_forceTsToggle, focused: false);
+            UiFactory.SetButtonFocusState(_forceFmp4Toggle, focused: false);
 
-            _forceTsLabel = new TextLabel(GetForceTsLabel())
+            _forceFmp4Label = new TextLabel(GetForceFmp4Label())
             {
                 TextColor = UiTheme.TextPrimary,
                 PointSize = 28,
@@ -90,17 +90,17 @@ namespace JellyfinTizen.Screens
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            _forceTsToggle.Add(_forceTsLabel);
-            panel.Add(_forceTsToggle);
+            _forceFmp4Toggle.Add(_forceFmp4Label);
+            panel.Add(_forceFmp4Toggle);
 
             root.Add(panel);
             Add(root);
 
             _toggleOptions.Clear();
             _toggleOptions.Add(_burnInToggle);
-            _toggleOptions.Add(_forceTsToggle);
+            _toggleOptions.Add(_forceFmp4Toggle);
             BindToggleFocus(_burnInToggle);
-            BindToggleFocus(_forceTsToggle);
+            BindToggleFocus(_forceFmp4Toggle);
 
             _toggleIndex = 0;
             FocusCurrentToggle();
@@ -157,7 +157,7 @@ namespace JellyfinTizen.Screens
             }
 
             if (_toggleIndex == 1)
-                ToggleForceTs();
+                ToggleForceFmp4();
         }
 
         private void ToggleBurnIn()
@@ -167,11 +167,11 @@ namespace JellyfinTizen.Screens
             _burnInLabel.Text = GetBurnInLabel();
         }
 
-        private void ToggleForceTs()
+        private void ToggleForceFmp4()
         {
-            _forceTsEnabled = !_forceTsEnabled;
-            AppState.ForceTsTranscoding = _forceTsEnabled;
-            _forceTsLabel.Text = GetForceTsLabel();
+            _forceFmp4Enabled = !_forceFmp4Enabled;
+            AppState.ForceFmp4Transcoding = _forceFmp4Enabled;
+            _forceFmp4Label.Text = GetForceFmp4Label();
         }
 
         private string GetBurnInLabel()
@@ -179,9 +179,9 @@ namespace JellyfinTizen.Screens
             return _burnInEnabled ? "Burn-In Subtitles: ON" : "Burn-In Subtitles: OFF";
         }
 
-        private string GetForceTsLabel()
+        private string GetForceFmp4Label()
         {
-            return _forceTsEnabled ? "Force TS Profile: ON" : "Force TS Profile: OFF";
+            return _forceFmp4Enabled ? "Force fMP4 Profile: ON" : "Force fMP4 Profile: OFF";
         }
     }
 }

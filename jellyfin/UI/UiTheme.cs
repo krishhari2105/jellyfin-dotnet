@@ -68,7 +68,15 @@ namespace JellyfinTizen.UI
         public const float MediaCardTitle = 26f;
         public const float MediaCardSubtitle = 20f;
         public const float MediaCardRadius = 18.0f;
-        public const float MediaCardFocusScale = 1.05f;
+        // Focus throughout the app is communicated through borders, fills, icon
+        // colours, and text colours. Controls do not change physical size on focus.
+        public const float FocusScale = 1.0f;
+        public const float MediaCardFocusScale = FocusScale;
+        public const int MediaCardLandscapeWidth = 420;
+        public const int MediaCardLandscapeHeight = 236;
+        public const int MediaCardPortraitWidth = 260;
+        public const int MediaCardPortraitHeight = 390;
+        public const int MediaCardLandscapeSpacing = 30;
         public const int MediaCardProgressHeight = 8;
         public const int MediaCardProgressInset = 10;
         public const int MediaCardProgressBottomInset = 10;
@@ -82,6 +90,11 @@ namespace JellyfinTizen.UI
         public const int HomeSidePadding = 60;
         public const int HomeFocusBorder = 5;
         public const int HomeFocusPad = 30;
+        public const int HomeRowHeaderToCardGap = 24;
+        public const int HomeBrowseFocusBottomPadding = 8;
+        public const int HomeRowTitleToCardsGap = 0;
+        public const int HomeLandscapeRowSpacing = 6;
+        public const int HomePortraitRowSpacing = 8;
 
         // Series and season detail layouts
         public const int DetailsHorizontalPadding = 90;
@@ -93,16 +106,20 @@ namespace JellyfinTizen.UI
         public const int LibraryTopBarPadding = 60;
         public const int LibraryContentTopGap = 20;
         public const int LibrarySidePadding = 80;
-        public const int LibraryCardSpacing = 30;
-        public const int LibraryRowSpacing = 50;
+        public const int LibraryCardSpacing = MediaCardLandscapeSpacing;
+        public const int LibraryRowSpacing = 8;
         public const int LibraryFocusBorder = 5;
-        public const int LibraryFocusPad = 30;
-        public const int LibraryTopGlowPadBoost = 8;
+        public const int LibraryFocusTopPadding = 24;
+        public const int LibraryFocusBottomPadding = 8;
         public const int PlayerOverlayWidth = 450;
         public const int PlayerOverlayHeight = 500;
         public const int PlayerOverlayHeaderHeight = 80;
+        public const int PlayerOverlayBottomInset = 20;
         public const int PlayerOverlayListRowHeight = 60;
         public const float PlayerOverlayListRowRadius = 8.0f;
+        public const int PlayerOverlayListCellPadding = 5;
+        public const int PlayerOverlayScrollEdgeInset = 8;
+        public const int PlayerOverlayListHorizontalInset = 20;
         public const ushort PlayerOverlayItemMarginHorizontal = 20;
         public const ushort PlayerOverlayItemMarginVertical = 5;
         public const ushort PlayerOverlayItemPaddingLeft = 20;
@@ -146,7 +163,8 @@ namespace JellyfinTizen.UI
         // Subtitle presentation is sized relative to a 1080p logical viewport.
         public const int PlayerSubtitleReferenceViewportWidth = 1920;
         public const int PlayerSubtitleReferenceViewportHeight = 1080;
-        public const float PlayerSubtitleTextSize = 54f;
+        // Applied as a pixel size, so one typographic point is ~1.33px.
+        public const float PlayerSubtitleTextSize = 52.7f;
         public const float PlayerSubtitleMinimumPixelSize = 38f;
         public const float PlayerSubtitleMaximumPixelSize = 86f;
         public const float PlayerSubtitleHorizontalSafeAreaRatio = 0.10f;

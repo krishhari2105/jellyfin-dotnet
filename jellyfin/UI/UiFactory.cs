@@ -88,5 +88,50 @@ namespace JellyfinTizen.UI
         {
             MonochromeAuthFactory.SetButtonFocusState(button, focused);
         }
+
+        public static View CreateTrackSelectionRow(
+            string text,
+            string id,
+            float itemPointSize)
+        {
+            var row = new View
+            {
+                Name = id ?? string.Empty,
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightSpecification = UiTheme.PlayerOverlayListRowHeight,
+                BackgroundColor = Color.Black,
+                CornerRadius =
+                    UiTheme.PlayerOverlayListRowHeight / 2.0f,
+                CornerRadiusPolicy =
+                    VisualTransformPolicyType.Absolute,
+                BorderlineWidth = 2.0f,
+                BorderlineColor = Color.White,
+                Margin = new Extents(
+                    UiTheme.PlayerOverlayItemMarginHorizontal,
+                    UiTheme.PlayerOverlayItemMarginHorizontal,
+                    UiTheme.PlayerOverlayItemMarginVertical,
+                    UiTheme.PlayerOverlayItemMarginVertical),
+                Focusable = false,
+                ClippingMode = ClippingModeType.ClipChildren
+            };
+
+            row.Add(new TextLabel(text ?? string.Empty)
+            {
+                WidthResizePolicy = ResizePolicyType.FillToParent,
+                HeightResizePolicy = ResizePolicyType.FillToParent,
+                PointSize = itemPointSize,
+                TextColor = Color.White,
+                HorizontalAlignment = HorizontalAlignment.Begin,
+                VerticalAlignment = VerticalAlignment.Center,
+                Padding = new Extents(
+                    UiTheme.PlayerOverlayItemPaddingLeft,
+                    (ushort)0,
+                    (ushort)0,
+                    (ushort)0),
+                Ellipsis = true
+            });
+            SetButtonFocusState(row, focused: false);
+            return row;
+        }
     }
 }

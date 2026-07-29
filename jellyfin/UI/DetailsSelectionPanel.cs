@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using Tizen.NUI.Components;
+using JellyfinTizen.Core;
 
 namespace JellyfinTizen.UI
 {
@@ -20,8 +21,12 @@ namespace JellyfinTizen.UI
 
     public sealed class DetailsSelectionPanel
     {
-        private const int DetailsPanelListHeight = 380;
-        private const int DetailsPanelHeight = UiTheme.PlayerOverlayHeaderHeight + DetailsPanelListHeight;
+        // Match the in-player subtitle panel's 20px bottom breathing room.
+        private const int DetailsPanelListHeight =
+            UiTheme.PlayerOverlayHeight -
+            UiTheme.PlayerOverlayHeaderHeight -
+            UiTheme.PlayerOverlayBottomInset;
+        private const int DetailsPanelHeight = UiTheme.PlayerOverlayHeight;
 
         private readonly View _overlay;
         private readonly View _panel;
@@ -68,10 +73,12 @@ namespace JellyfinTizen.UI
 
             _scrollView = new ScrollableBase
             {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PositionY = UiTheme.PlayerOverlayHeaderHeight,
+                WidthSpecification =
+                    UiTheme.PlayerOverlayWidth -
+                    (UiTheme.PlayerOverlayListHorizontalInset * 2),
                 HeightSpecification = DetailsPanelListHeight,
+                PositionX = UiTheme.PlayerOverlayListHorizontalInset,
+                PositionY = UiTheme.PlayerOverlayHeaderHeight,
                 ScrollingDirection = ScrollableBase.Direction.Vertical,
                 BackgroundColor = Color.Transparent
             };
@@ -83,7 +90,8 @@ namespace JellyfinTizen.UI
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 5)
+                    CellPadding =
+                        new Size2D(0, UiTheme.PlayerOverlayListCellPadding)
                 }
             };
 
@@ -157,49 +165,14 @@ namespace JellyfinTizen.UI
 
             for (int i = 0; i < _options.Count; i++)
             {
-                var row = CreateRow(_options[i].Label, _options[i].Id, itemPointSize);
+                var row = UiFactory.CreateTrackSelectionRow(
+                    _options[i].Label,
+                    _options[i].Id,
+                    itemPointSize);
                 _listContainer.Add(row);
             }
 
             _listContainer.PositionY = 0;
-        }
-
-        private static View CreateRow(string text, string id, float itemPointSize)
-        {
-            var row = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = UiTheme.PlayerOverlayListRowHeight,
-                BackgroundColor = Color.Black,
-                CornerRadius = UiTheme.PlayerOverlayListRowHeight / 2.0f,
-                CornerRadiusPolicy = VisualTransformPolicyType.Absolute,
-                BorderlineWidth = 2.0f,
-                BorderlineColor = Color.White,
-                Margin = new Extents(
-                    UiTheme.PlayerOverlayItemMarginHorizontal,
-                    UiTheme.PlayerOverlayItemMarginHorizontal,
-                    UiTheme.PlayerOverlayItemMarginVertical,
-                    UiTheme.PlayerOverlayItemMarginVertical),
-                Focusable = false,
-                ClippingMode = ClippingModeType.ClipChildren,
-                Name = id ?? string.Empty
-            };
-
-            var label = new TextLabel(text ?? string.Empty)
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
-                PointSize = itemPointSize,
-                TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Begin,
-                VerticalAlignment = VerticalAlignment.Center,
-                Padding = new Extents(UiTheme.PlayerOverlayItemPaddingLeft, (ushort)0, (ushort)0, (ushort)0),
-                Ellipsis = true
-            };
-
-            row.Add(label);
-            UiFactory.SetButtonFocusState(row, focused: false);
-            return row;
         }
 
         private void UpdateVisuals()
@@ -210,7 +183,7 @@ namespace JellyfinTizen.UI
                 var row = _listContainer.GetChildAt((uint)i);
                 bool selected = i == _selectedIndex;
                 UiFactory.SetButtonFocusState(row, focused: selected);
-                row.Scale = selected ? new Vector3(1.05f, 1.05f, 1.0f) : Vector3.One;
+                row.Scale = Vector3.One;
             }
         }
 
@@ -221,20 +194,21 @@ namespace JellyfinTizen.UI
                 return;
 
             var selected = _listContainer.GetChildAt((uint)_selectedIndex);
-            int rowTop = (int)Math.Round(selected.PositionY);
-            int rowBottom = rowTop + (int)Math.Round(selected.SizeHeight);
-
             int viewportHeight = _scrollView.SizeHeight > 0
                 ? (int)Math.Round(_scrollView.SizeHeight)
                 : DetailsPanelListHeight;
-            int currentTop = (int)(-_listContainer.PositionY);
-            int currentBottom = currentTop + viewportHeight;
-
-            int nextTop = currentTop;
-            if (rowBottom > currentBottom)
-                nextTop = rowBottom - viewportHeight + 8;
-            else if (rowTop < currentTop)
-                nextTop = Math.Max(0, rowTop - 8);
+            int nextTop = TrackListScrollCalculator.CalculateTargetOffset(
+                _selectedIndex,
+                count,
+                (int)Math.Round(selected.PositionY),
+                (int)Math.Round(selected.SizeHeight),
+                (int)Math.Round(_listContainer.SizeHeight),
+                viewportHeight,
+                (int)(-_listContainer.PositionY),
+                UiTheme.PlayerOverlayListRowHeight,
+                UiTheme.PlayerOverlayListCellPadding,
+                UiTheme.PlayerOverlayItemMarginVertical,
+                UiTheme.PlayerOverlayScrollEdgeInset);
 
             _listContainer.PositionY = -nextTop;
         }

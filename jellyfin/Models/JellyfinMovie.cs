@@ -23,6 +23,15 @@ namespace JellyfinTizen.Models
         public bool HasBackdrop { get; set; }
         public bool HasLogo { get; set; }
 
+        /// <summary>
+        /// Item that owns the backdrop this item inherits (the series for an episode or
+        /// season). The server only reports this when the item has no backdrop of its own.
+        /// </summary>
+        public string ParentBackdropItemId { get; set; }
+
+        /// <summary>True when <see cref="ParentBackdropItemId"/> has at least one Backdrop image.</summary>
+        public bool HasParentBackdrop { get; set; }
+
         public bool IsSeries =>
             string.Equals(ItemType, "Series", StringComparison.OrdinalIgnoreCase);
 

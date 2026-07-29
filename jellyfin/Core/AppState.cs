@@ -33,7 +33,11 @@ namespace JellyfinTizen.Core
         public static string Username { get; set; }
         public static string DeviceId { get; private set; }
         public static bool BurnInSubtitles { get; set; }
-        public static bool ForceTsTranscoding { get; set; }
+        // MPEG-TS HLS is the primary streaming container; fMP4 is only selected
+        // automatically for codecs that cannot be carried in MPEG-TS (AV1/VP9).
+        // This opt-in setting promotes the fMP4 HLS profile ahead of MPEG-TS for
+        // every source, for firmware/servers where MPEG-TS misbehaves.
+        public static bool ForceFmp4Transcoding { get; set; }
 
         public static JellyfinService Jellyfin { get; private set; }
         public static HttpClient HttpClient { get; private set; }
@@ -72,7 +76,7 @@ namespace JellyfinTizen.Core
             DeviceId = GetOrCreateDeviceId();
             Jellyfin.DeviceId = DeviceId;
             BurnInSubtitles = false;
-            ForceTsTranscoding = false;
+            ForceFmp4Transcoding = false;
 
             AppLifecycle.TryTransition(AppLifecycleState.NotStarted, AppLifecycleState.Ready);
 

@@ -15,22 +15,25 @@ namespace JellyfinTizen.Screens
         private const int TopBarHeight = UiTheme.HomeTopBarHeight;
         private const int TopBarZ = 10;
         private const int TopBarLeftPadding = UiTheme.HomeSidePadding;
-        private const int PortraitCardWidth = 260;
-        private const int PortraitCardHeight = 390;
-        private const int LandscapeCardWidth = 420;
-        private const int LandscapeCardHeight = 236;
+        private const int PortraitCardWidth = UiTheme.MediaCardPortraitWidth;
+        private const int PortraitCardHeight = UiTheme.MediaCardPortraitHeight;
+        private const int LandscapeCardWidth = UiTheme.MediaCardLandscapeWidth;
+        private const int LandscapeCardHeight = UiTheme.MediaCardLandscapeHeight;
         private const int Spacing = UiTheme.LibraryCardSpacing;
         private const int SidePadding = UiTheme.LibrarySidePadding;
         private const int TopBarRightPadding = UiTheme.HomeSidePadding;
         private const int RowSpacing = UiTheme.LibraryRowSpacing;
         private const int FocusBorder = UiTheme.LibraryFocusBorder;
-        private const int FocusPad = UiTheme.LibraryFocusPad;
+        private const int FocusTopPadding = UiTheme.LibraryFocusTopPadding;
+        private const int FocusBottomPadding = UiTheme.LibraryFocusBottomPadding;
+        private const int FocusVerticalPadding = FocusTopPadding + FocusBottomPadding;
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
-        private const int TopGlowPadBoost = UiTheme.LibraryTopGlowPadBoost;
         private const float FocusScale = UiTheme.MediaCardFocusScale;
-        private const int PreferredPortraitCardTextHeight = 96;
-        private const int PreferredLandscapeCardTextHeight = 80;
+        // MediaCardFactory grows individual rows for wrapped titles. A compact
+        // single-line baseline keeps consecutive grid rows visually grouped.
+        private const int PreferredPortraitCardTextHeight = 64;
+        private const int PreferredLandscapeCardTextHeight = 64;
         private const int RowBuildBatchSize = 3;
         private const int PosterVisibleRowBuffer = 1;
         private const int PosterKeepLowRowBuffer = 2;
@@ -179,7 +182,7 @@ namespace JellyfinTizen.Screens
 
             var timer = PerfTrace.Start();
             var cardHeight = _cardHeight + _cardTextHeight;
-            var rowHeight = cardHeight + (FocusPad * 2) + RowSpacing;
+            var rowHeight = cardHeight + FocusVerticalPadding + RowSpacing;
             int builtRows = 0;
 
             // Each row materialises a full card tree per item, which comfortably exceeds a
@@ -193,21 +196,18 @@ namespace JellyfinTizen.Screens
                 if (builtRows > 0 && budget.ElapsedMilliseconds >= BuildBudgetMs)
                     break;
 
-                var viewportTopPadding = (ushort)Math.Min(FocusPad + TopGlowPadBoost, (int)ushort.MaxValue);
-                var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - TopGlowPadBoost);
                 var viewport = new View
                 {
                     WidthResizePolicy = ResizePolicyType.FillToParent,
-                    HeightSpecification = cardHeight + (FocusPad * 2),
+                    HeightSpecification = cardHeight + FocusVerticalPadding,
                     PositionY = _nextRowY,
-                    ClippingMode = ClippingModeType.ClipChildren,
-                    Padding = new Extents((ushort)_sidePadding, (ushort)_sidePadding, viewportTopPadding, viewportBottomPadding)
+                    ClippingMode = ClippingModeType.ClipChildren
                 };
 
                 var rowContainer = new View
                 {
                     PositionX = _sidePadding,
-                    PositionY = 0,
+                    PositionY = FocusTopPadding,
                     Layout = new LinearLayout
                     {
                         LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -344,6 +344,9 @@ namespace JellyfinTizen.Screens
             _settingsFocused = false;
             _settingsVisible = false;
             ResetSettingsPanelVisualState();
+            MediaBrowserChrome.SetProfileButtonFocusState(
+                _settingsButton,
+                focused: false);
 
             Highlight(true);
             ScrollHorizontalIfNeeded();
@@ -659,7 +662,7 @@ namespace JellyfinTizen.Screens
 
             var timer = PerfTrace.Start();
 
-            int rowHeight = (_cardHeight + _cardTextHeight) + (FocusPad * 2) + RowSpacing;
+            int rowHeight = (_cardHeight + _cardTextHeight) + FocusVerticalPadding + RowSpacing;
             int viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
                 ? (int)_contentViewport.SizeHeight
                 : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
@@ -860,7 +863,9 @@ namespace JellyfinTizen.Screens
         private void FocusSettings(bool focused)
         {
             _settingsFocused = focused;
-            _settingsButton.Scale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
+            MediaBrowserChrome.SetProfileButtonFocusState(
+                _settingsButton,
+                focused);
 
             if (focused)
             {
@@ -1037,7 +1042,7 @@ namespace JellyfinTizen.Screens
             var viewportHeight = _contentViewport != null && _contentViewport.SizeHeight > 0
                 ? _contentViewport.SizeHeight
                 : Math.Max(0, Window.Default.Size.Height - ContentViewportStartY);
-            var rowHeight = (_cardHeight + _cardTextHeight) + (FocusPad * 2) + RowSpacing;
+            var rowHeight = (_cardHeight + _cardTextHeight) + FocusVerticalPadding + RowSpacing;
 
             var currentOffset = -_verticalContainer.PositionY;
             var targetY = _verticalContainer.PositionY;

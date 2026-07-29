@@ -824,6 +824,20 @@ namespace JellyfinTizen.Core
                 hasBackdrop = true;
             }
 
+            // Jellyfin/Emby only populate the Parent* image fields when the item itself
+            // has no image of that type, so this is the series backdrop for an episode
+            // or season. Absent on servers that do not send inherited image info, in
+            // which case the item's own Thumb/Primary artwork stays the only option.
+            var parentBackdropItemId =
+                item.TryGetProperty("ParentBackdropItemId", out var parentBackdropId)
+                    ? parentBackdropId.GetString()
+                    : null;
+            var hasParentBackdrop =
+                !string.IsNullOrWhiteSpace(parentBackdropItemId) &&
+                item.TryGetProperty("ParentBackdropImageTags", out var parentBackdropTags) &&
+                parentBackdropTags.ValueKind == JsonValueKind.Array &&
+                parentBackdropTags.GetArrayLength() > 0;
+
             var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
             var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
             if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name))
@@ -873,7 +887,9 @@ namespace JellyfinTizen.Core
                 HasPrimary = hasPrimary,
                 HasThumb = hasThumb,
                 HasBackdrop = hasBackdrop,
-                HasLogo = hasLogo
+                HasLogo = hasLogo,
+                ParentBackdropItemId = parentBackdropItemId,
+                HasParentBackdrop = hasParentBackdrop
             };
         }
 
@@ -992,7 +1008,7 @@ namespace JellyfinTizen.Core
         public async Task PostCapabilitiesAsync()
         {
             // Use the Builder to get the clean profile
-            var profile = ProfileBuilder.BuildTizenProfile(preferTsHlsFirst: AppState.ForceTsTranscoding);
+            var profile = ProfileBuilder.BuildTizenProfile(preferFmp4HlsFirst: AppState.ForceFmp4Transcoding);
 
             // The server expects a root "Capabilities" property
             var caps = new
@@ -1067,16 +1083,19 @@ namespace JellyfinTizen.Core
             bool effectiveSubtitlesDisabled = !hasExplicitSubtitleSelection && (subtitleHandlingDisabled || subtitleIndexExplicitlyOff);
             bool effectiveForceBurnIn = forceBurnIn && hasExplicitSubtitleSelection;
             bool forceServerTranscode = disableDirectPlay || effectiveForceBurnIn;
+            // The user-facing "Force fMP4" setting is server-agnostic: it promotes the
+            // fMP4 HLS profile ahead of the default MPEG-TS route for every source.
+            // The automatic Emby codec-driven preference remains as before.
             bool effectivePreferFmp4HlsFirst =
-                IsEmby &&
                 !effectiveForceBurnIn &&
                 !preferTsOnlyHls &&
-                preferFmp4HlsFirst;
+                (AppState.ForceFmp4Transcoding ||
+                 (IsEmby && preferFmp4HlsFirst));
             bool effectivePreferTsHlsFirst =
                 !effectiveForceBurnIn &&
                 !preferTsOnlyHls &&
                 !effectivePreferFmp4HlsFirst &&
-                (preferTsHlsFirst || AppState.ForceTsTranscoding);
+                preferTsHlsFirst;
             var deviceProfile = ProfileBuilder.BuildTizenProfile(
                 forceBurnIn: effectiveForceBurnIn,
                 disableSubtitles: effectiveSubtitlesDisabled && !effectiveForceBurnIn,

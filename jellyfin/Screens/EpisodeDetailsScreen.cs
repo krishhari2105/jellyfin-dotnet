@@ -17,7 +17,8 @@ namespace JellyfinTizen.Screens
 {
     public class EpisodeDetailsScreen : DetailsScreenBase
     {
-        private const int FixedTopContentHeight = 500;
+        // Vertical gap between the title block, chips row, action row and description.
+        private const int InfoColumnGap = 18;
         private const int EpisodeThumbWidth = 640;
         private const int EpisodeThumbHeight = 360;
         private const float SeriesTitlePointSize = 28f;
@@ -41,7 +42,10 @@ namespace JellyfinTizen.Screens
             var backdropUrl = JellyfinImageUrlBuilder.BuildBackdropUrl(
                 _episode,
                 serverUrl,
-                apiKey);
+                apiKey,
+                // Last resort when the server reported no inherited backdrop and the
+                // episode has no artwork of its own.
+                fallbackBackdropItemId: _episode.SeriesId);
             bool hasBackdropImage = !string.IsNullOrWhiteSpace(backdropUrl);
             var backdrop = new ImageView
             {
@@ -108,7 +112,7 @@ namespace JellyfinTizen.Screens
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
+                    CellPadding = new Size2D(0, InfoColumnGap)
                 }
             };
 
@@ -141,17 +145,14 @@ namespace JellyfinTizen.Screens
             var topContentViewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = FixedTopContentHeight,
-                ClippingMode = ClippingModeType.ClipChildren
-            };
-            var topContent = new View
-            {
-                WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightResizePolicy = ResizePolicyType.FillToParent,
+                // Wraps to the measured title height. A fixed box sized for the worst
+                // case (two wrapped lines) would leave dead space above single-line
+                // titles, which is far more common.
+                HeightResizePolicy = ResizePolicyType.FitToChildren,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
-                    CellPadding = new Size2D(0, 26)
+                    CellPadding = new Size2D(0, 6)
                 }
             };
             _overviewViewport = new View
@@ -172,12 +173,10 @@ namespace JellyfinTizen.Screens
                 VerticalAlignment = VerticalAlignment.Top
             };
             _overviewViewport.Add(_overviewLabel);
-            topContent.Add(seriesTitle);
-            topContent.Add(episodeTitle);
-            topContent.Add(_metadataContainer);
-            topContent.Add(_overviewViewport);
-            topContentViewport.Add(topContent);
+            topContentViewport.Add(seriesTitle);
+            topContentViewport.Add(episodeTitle);
             _infoColumn.Add(topContentViewport);
+            _infoColumn.Add(_metadataContainer);
             UpdateMetadataView();
             if (_episode.IsPlayableVideo)
             {
@@ -189,8 +188,7 @@ namespace JellyfinTizen.Screens
                     {
                         LinearOrientation = LinearLayout.Orientation.Vertical,
                         CellPadding = new Size2D(0, 14)
-                    },
-                    Margin = new Extents(0, 0, 34, 0)
+                    }
                 };
 
                 _buttonRowTop = DetailsScreenHelpers.CreateButtonRow();
@@ -211,6 +209,7 @@ namespace JellyfinTizen.Screens
                 RebuildActionButtons(includeVersionButton: false);
                 _infoColumn.Add(_buttonGroup);
             }
+            _infoColumn.Add(_overviewViewport);
             content.Add(thumbFrame);
             content.Add(_infoColumn);
             root.Add(backdrop);

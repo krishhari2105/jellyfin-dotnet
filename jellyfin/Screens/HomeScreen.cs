@@ -16,10 +16,11 @@ namespace JellyfinTizen.Screens
         private const int TopBarHeight = UiTheme.HomeTopBarHeight;
         private const int SidePadding = UiTheme.HomeSidePadding;
         private const int FocusBorder = UiTheme.HomeFocusBorder;
-        private const int FocusPad = UiTheme.HomeFocusPad;
+        private const int HeaderToCardGap = UiTheme.HomeRowHeaderToCardGap;
+        private const int FocusBottomPadding = UiTheme.HomeBrowseFocusBottomPadding;
+        private const int RowVerticalPadding = HeaderToCardGap + FocusBottomPadding;
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
-        private const float FocusScale = UiTheme.MediaCardFocusScale;
 
         private readonly List<HomeRowData> _rows;
         private readonly List<List<View>> _rowCards = new();
@@ -139,6 +140,9 @@ namespace JellyfinTizen.Screens
             _settingsVisible = false;
             _libraryNavigationInProgress = false;
             ResetSettingsPanelVisualState();
+            MediaBrowserChrome.SetProfileButtonFocusState(
+                _settingsButton,
+                focused: false);
 
             Highlight(true);
             ScrollHorizontalIfNeeded();
@@ -221,14 +225,10 @@ namespace JellyfinTizen.Screens
             var textHeight = GetCardTextHeight(row, rowInfo.CardWidth);
             var cardHeight = rowInfo.CardHeight + textHeight;
             var rowHeight = rowInfo.RowHeight + textHeight;
-            var titleImageGap = 0;
-
-            var viewportTopPadding = (ushort)Math.Min(FocusPad + titleImageGap, (int)ushort.MaxValue);
-            var viewportBottomPadding = (ushort)Math.Max(0, FocusPad - titleImageGap);
             var rowBlock = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = rowHeight + (FocusPad * 2),
+                HeightSpecification = rowHeight + RowVerticalPadding,
                 PositionY = y
             };
 
@@ -238,16 +238,17 @@ namespace JellyfinTizen.Screens
             var viewport = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = cardHeight + (FocusPad * 2),
-                PositionY = rowInfo.TitleHeight + 10,
-                ClippingMode = ClippingModeType.ClipChildren,
-                Padding = new Extents((ushort)SidePadding, (ushort)SidePadding, viewportTopPadding, viewportBottomPadding)
+                HeightSpecification = cardHeight + RowVerticalPadding,
+                PositionY =
+                    rowInfo.TitleHeight +
+                    UiTheme.HomeRowTitleToCardsGap,
+                ClippingMode = ClippingModeType.ClipChildren
             };
 
             var rowContainer = new View
             {
                 PositionX = SidePadding,
-                PositionY = 0,
+                PositionY = HeaderToCardGap,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
@@ -306,7 +307,7 @@ namespace JellyfinTizen.Screens
                 Cards = cards,
                 CardWidth = rowInfo.CardWidth,
                 Spacing = rowInfo.Spacing,
-                TotalHeight = rowHeight + (FocusPad * 2),
+                TotalHeight = rowHeight + RowVerticalPadding,
                 RowSpacingAfter = rowInfo.RowSpacing,
                 PosterEntries = posterEntries
             };
@@ -537,29 +538,59 @@ namespace JellyfinTizen.Screens
 
             if (!hasSubtitle)
             {
-                return row?.Kind switch
-                {
-                    HomeRowKind.Libraries => 72,
-                    _ => 90
-                };
+                // MediaCardFactory expands this when a title actually wraps. Keeping the
+                // single-line minimum compact prevents an invisible text box from looking
+                // like a large gap before the following row header.
+                return 64;
             }
 
             return row.Kind switch
             {
-                HomeRowKind.NextUp => 108,
-                HomeRowKind.ContinueWatching => 108,
-                _ => 104
+                HomeRowKind.NextUp => 72,
+                HomeRowKind.ContinueWatching => 72,
+                _ => 72
             };
         }
 
         private (int CardWidth, int CardHeight, int Spacing, int TitleHeight, int RowHeight, int RowSpacing) GetRowStyle(HomeRowKind kind)
         {
+            const int landscapeRowHeight =
+                UiTheme.MediaRowTitleHeight +
+                UiTheme.MediaCardLandscapeHeight;
+            const int portraitRowHeight =
+                UiTheme.MediaRowTitleHeight +
+                UiTheme.MediaCardPortraitHeight;
+
             return kind switch
             {
-                HomeRowKind.Libraries => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
-                HomeRowKind.NextUp => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
-                HomeRowKind.ContinueWatching => (420, 236, 30, UiTheme.MediaRowTitleHeight, 316, 24),
-                _ => (260, 390, 24, UiTheme.MediaRowTitleHeight, 460, 26)
+                HomeRowKind.Libraries => (
+                    UiTheme.MediaCardLandscapeWidth,
+                    UiTheme.MediaCardLandscapeHeight,
+                    UiTheme.MediaCardLandscapeSpacing,
+                    UiTheme.MediaRowTitleHeight,
+                    landscapeRowHeight,
+                    UiTheme.HomeLandscapeRowSpacing),
+                HomeRowKind.NextUp => (
+                    UiTheme.MediaCardLandscapeWidth,
+                    UiTheme.MediaCardLandscapeHeight,
+                    UiTheme.MediaCardLandscapeSpacing,
+                    UiTheme.MediaRowTitleHeight,
+                    landscapeRowHeight,
+                    UiTheme.HomeLandscapeRowSpacing),
+                HomeRowKind.ContinueWatching => (
+                    UiTheme.MediaCardLandscapeWidth,
+                    UiTheme.MediaCardLandscapeHeight,
+                    UiTheme.MediaCardLandscapeSpacing,
+                    UiTheme.MediaRowTitleHeight,
+                    landscapeRowHeight,
+                    UiTheme.HomeLandscapeRowSpacing),
+                _ => (
+                    UiTheme.MediaCardPortraitWidth,
+                    UiTheme.MediaCardPortraitHeight,
+                    24,
+                    UiTheme.MediaRowTitleHeight,
+                    portraitRowHeight,
+                    UiTheme.HomePortraitRowSpacing)
             };
         }
 
@@ -1039,7 +1070,10 @@ namespace JellyfinTizen.Screens
             var card = _rowCards[_rowIndex][_colIndex];
             var frame = MediaCardFocus.GetCardFrame(card);
             var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? MediaCardFocus.FocusedScale : MediaCardFocus.UnfocusedScale;
+            // A border is sufficient focus feedback on Home. Scaling made an otherwise
+            // identical landscape card look larger and made tall posters expand upward
+            // into the shared header-to-card gap.
+            scaleTarget.Scale = MediaCardFocus.UnfocusedScale;
 
             if (focused)
             {
@@ -1226,7 +1260,9 @@ namespace JellyfinTizen.Screens
         private void FocusSettings(bool focused)
         {
             _settingsFocused = focused;
-            _settingsButton.Scale = focused ? new Vector3(1.1f, 1.1f, 1f) : Vector3.One;
+            MediaBrowserChrome.SetProfileButtonFocusState(
+                _settingsButton,
+                focused);
 
             if (focused)
             {

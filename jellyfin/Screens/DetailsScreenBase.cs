@@ -40,7 +40,7 @@ namespace JellyfinTizen.Screens
         // =====================================================================
         // CONSTANTS (identical in both original screens)
         // =====================================================================
-        protected const float ButtonFocusScale = 1.08f;
+        protected const float ButtonFocusScale = UiTheme.FocusScale;
         protected const int ActionButtonHeight = 70;
         protected const int ActionButtonRowGap = 28;
         protected const int SecondaryActionButtonWidth = 240;
@@ -58,7 +58,11 @@ namespace JellyfinTizen.Screens
         // =====================================================================
         // OVERVIEW SCROLLING CONSTANTS (identical in both screens)
         // =====================================================================
-        protected const int FixedOverviewViewportHeight = 240;
+        // Movie/episode details put nothing below the description, so the viewport takes
+        // the rest of the info column. Sized for the worst case that still has to fit
+        // inside the 80px bottom padding: a two-line title (+76) and a wrapped second
+        // action row (+98).
+        protected const int FixedOverviewViewportHeight = 380;
         protected const int OverviewScrollStepPx = 70;
         protected const int OverviewScrollTailPx = 28;
 
@@ -140,10 +144,11 @@ namespace JellyfinTizen.Screens
             return new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 100,
+                HeightSpecification = DetailsScreenHelpers.ActionButtonRowHeight,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
                     CellPadding = new Size2D(42, 0)
                 }
             };
@@ -353,6 +358,16 @@ namespace JellyfinTizen.Screens
 
             foreach (var button in nextButtons)
                 AddActionButton(button);
+
+            // An empty wrap row still occupies its cell (row height + the group's
+            // cell padding) on TV firmware, which reads as a gap between the action
+            // row and whatever follows it. ExcludeLayouting must track visibility.
+            bool wrapRowUsed = _buttonRowBottom.ChildCount > 0;
+            _buttonRowBottom.ExcludeLayouting = !wrapRowUsed;
+            if (wrapRowUsed)
+                _buttonRowBottom.Show();
+            else
+                _buttonRowBottom.Hide();
 
             // Publish the new logical registry only after every NUI row operation
             // succeeds. If a native UI operation throws, the previous registry remains
@@ -982,7 +997,8 @@ namespace JellyfinTizen.Screens
             var container = new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 114,
+                // Exactly summary row (38) + cell padding (10) + tag row (56).
+                HeightSpecification = 104,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Vertical,
@@ -1236,13 +1252,47 @@ namespace JellyfinTizen.Screens
                 viewportHeight = FixedOverviewViewportHeight;
 
             int viewportWidth = (int)Math.Round(_overviewViewport.SizeWidth);
-            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
-            int estimatedHeight = EstimateOverviewContentHeight(viewportWidth);
-            int contentHeight = Math.Max(viewportHeight, Math.Max(measuredHeight, estimatedHeight));
+            int contentHeight = ResolveOverviewContentHeight(viewportWidth);
 
-            _overviewMaxScroll = Math.Max(0, contentHeight - viewportHeight + OverviewScrollTailPx);
+            // Only allow scrolling by the amount the text actually overflows. The
+            // character-count estimate below is deliberately generous, so taking the
+            // larger of measured/estimated (as this used to) let the description
+            // scroll far past its last line.
+            int overflow = contentHeight - viewportHeight;
+            _overviewMaxScroll = overflow > 0 ? overflow + OverviewScrollTailPx : 0;
             _overviewScrollOffset = Math.Clamp(_overviewScrollOffset, 0, _overviewMaxScroll);
             _overviewLabel.PositionY = -_overviewScrollOffset;
+        }
+
+        // Prefers the text engine's own wrapped height for the viewport width, which is
+        // exact. Falls back to the laid-out size and finally to the character-count
+        // estimate, both of which can be unavailable before the first layout pass.
+        private int ResolveOverviewContentHeight(int viewportWidth)
+        {
+            float widthForMeasure = viewportWidth > 0
+                ? viewportWidth
+                : _overviewLabel.SizeWidth;
+
+            if (widthForMeasure > 0)
+            {
+                try
+                {
+                    int naturalHeight = (int)Math.Ceiling(
+                        _overviewLabel.GetHeightForWidth(widthForMeasure));
+                    if (naturalHeight > 0)
+                        return naturalHeight;
+                }
+                catch
+                {
+                    // Text measurement is unavailable until the label joins the scene.
+                }
+            }
+
+            int measuredHeight = (int)Math.Round(_overviewLabel.SizeHeight);
+            if (measuredHeight > 0)
+                return measuredHeight;
+
+            return EstimateOverviewContentHeight(viewportWidth);
         }
 
         protected void ScrollOverview(int delta)

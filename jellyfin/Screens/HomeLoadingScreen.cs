@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Tizen.NUI;
 using Tizen.NUI.BaseComponents;
 using JellyfinTizen.Core;
+using JellyfinTizen.UI;
 using JellyfinTizen.Utils;
 
 using ThreadingTimer = System.Threading.Timer;
@@ -22,8 +23,10 @@ namespace JellyfinTizen.Screens
         // sent so the server returns artwork at exactly this size: per Emby's image API,
         // "specify both width and height to force an exact size", whereas maxWidth alone
         // preserves the source aspect ratio.
-        private const int LibraryCardImageWidth = 420;
-        private const int LibraryCardImageHeight = 236;
+        private const int LibraryCardImageWidth =
+            UiTheme.MediaCardLandscapeWidth;
+        private const int LibraryCardImageHeight =
+            UiTheme.MediaCardLandscapeHeight;
 
         // Simple thread-safe LRU cache using ConcurrentDictionary + LinkedList
         // LinkedList tracks access order (oldest at First, newest at Last)

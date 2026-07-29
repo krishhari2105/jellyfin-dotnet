@@ -382,7 +382,7 @@ namespace JellyfinTizen.Screens
                 return;
 
             tile.Root.PositionZ = focused ? 20 : 0;
-            tile.Avatar.Scale = focused ? new Vector3(1.08f, 1.08f, 1f) : Vector3.One;
+            tile.Avatar.Scale = Vector3.One;
             tile.Avatar.BackgroundColor = Color.Transparent;
             tile.Avatar.BorderlineWidth = 0.0f;
             tile.AvatarFocusRing.BorderlineWidth = focused ? AvatarFocusRingWidth : 0.0f;

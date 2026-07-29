@@ -114,6 +114,26 @@ namespace JellyfinTizen.UI
             return button;
         }
 
+        public static void SetProfileButtonFocusState(
+            View button,
+            bool focused)
+        {
+            if (button == null)
+                return;
+
+            button.Scale = Vector3.One;
+            button.CornerRadius = button.HeightSpecification > 0
+                ? button.HeightSpecification / 2.0f
+                : 25.0f;
+            button.CornerRadiusPolicy =
+                VisualTransformPolicyType.Absolute;
+            button.BackgroundColor = focused
+                ? UiTheme.MediaCardFocusFill
+                : Color.Transparent;
+            button.BorderlineColor = UiTheme.MediaCardFocusBorder;
+            button.BorderlineWidth = focused ? 2.0f : 0.0f;
+        }
+
         public static View CreateSettingsPanel(int positionX, int positionY, int positionZ = 0)
         {
             return new View

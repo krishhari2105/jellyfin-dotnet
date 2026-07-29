@@ -150,7 +150,11 @@ namespace JellyfinTizen.Screens
                 HasPrimary = detailed.HasPrimary || baseline.HasPrimary,
                 HasThumb = detailed.HasThumb || baseline.HasThumb,
                 HasBackdrop = detailed.HasBackdrop || baseline.HasBackdrop,
-                HasLogo = detailed.HasLogo || baseline.HasLogo
+                HasLogo = detailed.HasLogo || baseline.HasLogo,
+                ParentBackdropItemId = string.IsNullOrWhiteSpace(detailed.ParentBackdropItemId)
+                    ? baseline.ParentBackdropItemId
+                    : detailed.ParentBackdropItemId,
+                HasParentBackdrop = detailed.HasParentBackdrop || baseline.HasParentBackdrop
             };
         }
     }

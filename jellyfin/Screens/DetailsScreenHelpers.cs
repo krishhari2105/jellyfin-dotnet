@@ -16,6 +16,7 @@ namespace JellyfinTizen.Screens
 
         // Action button constants (identical in both MovieDetailsScreen and EpisodeDetailsScreen)
         public const int ActionButtonHeight = 70;
+        public const int ActionButtonRowHeight = ActionButtonHeight;
         public const int ActionButtonRowGap = 28;
         public const int SecondaryActionButtonWidth = 240;
         public const int PlayActionButtonWidth = 176;
@@ -33,10 +34,11 @@ namespace JellyfinTizen.Screens
             return new View
             {
                 WidthResizePolicy = ResizePolicyType.FillToParent,
-                HeightSpecification = 100,
+                HeightSpecification = ActionButtonRowHeight,
                 Layout = new LinearLayout
                 {
                     LinearOrientation = LinearLayout.Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
                     CellPadding = new Size2D(42, 0)
                 }
             };

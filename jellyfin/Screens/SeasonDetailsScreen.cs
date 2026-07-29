@@ -14,8 +14,8 @@ namespace JellyfinTizen.Screens
     {
         private const int PosterWidth = 420;
         private const int PosterHeight = 630;
-        private const int EpisodeCardWidth = 420;
-        private const int EpisodeCardHeight = 236;
+        private const int EpisodeCardWidth = UiTheme.MediaCardLandscapeWidth;
+        private const int EpisodeCardHeight = UiTheme.MediaCardLandscapeHeight;
         private const int PreferredEpisodeCardTextHeight = 104;
         private const int EpisodeCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;

@@ -376,7 +376,7 @@ namespace JellyfinTizen.Screens
 
             if (focusOnCards)
             {
-                card.Root.Scale = new Vector3(1.05f, 1.05f, 1f);
+                card.Root.Scale = Vector3.One;
                 card.Root.PositionZ = 18;
                 card.Box.BackgroundColor = new Color(1f, 1f, 1f, 1f);
                 card.Box.BorderlineColor = new Color(1f, 1f, 1f, 1f);
