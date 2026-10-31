@@ -1,20 +1,5 @@
 # Jellyfin Tizen Client
 
-> [!IMPORTANT]
-> **Archived — no longer maintained**
->
-> Development of this project has ended, and no further fixes, features, releases,
-> or support are planned. The public Tizen .NET APIs do not expose several TV
-> capabilities needed by a complete media client, including reliable access to
-> remote-control media keys through the TV input-device APIs. Third-party .NET
-> applications therefore cannot reach the same platform integration available to
-> Tizen web applications or privileged proprietary OTT runtimes.
->
-> Future effort is moving to [Litefin](https://github.com/Samsung/litefin), a
-> lightweight JavaScript Jellyfin client with broader Tizen feature support.
-> This repository remains available as a historical reference and a personal
-> record of the work that went into it.
-
 A native Jellyfin media client for Samsung Tizen TVs, written in C#/.NET with Tizen NUI.
 
 > This project was built with AI assistance.
