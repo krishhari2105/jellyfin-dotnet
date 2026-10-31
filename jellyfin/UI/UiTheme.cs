@@ -26,7 +26,6 @@ namespace JellyfinTizen.UI
         public static readonly Color DetailsActionButtonFocused = new Color(0f / 255f, 167f / 255f, 225f / 255f, 0.80f);
         public static readonly Color DetailsChipSurface = new Color(31f / 255f, 42f / 255f, 59f / 255f, 1.0f);
         public static readonly Color PlayerTrackBase = new Color(183f / 255f, 195f / 255f, 216f / 255f, 0.35f);
-        public static readonly Color PlayerTrackFocused = new Color(44f / 255f, 194f / 255f, 240f / 255f, 0.34f);
         public static readonly Color PlayerTrackIdle = new Color(243f / 255f, 247f / 255f, 255f / 255f, 0.50f);
         public static readonly Color PlayerPreviewFill = new Color(243f / 255f, 247f / 255f, 255f / 255f, 0.68f);
         public static readonly Color PlayerTextMuted = new Color(183f / 255f, 195f / 255f, 216f / 255f, 0.72f);
@@ -57,30 +56,31 @@ namespace JellyfinTizen.UI
         public const int FieldHeight = 92;
         public const int ButtonHeight = 92;
         public const int ListItemHeight = 92;
-        public const int MediaRowTitleHeight = 60;
+        public const int MediaRowTitleHeight = 56;
 
         public const float DisplayTitle = 52f;
         public const float SectionTitle = 44f;
         public const float Body = 28f;
         public const float Caption = 23f;
         public const float MediaTopBarTitle = 40f;
-        public const float MediaRowTitle = 34f;
-        public const float MediaCardTitle = 26f;
+        public const float MediaRowTitle = 32f;
+        public const float MediaCardTitle = 24f;
         public const float MediaCardSubtitle = 20f;
-        public const float MediaCardRadius = 18.0f;
+        public const float MediaCardRadius = 16.0f;
         // Focus throughout the app is communicated through borders, fills, icon
         // colours, and text colours. Controls do not change physical size on focus.
         public const float FocusScale = 1.0f;
         public const float MediaCardFocusScale = FocusScale;
-        public const int MediaCardLandscapeWidth = 420;
-        public const int MediaCardLandscapeHeight = 236;
-        public const int MediaCardPortraitWidth = 260;
-        public const int MediaCardPortraitHeight = 390;
-        public const int MediaCardLandscapeSpacing = 30;
-        public const int MediaCardProgressHeight = 8;
-        public const int MediaCardProgressInset = 10;
-        public const int MediaCardProgressBottomInset = 10;
-        public const float MediaCardProgressRadius = 4.0f;
+        public const int MediaCardLandscapeWidth = 400;
+        public const int MediaCardLandscapeHeight = 225;
+        public const int MediaCardPortraitWidth = 270;
+        public const int MediaCardPortraitHeight = 405;
+        public const int MediaCardLandscapeSpacing = 40;
+        public const int MediaCardPortraitSpacing = 40;
+        public const int MediaCardProgressHeight = 5;
+        public const int MediaCardProgressInset = 12;
+        public const int MediaCardProgressBottomInset = 12;
+        public const float MediaCardProgressRadius = 2.0f;
         public const float SettingsPanelTitle = 26f;
         public const float SettingsPanelOption = 24f;
 
@@ -106,7 +106,7 @@ namespace JellyfinTizen.UI
         public const int LibraryTopBarPadding = 60;
         public const int LibraryContentTopGap = 20;
         public const int LibrarySidePadding = 80;
-        public const int LibraryCardSpacing = MediaCardLandscapeSpacing;
+        public const int LibraryCardSpacing = MediaCardPortraitSpacing;
         public const int LibraryRowSpacing = 8;
         public const int LibraryFocusBorder = 5;
         public const int LibraryFocusTopPadding = 24;

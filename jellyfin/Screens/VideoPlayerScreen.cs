@@ -252,6 +252,7 @@ namespace JellyfinTizen.Screens
         private static readonly Vector3 ScaleUnit = new Vector3(1f, 1f, 1f);
         private static readonly Vector3 ScalePressed = new Vector3(0.98f, 0.98f, 1f);
         private static readonly Vector3 ScaleSeekPulse = new Vector3(1.06f, 1.06f, 1f);
+        private static readonly Vector3 ScaleSeekThumbFocused = new Vector3(1.2f, 1.2f, 1f);
         private static readonly Vector3 ScaleSmartPopupFocused = ScaleUnit;
         private static readonly Vector3 ScaleRowSelected = ScaleUnit;
         private static readonly Vector3 ScaleButtonFocused = ScaleUnit;
@@ -7076,31 +7077,16 @@ namespace JellyfinTizen.Screens
             if (_progressTrack == null) return;
 
             bool seekbarRowFocused = _osdFocusRow == 0;
-            _progressTrack.BackgroundColor = seekbarRowFocused
-                ? UiTheme.PlayerTrackFocused
-                : UiTheme.PlayerTrackIdle;
-            _progressThumb.BackgroundColor = seekbarRowFocused
-                ? UiTheme.AccentFocused
-                : Color.White;
+            // The seekbar stays white in every state. Focus is shown only by
+            // enlarging the thumb.
+            _progressTrack.BackgroundColor = UiTheme.PlayerTrackIdle;
+            _progressThumb.BackgroundColor = Color.White;
             if (_seekbarFocusVisualActive != seekbarRowFocused)
             {
                 _seekbarFocusVisualActive = seekbarRowFocused;
-                var lineScale = Vector3.One;
-                AnimateFocusScale(
-                    _progressTrack,
-                    lineScale
-                );
-                AnimateFocusScale(
-                    _progressFill,
-                    lineScale
-                );
-                AnimateFocusScale(
-                    _previewFill,
-                    lineScale
-                );
                 AnimateFocusScale(
                     _progressThumb,
-                    Vector3.One
+                    seekbarRowFocused ? ScaleSeekThumbFocused : ScaleUnit
                 );
             }
 

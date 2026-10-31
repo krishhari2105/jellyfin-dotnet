@@ -19,9 +19,9 @@ namespace JellyfinTizen.UI
 
         // Layout padding/margins
         private const int FramePadding = 2;
-        private const int TextContainerPaddingLeftRight = 8;
-        private const int TextContainerPaddingTop = 16;
-        private const int TextContainerPaddingBottom = 12;
+        private const int TextContainerPaddingLeftRight = 2;
+        private const int TextContainerPaddingTop = 12;
+        private const int TextContainerPaddingBottom = 8;
         private const int SubtitleCellPadding = 4;
         private const int NoSubtitleCellPadding = 0;
 
@@ -294,7 +294,7 @@ namespace JellyfinTizen.UI
                 HeightResizePolicy = ResizePolicyType.FitToChildren,
                 PointSize = adaptiveTitlePoint,
                 TextColor = Color.White,
-                HorizontalAlignment = HorizontalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Begin,
                 VerticalAlignment = VerticalAlignment.Top,
                 MultiLine = true,
                 LineWrapMode = LineWrapMode.Word,
@@ -309,7 +309,7 @@ namespace JellyfinTizen.UI
                     HeightResizePolicy = ResizePolicyType.FitToChildren,
                     TextColor = new Color(1, 1, 1, 0.75f),
                     PointSize = subtitlePoint,
-                    HorizontalAlignment = HorizontalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Begin,
                     VerticalAlignment = VerticalAlignment.Center,
                     MultiLine = false,
                     Ellipsis = true

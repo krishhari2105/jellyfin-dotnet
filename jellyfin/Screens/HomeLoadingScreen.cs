@@ -260,9 +260,9 @@ namespace JellyfinTizen.Screens
 
                 foreach (var item in nextUp)
                 {
-                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 280);
+                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, UiTheme.MediaCardLandscapeWidth);
                     imageUrl = BuildCachedImageUrl(
-                        $"nextup:{item.Id}:280:50:{apiKey}",
+                        $"nextup:{item.Id}:{UiTheme.MediaCardLandscapeWidth}:50:{apiKey}",
                         () => imageUrl.Replace("quality=82", "quality=50"));
                     var episodePrefix = FormatEpisodeCode(item);
                     var title = string.IsNullOrWhiteSpace(episodePrefix)
@@ -292,9 +292,9 @@ namespace JellyfinTizen.Screens
 
                 foreach (var item in continueWatching)
                 {
-                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, 280);
+                    var imageUrl = GetThumbOrBackdropUrl(item, serverUrl, apiKey, UiTheme.MediaCardLandscapeWidth);
                     imageUrl = BuildCachedImageUrl(
-                        $"continue:{item.Id}:280:50:{apiKey}",
+                        $"continue:{item.Id}:{UiTheme.MediaCardLandscapeWidth}:50:{apiKey}",
                         () => imageUrl.Replace("quality=82", "quality=50"));
 
                     continueRow.Items.Add(new JellyfinTizen.Models.HomeItemData
@@ -327,8 +327,8 @@ namespace JellyfinTizen.Screens
                 foreach (var item in recent)
                 {
                     var imageUrl = BuildCachedImageUrl(
-                        $"recent-primary:{item.Id}:280:50:{apiKey}",
-                        () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth=280&quality=50&api_key={apiKey}");
+                        $"recent-primary:{item.Id}:{UiTheme.MediaCardPortraitWidth}:50:{apiKey}",
+                        () => $"{serverUrl}/Items/{item.Id}/Images/Primary/0?maxWidth={UiTheme.MediaCardPortraitWidth}&quality=50&api_key={apiKey}");
 
                     recentRow.Items.Add(new JellyfinTizen.Models.HomeItemData
                     {

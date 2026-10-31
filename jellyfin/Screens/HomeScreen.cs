@@ -587,7 +587,7 @@ namespace JellyfinTizen.Screens
                 _ => (
                     UiTheme.MediaCardPortraitWidth,
                     UiTheme.MediaCardPortraitHeight,
-                    24,
+                    UiTheme.MediaCardPortraitSpacing,
                     UiTheme.MediaRowTitleHeight,
                     portraitRowHeight,
                     UiTheme.HomePortraitRowSpacing)
@@ -660,12 +660,12 @@ namespace JellyfinTizen.Screens
             if (string.IsNullOrWhiteSpace(serverUrl))
                 return null;
 
-            var imageUrl = HomeLoadingScreen.GetThumbOrBackdropUrl(media, serverUrl, apiKey, 280);
+            var imageUrl = HomeLoadingScreen.GetThumbOrBackdropUrl(media, serverUrl, apiKey, UiTheme.MediaCardLandscapeWidth);
             if (string.IsNullOrWhiteSpace(imageUrl))
                 return null;
 
             return HomeLoadingScreen.BuildCachedImageUrl(
-                $"continue:{media.Id}:280:70:{apiKey}",
+                $"continue:{media.Id}:{UiTheme.MediaCardLandscapeWidth}:70:{apiKey}",
                 () => imageUrl.Replace("quality=82", "quality=50"));
         }
 
@@ -1067,36 +1067,13 @@ namespace JellyfinTizen.Screens
 
         private void Highlight(bool focused)
         {
-            var card = _rowCards[_rowIndex][_colIndex];
-            var frame = MediaCardFocus.GetCardFrame(card);
-            var scaleTarget = frame ?? card;
-            // A border is sufficient focus feedback on Home. Scaling made an otherwise
-            // identical landscape card look larger and made tall posters expand upward
-            // into the shared header-to-card gap.
-            scaleTarget.Scale = MediaCardFocus.UnfocusedScale;
-
+            var frame = MediaCardFocus.GetCardFrame(_rowCards[_rowIndex][_colIndex]);
+            // Border only. No scale and no Z lift: the perspective camera turns a
+            // Z lift into a visible zoom.
             if (focused)
-            {
-                if (frame != null)
-                {
-                    frame.PositionZ = 30;
-                    card.PositionZ = 0;
-                }
-                else
-                {
-                    card.PositionZ = 30;
-                }
-
                 MediaCardFocus.ApplyFrameFocus(frame, _focusColor);
-            }
             else
-            {
-                if (frame != null)
-                    frame.PositionZ = 0;
-                card.PositionZ = 0;
-
                 MediaCardFocus.ClearFrameFocus(frame);
-            }
         }
 
         private void ScrollHorizontalIfNeeded()

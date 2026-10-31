@@ -27,18 +27,6 @@ namespace JellyfinTizen.UI
             public bool HasValue;
         }
 
-        // NUI Vector3 is a native-backed handle, so the two scale values used by every
-        // focus transition are allocated once instead of per key press.
-        private static readonly Vector3 ScaleOne = new Vector3(1f, 1f, 1f);
-        private static readonly Vector3 FocusScaleVector =
-            new Vector3(UiTheme.MediaCardFocusScale, UiTheme.MediaCardFocusScale, 1f);
-
-        /// <summary>Shared unit scale used to reset an unfocused card.</summary>
-        public static Vector3 UnfocusedScale => ScaleOne;
-
-        /// <summary>Shared scale for a focused card at <see cref="UiTheme.MediaCardFocusScale"/>.</summary>
-        public static Vector3 FocusedScale => FocusScaleVector;
-
         public static View GetCardFrame(View card)
         {
             if (card == null)
@@ -127,26 +115,14 @@ namespace JellyfinTizen.UI
             state.HasValue = true;
         }
 
-        public static void ApplyCardFocus(View card, bool focused, float scale)
+        /// <summary>
+        /// Focus is shown by the frame borderline only. Cards are never scaled or
+        /// lifted on the Z axis, because the perspective camera makes a Z lift read
+        /// as a zoom.
+        /// </summary>
+        public static void ApplyCardFocus(View card, bool focused)
         {
             var frame = GetCardFrame(card);
-            var scaleTarget = frame ?? card;
-            if (!focused)
-                scaleTarget.Scale = ScaleOne;
-            else if (scale == UiTheme.MediaCardFocusScale)
-                scaleTarget.Scale = FocusScaleVector;
-            else
-                scaleTarget.Scale = new Vector3(scale, scale, 1f);
-            if (frame != null)
-            {
-                frame.PositionZ = focused ? 20 : 0;
-                card.PositionZ = 0;
-            }
-            else
-            {
-                card.PositionZ = focused ? 20 : 0;
-            }
-
             if (focused)
                 ApplyFrameFocus(frame, UiTheme.MediaCardFocusBorder);
             else

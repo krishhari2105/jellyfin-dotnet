@@ -20,7 +20,6 @@ namespace JellyfinTizen.Screens
         private const int EpisodeCardSpacing = UiTheme.LibraryCardSpacing;
         private const int FocusBorder = 4;
         private const int FocusPad = UiTheme.HomeFocusPad;
-        private const float FocusScale = UiTheme.MediaCardFocusScale;
         private const int EpisodePageSize = 40;
         private const int EpisodePrefetchThreshold = 8;
         private const int FixedTopContentHeight = 370;
@@ -736,7 +735,7 @@ namespace JellyfinTizen.Screens
 
         private void ApplyEpisodeFocus(View card, bool focused)
         {
-            MediaCardFocus.ApplyCardFocus(card, focused, FocusScale);
+            MediaCardFocus.ApplyCardFocus(card, focused);
         }
 
         private void ScrollEpisodesIfNeeded()
@@ -766,7 +765,7 @@ namespace JellyfinTizen.Screens
 
         private static float GetEpisodeFocusOverflow()
         {
-            return (EpisodeCardWidth * (FocusScale - 1f) / 2f) + FocusBorder;
+            return FocusBorder;
         }
 
         private static int GetEpisodeViewportLeftInset()

@@ -29,7 +29,6 @@ namespace JellyfinTizen.Screens
         private const int FocusVerticalPadding = FocusTopPadding + FocusBottomPadding;
         private const int ContentViewportTopInset = 4;
         private const int ContentViewportStartY = TopBarHeight + ContentViewportTopInset;
-        private const float FocusScale = UiTheme.MediaCardFocusScale;
         // MediaCardFactory grows individual rows for wrapped titles. A compact
         // single-line baseline keeps consecutive grid rows visually grouped.
         private const int PreferredPortraitCardTextHeight = 64;
@@ -129,11 +128,18 @@ namespace JellyfinTizen.Screens
             _totalItemCount = Math.Max(totalItemCount, _movies.Count);
             _useLandscapeCards = library?.UsesLandscapeGridCards == true;
             _sidePadding = _useLandscapeCards ? UiTheme.HomeSidePadding : SidePadding;
-            _cardWidth = _useLandscapeCards ? LandscapeCardWidth : PortraitCardWidth;
-            _cardHeight = _useLandscapeCards ? LandscapeCardHeight : PortraitCardHeight;
+            // Card size is fitted to the screen so each row fills the usable width instead
+            // of leaving an empty strip on the right.
+            var fit = FitCards(
+                Window.Default.Size.Width - (_sidePadding * 2),
+                Spacing,
+                _useLandscapeCards ? LandscapeCardWidth : PortraitCardWidth,
+                _useLandscapeCards ? LandscapeCardHeight : PortraitCardHeight);
+            _cardWidth = fit.Width;
+            _cardHeight = fit.Height;
+            _moviesPerRow = fit.Columns;
             _preferredCardTextHeight = _useLandscapeCards ? PreferredLandscapeCardTextHeight : PreferredPortraitCardTextHeight;
             _cardTextHeight = CalculateCardTextHeight();
-            _moviesPerRow = CalculateColumns();
 
             var root = UiFactory.CreateAtmosphericBackground();
 
@@ -460,11 +466,30 @@ namespace JellyfinTizen.Screens
             _settingsPanel.Hide();
         }
 
-        private int CalculateColumns()
+        /// <summary>
+        /// Chooses the column count whose fitted card width is closest to the preferred
+        /// width, then sizes the cards so a full row spans exactly the usable width. The
+        /// preferred aspect ratio is kept.
+        /// </summary>
+        private static (int Columns, int Width, int Height) FitCards(
+            int usableWidth,
+            int spacing,
+            int preferredWidth,
+            int preferredHeight)
         {
-            var screenWidth = Window.Default.Size.Width;
-            var usable = screenWidth - (_sidePadding * 2);
-            return Math.Max(1, usable / (_cardWidth + Spacing));
+            // N cards need N-1 gaps, so the trailing gap is not counted.
+            int FittedWidth(int columns) => (usableWidth - ((columns - 1) * spacing)) / columns;
+
+            int fewer = Math.Max(1, (usableWidth + spacing) / (preferredWidth + spacing));
+            int more = fewer + 1;
+            int columns = Math.Abs(FittedWidth(fewer) - preferredWidth) <=
+                          Math.Abs(FittedWidth(more) - preferredWidth)
+                ? fewer
+                : more;
+
+            int width = Math.Max(1, FittedWidth(columns));
+            int height = (int)Math.Round(width * (preferredHeight / (double)preferredWidth));
+            return (columns, width, height);
         }
 
         private int CalculateCardTextHeight()
@@ -840,20 +865,8 @@ namespace JellyfinTizen.Screens
 
         private void Highlight(bool focused)
         {
-            var card = _grid[_rowIndex][_colIndex];
-            var frame = MediaCardFocus.GetCardFrame(card);
-            var scaleTarget = frame ?? card;
-            scaleTarget.Scale = focused ? MediaCardFocus.FocusedScale : MediaCardFocus.UnfocusedScale;
-            if (frame != null)
-            {
-                frame.PositionZ = focused ? 20 : 0;
-                card.PositionZ = 0;
-            }
-            else
-            {
-                card.PositionZ = focused ? 20 : 0;
-            }
-
+            var frame = MediaCardFocus.GetCardFrame(_grid[_rowIndex][_colIndex]);
+            // Border only. No scale and no Z lift.
             if (focused)
                 MediaCardFocus.ApplyFrameFocus(frame, _focusColor);
             else
