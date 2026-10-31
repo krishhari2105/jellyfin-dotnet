@@ -78,8 +78,91 @@ namespace JellyfinTizen.Core
 
             // Remove the default blue focus border globally
             FocusManager.Instance.FocusIndicator = null;
+
+            GrabMediaKeys();
         }
 
+        // ---- Media key registration ---------------------------------------------------------
+        // The platform key manager shows a "not available" toast for media keys an app has not
+        // registered, even though the key still reaches the window. Window.GrabKey (NUI) is
+        // refused for these keys on Samsung TV, so the keys are grabbed by name through
+        // ecore_wl2 in Shared mode, which works with a partner certificate.
+        private static class EcoreWl2
+        {
+            [DllImport("libecore_wl2.so.1", EntryPoint = "ecore_wl2_connected_display_get")]
+            public static extern IntPtr ConnectedDisplayGet(IntPtr name);
+
+            [DllImport("libecore_wl2.so.1", EntryPoint = "ecore_wl2_display_window_find")]
+            public static extern IntPtr DisplayWindowFind(IntPtr display, uint id);
+
+            [DllImport("libecore_wl2.so.1", EntryPoint = "ecore_wl2_window_keygrab_set")]
+            public static extern bool WindowKeygrabSet(IntPtr window, [MarshalAs(UnmanagedType.LPStr)] string key, int mod, int notMod, int priority, int mode);
+
+            [DllImport("libecore_wl2.so.1", EntryPoint = "ecore_wl2_window_keygrab_unset")]
+            public static extern bool WindowKeygrabUnset(IntPtr window, [MarshalAs(UnmanagedType.LPStr)] string key, int mod, int notMod, int priority);
+        }
+
+        // Ecore_Wl2_Window_Keygrab_Mode.
+        private const int KeygrabModeShared = 2;
+
+        private static readonly string[] MediaKeyNames =
+        {
+            "XF86PlayBack",
+            "XF86AudioPlay",
+            "XF86AudioPause",
+            "XF86AudioStop",
+            "XF86AudioNext",
+            "XF86AudioPrev",
+            "XF86AudioRewind",
+            "XF86AudioForward",
+        };
+
+        private static readonly List<string> _grabbedKeyNames = new();
+        private static IntPtr _grabWindow;
+
+        private static void GrabMediaKeys()
+        {
+            try
+            {
+                uint id = unchecked((uint)_window.GetNativeId());
+                IntPtr display = EcoreWl2.ConnectedDisplayGet(IntPtr.Zero);
+                _grabWindow = display == IntPtr.Zero ? IntPtr.Zero : EcoreWl2.DisplayWindowFind(display, id);
+                if (_grabWindow == IntPtr.Zero)
+                {
+                    DebugLog("Media key grab skipped: native window not found");
+                    return;
+                }
+
+                foreach (string name in MediaKeyNames)
+                {
+                    bool ok = EcoreWl2.WindowKeygrabSet(_grabWindow, name, 0, 0, 0, KeygrabModeShared);
+                    DebugLog($"Media key grab {name}: {(ok ? "ok" : "failed")}");
+                    if (ok)
+                        _grabbedKeyNames.Add(name);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Missing native library or entry point: media keys still work, only the
+                // platform's "not available" toast would remain.
+                DebugLog($"Media key grab unavailable: {ex.GetType().Name}: {ex.Message}");
+                _grabWindow = IntPtr.Zero;
+            }
+        }
+
+        private static void ReleaseMediaKeys()
+        {
+            if (_grabWindow == IntPtr.Zero)
+                return;
+
+            foreach (string name in _grabbedKeyNames)
+            {
+                try { EcoreWl2.WindowKeygrabUnset(_grabWindow, name, 0, 0, 0); } catch { }
+            }
+
+            _grabbedKeyNames.Clear();
+            _grabWindow = IntPtr.Zero;
+        }
         private static void OnKeyEvent(object sender, Window.KeyEventArgs e)
         {
             if (e.Key.State != Key.StateType.Down)
@@ -168,6 +251,7 @@ namespace JellyfinTizen.Core
             if (!isMediaOrGrabbedKey)
                 return false; // Let standard keys propagate to KeyEvent / standard handlers
 
+
             // Map the media key
             var key = keyName switch
             {
@@ -207,7 +291,7 @@ namespace JellyfinTizen.Core
                 try
                 {
                     handler.HandleKey(key);
-                    DebugLog($"Media key {key} handled by screen, allowing system toast (returning false)");
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -341,6 +425,7 @@ namespace JellyfinTizen.Core
         public static void NotifyAppTerminating()
         {
             NotifyPlaybackLifecycle(PlaybackStopReason.AppTerminating, removeKeyHandler: true);
+            ReleaseMediaKeys();
         }
 
         private static void NotifyPlaybackLifecycle(
